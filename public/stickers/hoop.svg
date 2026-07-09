@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="Hoop and net">
+  <rect x="30" y="16" width="60" height="42" rx="6" fill="#F8F5EF" stroke="#22615A" stroke-width="4"/>
+  <rect x="49" y="30" width="22" height="16" rx="2" fill="none" stroke="#E4611F" stroke-width="4"/>
+  <path d="M34 62h52" stroke="#E4611F" stroke-width="6" stroke-linecap="round"/>
+  <g fill="none" stroke="#22615A" stroke-width="2.6" stroke-linecap="round">
+    <path d="M38 64l4 24"/>
+    <path d="M50 64l2 30"/>
+    <path d="M60 64v32"/>
+    <path d="M70 64l-2 30"/>
+    <path d="M82 64l-4 24"/>
+    <path d="M44 76h32"/>
+    <path d="M47 88h26"/>
+  </g>
+</svg>

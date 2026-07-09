@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="Jersey">
+  <path d="M44 20l16 8 16-8 24 14-10 20-10-5v42a4 4 0 0 1-4 4H44a4 4 0 0 1-4-4V49l-10 5L20 34z" fill="#E4611F" stroke="#C24512" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M44 20c0 10 32 10 32 0" fill="none" stroke="#F8F5EF" stroke-width="4"/>
+  <text x="60" y="82" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="34" fill="#F8F5EF">23</text>
+</svg>

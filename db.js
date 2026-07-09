@@ -1,0 +1,420 @@
+// db.js — uses Node's built-in SQLite (node:sqlite, Node 22+). No native build,
+// no extra install. File-based, survives restarts.
+import { DatabaseSync } from 'node:sqlite';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'bridge.db');
+
+const db = new DatabaseSync(DB_PATH);
+db.exec('PRAGMA journal_mode = WAL;');
+// NORMAL is the recommended durability for WAL: safe across app crashes, only
+// risks the last transaction on an OS crash / power loss. Default FULL fsyncs on
+// every write (~200ms/write on Windows) — far too slow and needless here.
+db.exec('PRAGMA synchronous = NORMAL;');
+// Phase-2 messaging relies on ON DELETE CASCADE for message_reactions. node:sqlite
+// defaults foreign_keys OFF, so enable it. Inert for every pre-existing table —
+// none of them declare a FOREIGN KEY — so this only governs the messaging tables.
+db.exec('PRAGMA foreign_keys = ON;');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS applicants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    full_name   TEXT NOT NULL,
+    email       TEXT NOT NULL UNIQUE,
+    phone       TEXT NOT NULL,
+    experience  TEXT NOT NULL,
+    where_played TEXT,
+    notes       TEXT,
+    waiver_ok   INTEGER NOT NULL DEFAULT 0,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    is_team     INTEGER NOT NULL DEFAULT 0,   -- helps run it: auto-joins the floor on open
+    is_regular  INTEGER NOT NULL DEFAULT 0,   -- pre-access: can join while run is closed
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS checkins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_date TEXT NOT NULL,
+    email    TEXT NOT NULL,
+    name     TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,  -- admin can float a waitlister to the top
+    held     INTEGER NOT NULL DEFAULT 0,    -- late regular: kept on waitlist until Fri 4pm
+    offered_at INTEGER,                     -- waitlist offer: epoch ms the floor spot was offered (NULL = no pending offer)
+    claim_token TEXT,                       -- one-time token for the offer's claim link (NULL = none)
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(run_date, email)
+  );
+  CREATE TABLE IF NOT EXISTS login_tokens (
+    token      TEXT PRIMARY KEY,
+    email      TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    used       INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS run_state (
+    run_date TEXT PRIMARY KEY,
+    is_open  INTEGER NOT NULL DEFAULT 0   -- new Fridays default CLOSED
+  );
+  CREATE TABLE IF NOT EXISTS regular_optout (
+    run_date TEXT NOT NULL,
+    email    TEXT NOT NULL,
+    PRIMARY KEY (run_date, email)   -- a regular who said "out this week"
+  );
+  CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at        TEXT NOT NULL DEFAULT (datetime('now')),
+    actor     TEXT NOT NULL,   -- email of who did it
+    actor_role TEXT NOT NULL,  -- 'admin' | 'team'
+    action    TEXT NOT NULL,   -- e.g. 'vote:approve', 'role:team:on', 'checkin:remove'
+    target    TEXT NOT NULL    -- applicant email or name affected
+  );
+  CREATE TABLE IF NOT EXISTS votes (
+    applicant_id INTEGER NOT NULL,
+    voter_email  TEXT NOT NULL,
+    vote         TEXT NOT NULL,   -- 'approve' | 'reject'
+    at           TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (applicant_id, voter_email)
+  );
+  CREATE TABLE IF NOT EXISTS announcements (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    body        TEXT NOT NULL,
+    author      TEXT NOT NULL,
+    at          TEXT NOT NULL DEFAULT (datetime('now')),
+    archived    INTEGER NOT NULL DEFAULT 0,   -- 0 = the live one players see; 1 = kept in history
+    archived_at TEXT                          -- when it was cleared/replaced
+  );
+  CREATE TABLE IF NOT EXISTS invites (
+    token       TEXT PRIMARY KEY,
+    full_name   TEXT NOT NULL DEFAULT '',   -- admin can pre-fill any/all of these, or leave blank
+    phone       TEXT NOT NULL DEFAULT '',   -- for the player to fill in themselves
+    email       TEXT NOT NULL DEFAULT '',
+    role        TEXT NOT NULL DEFAULT '',   -- '' | 'regular' | 'team'
+    created_by  TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    used        INTEGER NOT NULL DEFAULT 0,
+    used_at     TEXT,
+    used_email  TEXT
+  );
+`);
+
+// Defensive migration: if an older checkins table exists without sort_order, add it.
+const checkinCols = db.prepare('PRAGMA table_info(checkins)').all().map(c => c.name);
+if (!checkinCols.includes('sort_order')) {
+  db.exec('ALTER TABLE checkins ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
+}
+// Add is_regular to applicants if missing (older DBs).
+const appCols = db.prepare('PRAGMA table_info(applicants)').all().map(c => c.name);
+if (!appCols.includes('is_regular')) {
+  db.exec('ALTER TABLE applicants ADD COLUMN is_regular INTEGER NOT NULL DEFAULT 0');
+}
+// Roles v2: is_team added; anyone flagged regular under the OLD meaning
+// (auto-join) becomes team, since that's what the old flag did.
+if (!appCols.includes('is_team')) {
+  db.exec('ALTER TABLE applicants ADD COLUMN is_team INTEGER NOT NULL DEFAULT 0');
+  db.exec('UPDATE applicants SET is_team = is_regular, is_regular = 0 WHERE is_regular = 1');
+}
+// held column for late-regular waitlisting (older DBs)
+const ckCols = db.prepare('PRAGMA table_info(checkins)').all().map(c => c.name);
+if (!ckCols.includes('held')) {
+  db.exec('ALTER TABLE checkins ADD COLUMN held INTEGER NOT NULL DEFAULT 0');
+}
+// Waitlist offer-and-confirm (2026-07): a freed floor spot is OFFERED (held) to the
+// top waitlister rather than silently auto-promoting them. offered_at = epoch ms the
+// offer was made; claim_token = the one-time token in their claim link. Both nullable
+// (NULL = no pending offer). Additive; index the token for O(1) claim lookups.
+if (!ckCols.includes('offered_at')) {
+  db.exec('ALTER TABLE checkins ADD COLUMN offered_at INTEGER');
+}
+if (!ckCols.includes('claim_token')) {
+  db.exec('ALTER TABLE checkins ADD COLUMN claim_token TEXT');
+}
+db.exec('CREATE INDEX IF NOT EXISTS idx_checkins_claim ON checkins(claim_token)');
+// auto_renew: team members default to a guaranteed weekly spot; can turn it off
+if (!appCols.includes('auto_renew')) {
+  db.exec('ALTER TABLE applicants ADD COLUMN auto_renew INTEGER NOT NULL DEFAULT 1');
+}
+// Announcements: archive instead of delete, so cleared/replaced posts stay as history.
+const annCols = db.prepare('PRAGMA table_info(announcements)').all().map(c => c.name);
+if (!annCols.includes('archived')) {
+  db.exec('ALTER TABLE announcements ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
+}
+if (!annCols.includes('archived_at')) {
+  db.exec('ALTER TABLE announcements ADD COLUMN archived_at TEXT');
+}
+// invites.email added after the table already shipped once — migrate existing DBs.
+const inviteCols = db.prepare('PRAGMA table_info(invites)').all().map(c => c.name);
+if (!inviteCols.includes('email')) {
+  db.exec("ALTER TABLE invites ADD COLUMN email TEXT NOT NULL DEFAULT ''");
+}
+
+// --- Announcement read-state (2026-07): masthead notification bell ---------
+// One row per viewer holding the id of the newest announcement they've seen. The
+// bell's unread dot = an announcement exists with id > last_seen_id (or ANY
+// announcement, if the viewer has no row yet). Marking read upserts last_seen_id to
+// MAX(announcements.id). Additive + migration-guarded (CREATE TABLE IF NOT EXISTS),
+// matching the additive style of every table above. Keyed by (lowercased) email so
+// it survives across sessions and reloads.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS announcement_reads (
+    email        TEXT PRIMARY KEY,
+    last_seen_id INTEGER,
+    updated_at   TEXT
+  );
+`);
+
+// --- Per-user announcement dismissals (2026-07): swipe-to-clear ------------
+// One row per (viewer, announcement) they've dismissed from THEIR OWN panel. A
+// dismiss is PERSONAL — it hides that announcement for this viewer only; the row in
+// `announcements` is never deleted and everyone else still sees it. The panel query
+// LEFT-excludes these ids per viewer, and the unread dot ignores dismissed ids.
+// Keyed by (lowercased email, announcement_id) so a re-dismiss is idempotent (INSERT
+// OR IGNORE). Additive + migration-guarded (CREATE TABLE IF NOT EXISTS).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS announcement_dismissals (
+    email           TEXT NOT NULL,
+    announcement_id INTEGER NOT NULL,
+    dismissed_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (email, announcement_id)
+  );
+`);
+
+// --- Host-configurable run day (2026-07) ---
+// The run defaults to a weekly Friday. A host can move a GIVEN week's run to a
+// different weekday. Each row overrides ONE week, keyed by that week's default
+// Friday (YYYY-MM-DD) — the stable weekly anchor nextFriday() computes. run_date
+// is the host-chosen actual date. CREATE TABLE IF NOT EXISTS is inherently
+// migration-guarded, matching the additive style of every table above.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS run_overrides (
+    default_date TEXT PRIMARY KEY,           -- the default Friday of the overridden week
+    run_date     TEXT NOT NULL,              -- the host-chosen actual run date
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`);
+// Optional per-week TIME override (2026-07): the host can move the start/end time as
+// well as the day. NULL = the default 19:00–22:00 (7–10 PM). A row may exist for a
+// time-only change even when run_date === default_date. Additive + migration-guarded.
+const roCols = db.prepare('PRAGMA table_info(run_overrides)').all().map(c => c.name);
+if (!roCols.includes('run_time')) db.exec('ALTER TABLE run_overrides ADD COLUMN run_time TEXT');
+if (!roCols.includes('run_end'))  db.exec('ALTER TABLE run_overrides ADD COLUMN run_end TEXT');
+
+// Sign-in CODE (2026-07): one login_tokens row now carries both the magic-link token
+// AND a 6-digit code, so people can sign in INSIDE the installed PWA (where tapping an
+// emailed link would land in Safari, a separate storage jar). attempts caps brute force.
+const ltCols = db.prepare('PRAGMA table_info(login_tokens)').all().map(c => c.name);
+if (!ltCols.includes('code'))     db.exec('ALTER TABLE login_tokens ADD COLUMN code TEXT');
+if (!ltCols.includes('attempts')) db.exec('ALTER TABLE login_tokens ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0');
+
+// --- Native/PWA (2026-07): key-value app settings (holds the generated VAPID push
+// keypair so it survives restarts + rides the db backup) + Web Push subscriptions. ---
+db.exec(`
+  CREATE TABLE IF NOT EXISTS app_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    email      TEXT NOT NULL,
+    endpoint   TEXT NOT NULL UNIQUE,       -- the push service URL (unique per device/browser)
+    p256dh     TEXT NOT NULL,              -- client public key
+    auth       TEXT NOT NULL,              -- client auth secret
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_push_email ON push_subscriptions(email);
+`);
+
+// --- Redesign 2026-07: attendance history + player position + host role ---
+// Permanent attendance log — the source of truth for "games attended". NEVER purged
+// by any routine path (only a person hard-delete removes their rows). loadRun()
+// archives the final floor into this table right before its weekly checkins purge,
+// so history survives the reset. UNIQUE(run_date,email) makes archiving idempotent.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS attendance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_date    TEXT NOT NULL,
+    email       TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(run_date, email)
+  );
+  CREATE INDEX IF NOT EXISTS idx_attendance_email ON attendance(email);
+`);
+// Position (PG/SG/SF/PF/C) — player-editable on their profile, shown on cards. '' = unset.
+if (!appCols.includes('position')) {
+  db.exec("ALTER TABLE applicants ADD COLUMN position TEXT NOT NULL DEFAULT ''");
+}
+// Host — THE organizer of the night. Loudest badge + a "come to me with questions"
+// profile callout. Admin-set via /admin/role; single-host invariant enforced there.
+if (!appCols.includes('is_host')) {
+  db.exec('ALTER TABLE applicants ADD COLUMN is_host INTEGER NOT NULL DEFAULT 0');
+}
+// Email opt-out (2026-07): 1 = don't send this person BROADCAST emails (announcements,
+// run day/time changes). Transactional mail (magic-link sign-in, invites, and a
+// waitlist spot-offer they're actively waiting on) is always sent regardless.
+if (!appCols.includes('email_optout')) {
+  db.exec('ALTER TABLE applicants ADD COLUMN email_optout INTEGER NOT NULL DEFAULT 0');
+}
+// Profile photo (2026-07): stored filename (NOT a path) in public/avatars/, keyed by
+// applicant id (<id>-<shortrandom>.jpg) so it survives email changes. Nullable — NULL
+// means "no photo, render initials". Additive + migration-guarded, matching every
+// column above. server.js owns the file lifecycle (write/replace-delete/remove-delete).
+if (!appCols.includes('avatar')) {
+  db.exec('ALTER TABLE applicants ADD COLUMN avatar TEXT');
+}
+
+// --- Phase 2 (2026-07): in-app messaging (players <-> host) ---
+// Additive, idempotent. Ships photo_path + reply_to + reactions NOW (even though
+// v1 has no photo pipeline) so photos can be layered in later with no reshuffle.
+//   messages.reply_to is a PLAIN nullable id — deliberately NO foreign key. When a
+//   quoted parent is gone, the child keeps its dangling reply_to and the thread
+//   renders a graceful "Original message unavailable" stub (see threadPage). A
+//   FK ON DELETE SET NULL would instead silently drop the quote; we want the stub.
+//   message_reactions FK-cascades on message delete; person-delete also cleans up
+//   explicitly, so orphans are impossible with or without the runtime pragma.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_email TEXT NOT NULL,
+    to_email   TEXT NOT NULL,
+    body       TEXT NOT NULL DEFAULT '',       -- '' allowed for a photo/sticker-only msg
+    reply_to   INTEGER,                        -- nullable quote-reply target (no FK: see note)
+    photo_path TEXT,                            -- legacy reserved column (unused; superseded by image)
+    image      TEXT,                            -- media path/URL: /chat-media/<id-hex>.jpg or /stickers/<name>.svg
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    read_at    TEXT                             -- NULL = unread by to_email
+  );
+  CREATE INDEX IF NOT EXISTS idx_messages_to   ON messages(to_email, read_at);
+  CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages(from_email, to_email, id);
+  CREATE INDEX IF NOT EXISTS idx_messages_toem ON messages(to_email, from_email, id);
+  CREATE TABLE IF NOT EXISTS message_reactions (
+    message_id INTEGER NOT NULL,
+    from_email TEXT NOT NULL,
+    emoji      TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (message_id, from_email),       -- one reaction per person per msg; re-tap replaces
+    FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_reactions_msg ON message_reactions(message_id);
+`);
+
+// --- Run Chat (2026-07): single shared group room for ALL approved players ---
+// Additive, idempotent — coexists with the 1:1 DM tables above, shares none of
+// their rows. Mirrors the DM design:
+//   group_messages.reply_to is a PLAIN nullable id (deliberately NO foreign key).
+//   A deleted parent leaves the child's reply_to dangling and the room renders a
+//   graceful "Original message unavailable" stub (see chatFragment) rather than
+//   silently dropping the quote.
+//   group_reactions FK-cascades on message delete; person-delete + /chat/delete
+//   also clean up explicitly, so orphans are impossible with or without the pragma.
+//   group_reads holds one row per viewer = the high-water mark for "read"; the
+//   room feed's per-user unread badge is counted against it.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS group_messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_email TEXT NOT NULL,
+    body       TEXT NOT NULL DEFAULT '',       -- '' allowed for a photo/sticker-only msg
+    reply_to   INTEGER,                        -- nullable quote-reply target (no FK: see note)
+    image      TEXT,                            -- media path/URL: /chat-media/<id-hex>.jpg or /stickers/<name>.svg
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_group_messages_feed ON group_messages(id);
+  CREATE INDEX IF NOT EXISTS idx_group_messages_from ON group_messages(from_email, created_at);
+  CREATE TABLE IF NOT EXISTS group_reactions (
+    group_message_id INTEGER NOT NULL,
+    from_email       TEXT NOT NULL,
+    emoji            TEXT NOT NULL,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (group_message_id, from_email),   -- one reaction per person per msg; re-tap replaces
+    FOREIGN KEY (group_message_id) REFERENCES group_messages(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_group_reactions_msg ON group_reactions(group_message_id);
+  CREATE TABLE IF NOT EXISTS group_reads (
+    email        TEXT PRIMARY KEY,
+    last_read_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+`);
+
+// --- Chat media (2026-07): photos + stickers on messages -------------------
+// A message may carry an `image` — either an uploaded photo (/chat-media/<id-hex>.jpg,
+// resized/stripped by server.js) or a sticker (/stickers/<name>.svg). Stickers are
+// detected by the /stickers/ prefix (bubble-less, larger render) — no separate column.
+// Additive + migration-guarded on BOTH messaging tables, matching every column above.
+const msgCols = db.prepare('PRAGMA table_info(messages)').all().map(c => c.name);
+if (!msgCols.includes('image')) {
+  db.exec('ALTER TABLE messages ADD COLUMN image TEXT');
+}
+const gmsgCols = db.prepare('PRAGMA table_info(group_messages)').all().map(c => c.name);
+if (!gmsgCols.includes('image')) {
+  db.exec('ALTER TABLE group_messages ADD COLUMN image TEXT');
+}
+
+// --- @-mentions (2026-07): Run Chat messages can tag applicants ------------
+// mentions = a comma-separated list of applicant ids the sender @-tagged in the
+// body (e.g. "12,15"). Nullable — NULL/'' means "no mentions". Additive +
+// migration-guarded, matching every column above. The body still stores the raw
+// "@Full Name" text; the id list drives esc-safe linkify on render + the
+// "you were mentioned" unread indicator. group_messages only (DMs skip mentions).
+if (!gmsgCols.includes('mentions')) {
+  db.exec('ALTER TABLE group_messages ADD COLUMN mentions TEXT');
+}
+// --- Pinned messages (2026-07): team/admin/host can pin a Run Chat message; pinned
+// ones show at the top of the room (Discord-style). pinned_at = when it was pinned
+// (NULL = not pinned; used for ordering newest-pin first), pinned_by = pinner's email.
+if (!gmsgCols.includes('pinned_at')) db.exec('ALTER TABLE group_messages ADD COLUMN pinned_at TEXT');
+if (!gmsgCols.includes('pinned_by')) db.exec('ALTER TABLE group_messages ADD COLUMN pinned_by TEXT');
+// --- Voice messages (2026-07): a message may carry a recorded audio clip instead of
+// text/photo. audio = public /chat-media/<id>-<hex>.<ext> path (NULL = none), audio_dur
+// = clip length in whole seconds (client-reported, capped server-side) for the m:ss label.
+if (!gmsgCols.includes('audio')) db.exec('ALTER TABLE group_messages ADD COLUMN audio TEXT');
+if (!gmsgCols.includes('audio_dur')) db.exec('ALTER TABLE group_messages ADD COLUMN audio_dur INTEGER');
+// --- Video messages (2026-07): a message may carry a recorded/picked video clip.
+// video = public /chat-media/<id>-<hex>.<ext> path (NULL = none), video_dur = clip
+// length in whole seconds (client-reported, capped) for the duration label. Stored raw
+// (no re-encode) like voice; rendered with a native <video> (real duration metadata).
+if (!gmsgCols.includes('video')) db.exec('ALTER TABLE group_messages ADD COLUMN video TEXT');
+if (!gmsgCols.includes('video_dur')) db.exec('ALTER TABLE group_messages ADD COLUMN video_dur INTEGER');
+
+// Prune stale magic-link tokens on startup. A token is dead once it's been used
+// OR has expired — keeping them forever just grows the table unbounded (a fresh
+// row is written on every /login). Unused-and-still-valid tokens are preserved
+// so a link someone requested seconds before a restart still works.
+{
+  const { changes } = db.prepare('DELETE FROM login_tokens WHERE used = 1 OR expires_at < ?')
+    .run(Date.now());
+  if (changes) console.log(`[db] pruned ${changes} stale login token(s)`);
+}
+
+// A player's email is their identity key across ~a dozen tables. When it changes
+// (self-service profile edit OR admin edit) every per-user row must move to the new
+// address ATOMICALLY — a partial move (messages carried but votes not) would orphan
+// history or silently drop a team member's cast votes. This is the SINGLE source of
+// truth for that cascade; both edit handlers call it, so a new email-keyed table is
+// added HERE once instead of drifting between two copy-pasted blocks. node:sqlite has
+// no better-sqlite3-style .transaction(), so wrap manually and fail-closed on error.
+function rekeyEmail(oldEmail, newEmail) {
+  if (!oldEmail || !newEmail || oldEmail === newEmail) return;
+  db.exec('BEGIN');
+  try {
+    db.prepare('UPDATE checkins              SET email=?       WHERE email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE attendance            SET email=?       WHERE email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE regular_optout        SET email=?       WHERE email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE votes                 SET voter_email=? WHERE voter_email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE messages              SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE messages              SET to_email=?    WHERE to_email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE message_reactions     SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE group_messages        SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE group_messages        SET pinned_by=?   WHERE pinned_by=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE group_reactions       SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE group_reads           SET email=?       WHERE email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE announcement_reads    SET email=?       WHERE email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE announcement_dismissals SET email=?     WHERE email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE push_subscriptions    SET email=?       WHERE email=?').run(newEmail, oldEmail);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e; // fail loud — a half-migrated identity is worse than a rejected edit
+  }
+}
+
+export { DB_PATH, rekeyEmail };
+export default db;

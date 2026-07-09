@@ -1,0 +1,1057 @@
+/* styles.css — The Bridge Adv Runs, v4 "Foil & Court"
+   Ivory canvas, teal scoreboard hero, orange-foil accents. Anton display,
+   Archivo UI headings, Inter body, system monospace for numerics. Mobile-first,
+   fluid (phone mockups widened to a 580px .wrap). Design values ported
+   verbatim from the final_main / roster_tap / profile_host / profile_tab
+   mockups; legacy class names are preserved and retinted so the admin /
+   council / people markup barely changes. */
+
+:root{
+  --bg:#F8F5EF; --card:#FFFFFF; --ink:#20211c; --muted:#8a8474;
+  --line:rgba(34,35,29,.12); --line-soft:rgba(34,35,29,.08);
+  --teal:#22615A; --hero:linear-gradient(150deg,#2b6c64 0%,#1d4f48 58%,#153a35 100%);
+  --chalk:#F6F2E9; --chalk-dim:rgba(240,235,220,.6);
+  --orange:#E4611F; --orange-deep:#C24512; --orange-dark:#D0530F; --peach:#FBB360; --burn:#3a1405;
+  --foil:linear-gradient(145deg,#C24512 0%,#FBB360 38%,#E4611F 56%,#FFCF98 100%);
+  --solid:linear-gradient(180deg,#F59248,#E4611F 55%,#D0530F);
+  --good:#2E7D53; --warn:#A2751B; --bad:#BC4837;
+  --anton:'Anton',Impact,sans-serif; --head:'Archivo',system-ui,-apple-system,sans-serif;
+  --body:'Inter',system-ui,sans-serif; --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+}
+
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);
+  font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%}
+a{color:var(--orange-deep);text-decoration-thickness:1px;text-underline-offset:3px;
+  transition:color .15s ease}
+a:hover{color:var(--orange-dark)}
+/* Zoom kill (owner: "never zoom ever"): touch-action:manipulation removes the
+   ~300ms double-tap-to-zoom delay/gesture on every interactive control. */
+button,a,.btn,.tab,.ftab,.chip,[role=button],label.chip,.score,summary{touch-action:manipulation}
+/* Kill the iOS press-and-hold link preview + callout menu on nav/controls, and the
+   text-selection that a long-press otherwise starts. Owner: "press-hold should do
+   nothing." Content text stays selectable — this only targets tabs/buttons/controls. */
+.tabs a,.opsnav a,.tab,.ftab,.btn,button,[role=button],.chip,label.chip,.bellbtn,.arpill,.hchat,.seeall,.score,.bk,.dn,summary{
+  -webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+.wrap{max-width:580px;margin:0 auto;padding:0 20px 40px}
+body.has-tabs .wrap{padding-bottom:calc(96px + env(safe-area-inset-bottom))}
+
+/* ---------- masthead ---------- */
+.mast{display:flex;align-items:center;justify-content:space-between;padding:20px 0 12px}
+.bl{display:flex;align-items:center;gap:11px}
+.ball{width:36px;height:36px;flex:none}
+.wm b{font-family:var(--anton);font-size:22px;letter-spacing:.02em;color:var(--ink);display:block;line-height:.95}
+.wm span{font-family:var(--head);font-weight:700;font-size:9px;letter-spacing:.26em;color:var(--teal);text-transform:uppercase}
+.when{text-align:right;line-height:1.05}
+.when b{font-family:var(--anton);font-size:16px;color:var(--ink);letter-spacing:.03em}
+.when span{display:block;font-family:var(--head);font-weight:600;font-size:9px;letter-spacing:.14em;color:var(--muted);text-transform:uppercase;margin-top:2px}
+.rule{height:3px;background:var(--foil);border-radius:3px;box-shadow:0 1px 5px rgba(228,97,31,.4);margin:2px 0 14px}
+/* masthead right cluster: announcements bell + the FRI · 7–10 PM block */
+.mastr{display:flex;align-items:center;gap:12px}
+.baracts{display:flex;align-items:center;gap:8px}
+.bellbtn{position:relative;flex:none;width:38px;height:38px;margin:0;padding:0;border:none;
+  background:transparent;color:var(--ink);cursor:pointer;border-radius:50%;
+  display:inline-grid;place-items:center;-webkit-tap-highlight-color:transparent;transition:transform .1s ease}
+.bellbtn svg{width:23px;height:23px}
+.bellbtn:active{transform:scale(.9)}
+.belldot{position:absolute;top:5px;right:6px;width:9px;height:9px;border-radius:50%;background:var(--solid);
+  box-shadow:0 0 0 2px var(--bg),0 1px 4px rgba(228,97,31,.6)}
+/* announcements panel rows (inside the shared .wgsheet bottom-sheet) */
+.annrow{padding:13px 8px;border-bottom:1px solid var(--line-soft)}
+.annrow:last-child{border-bottom:none}
+.annrow-b{font-size:14.5px;line-height:1.5;color:var(--ink);white-space:pre-wrap;overflow-wrap:anywhere}
+.annrow-m{margin-top:6px;font-family:var(--head);font-weight:600;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.annempty{padding:28px 8px;text-align:center;color:var(--muted);font-size:14px}
+/* swipe-to-delete rows (host/admin only): the .annrow-c foreground slides left over a
+   red .anndel action, iOS-mail style. touch-action:pan-y keeps vertical panel scroll
+   native; only a horizontal drag moves the foreground. Padding moves onto .annrow-c so
+   the sliding layer carries it; the red action fills the row height behind it. */
+.annrow.swipeable{position:relative;padding:0;overflow:hidden;touch-action:pan-y}
+.annrow.swipeable .annrow-c{position:relative;z-index:1;padding:13px 8px;background:var(--bg);
+  transition:transform .18s cubic-bezier(.2,.7,.2,1);will-change:transform;-webkit-tap-highlight-color:transparent}
+.annrow.swipeable.dragging .annrow-c{transition:none}
+.anndel{position:absolute;top:0;right:0;bottom:0;z-index:0;width:88px;border:none;margin:0;
+  display:flex;align-items:center;justify-content:center;background:var(--bad);color:#fff;cursor:pointer;
+  font-family:var(--head);font-weight:800;font-size:11px;letter-spacing:.1em;text-transform:uppercase}
+.annrow.removing{max-height:0;opacity:0;overflow:hidden;
+  transition:max-height .25s ease,opacity .2s ease}
+@media (prefers-reduced-motion:reduce){.annrow.swipeable .annrow-c{transition:none}.annrow.removing{transition:none}}
+
+/* ---------- scoreboard hero ---------- */
+.hero{position:relative;overflow:hidden;border-radius:22px;padding:19px 21px;margin:0 0 12px;
+  background:var(--hero);border:1.5px solid rgba(251,179,96,.4);
+  box-shadow:0 22px 44px -22px rgba(21,58,53,.75),inset 0 1px 0 rgba(255,255,255,.06)}
+.hero .wood{position:absolute;inset:0;background:repeating-linear-gradient(90deg,rgba(255,255,255,.028) 0 2px,transparent 2px 30px)}
+.hero .court{position:absolute;right:-34px;bottom:-52px;width:220px;height:220px;opacity:.17}
+.hero .court path,.hero .court circle{stroke:var(--peach)}
+/* Run pill stays hard-left, the Group chat pill sits far top-right of the hero. */
+.htop{display:flex;align-items:center;justify-content:space-between;gap:10px;position:relative;z-index:1;flex-wrap:wrap}
+.spill{font-family:var(--head);font-weight:800;font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+  padding:6px 13px;border-radius:999px;background:var(--foil);color:var(--burn);box-shadow:0 2px 10px rgba(228,97,31,.5)}
+.spill.closed{background:transparent;color:var(--chalk);border:1px solid rgba(240,235,220,.5);box-shadow:none}
+.hdate{font-family:var(--head);font-weight:600;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:rgba(240,235,220,.74)}
+.score{position:relative;z-index:1;margin-top:12px;display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:8px 12px 8px 4px;border-radius:14px;border:1px dashed rgba(251,179,96,.45);text-decoration:none}
+a.score{cursor:pointer}
+.count{display:flex;align-items:baseline;gap:12px}
+.count .n{font-family:var(--anton);font-size:64px;line-height:.78;color:var(--chalk);letter-spacing:.01em;text-shadow:0 2px 12px rgba(0,0,0,.2)}
+.count .of{font-family:var(--anton);font-size:26px;line-height:.78;background:var(--foil);-webkit-background-clip:text;background-clip:text;color:transparent}
+.count .cl{font-family:var(--head);font-weight:700;font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:rgba(240,235,220,.8)}
+.count .cl small{display:block;font-weight:600;font-size:9.5px;letter-spacing:.1em;color:rgba(240,235,220,.6);margin-top:3px}
+.seeall{flex:none;text-align:center}
+.seeall .chev{width:34px;height:34px;border-radius:50%;background:rgba(251,179,96,.16);border:1px solid rgba(251,179,96,.5);
+  display:grid;place-items:center;color:var(--peach);font-size:18px;font-weight:800;margin:0 auto}
+.seeall span{display:block;font-family:var(--head);font-weight:700;font-size:8px;letter-spacing:.12em;text-transform:uppercase;color:rgba(240,235,220,.7);margin-top:5px}
+.hbar{position:relative;z-index:1;margin-top:12px;padding-top:11px;border-top:1px solid rgba(255,255,255,.16);display:flex;gap:20px;flex-wrap:wrap;align-items:flex-end}
+.hbar > div{font-family:var(--head);font-weight:800;font-size:15px;color:var(--chalk);font-variant-numeric:tabular-nums}
+.hbar > div span{display:block;font-weight:700;font-size:8.5px;letter-spacing:.14em;text-transform:uppercase;color:rgba(240,235,220,.6);margin-top:3px}
+/* operator "Add a guest" — right-aligned pill on the hbar row; expands to a full-
+   width row below (flex-basis:100%) when open so the form isn't cramped. */
+.hguest{margin:0}
+.hbar > .hguest{margin-left:auto}
+.hbar > .hguest[open]{flex:1 1 100%;margin-left:0;margin-top:12px}
+.hguest > summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:5px;
+  font-family:var(--head);font-weight:800;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--chalk);
+  padding:6px 12px;border-radius:999px;background:rgba(240,235,220,.1);border:1px solid rgba(240,235,220,.4);-webkit-tap-highlight-color:transparent}
+.hguest > summary::-webkit-details-marker{display:none}
+.hguest > summary:hover{background:rgba(240,235,220,.16)}
+.hguest > form{margin-top:10px}
+.hguest .btn.sm{width:100%}
+/* Hero footer subtitle — moved out of .htop to the bottom-right, on the teal. */
+.hsub{position:relative;z-index:1;margin-top:10px;display:flex;justify-content:flex-start}
+/* Announcement compose folded into the hero — retint the summary/labels for teal. */
+.hann{position:relative;z-index:1;margin-top:6px;border-top:1px solid rgba(255,255,255,.16);padding-top:4px}
+.hann .announce-compose{margin:6px 0 0}
+.hann .announce-compose summary{color:var(--peach)}
+.hann .announce-compose summary:hover{color:var(--chalk)}
+.hann .announce-compose .tally-note{color:rgba(240,235,220,.7)}
+.hann .announce-compose .lvl{color:rgba(240,235,220,.82)}
+/* hero footer row: Send announcement (left) + compact Auto-renew pill (right),
+   vertically centered so the pill lines up with the "Send announcement" text. */
+.hann{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.hann-l{flex:1 1 auto;min-width:0}
+.hann-r{flex:none}
+/* team Auto-renew as a compact ON/OFF switch, tinted for the teal hero */
+.arform{margin:0}
+.arpill{display:inline-flex;align-items:center;gap:6px;width:auto;min-height:0;cursor:pointer;
+  font-family:var(--head);font-weight:800;font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  padding:6px 12px;border-radius:999px;background:transparent;color:var(--chalk);
+  border:1px solid rgba(240,235,220,.5);box-shadow:none;text-shadow:none}
+.arpill .arsep{opacity:.5}
+.arpill .arstate{color:rgba(240,235,220,.7)}
+.arpill.on{background:var(--foil);color:var(--burn);border-color:transparent;box-shadow:0 2px 10px rgba(228,97,31,.45)}
+.arpill.on .arstate{color:var(--burn)}
+/* hero "Group chat" button beside the Run pill → links to the Roster tab */
+.hchat{display:inline-flex;align-items:center;gap:7px;position:relative;text-decoration:none;
+  font-family:var(--head);font-weight:800;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--chalk);
+  padding:6px 12px;border-radius:999px;background:rgba(240,235,220,.1);border:1px solid rgba(240,235,220,.4)}
+.hchat .hci{width:16px;height:16px;display:inline-grid;place-items:center;flex:none}
+.hchat .hci svg{width:100%!important;height:100%!important}
+.hdot{width:9px;height:9px;border-radius:50%;background:var(--solid);
+  box-shadow:0 0 0 2px rgba(21,58,53,.5),0 1px 5px rgba(228,97,31,.6)}
+
+/* ---------- combined player/operator controls (side-by-side action + toggle) ---------- */
+.controls{display:flex;gap:10px;align-items:stretch;margin:16px 0}
+.controls > form,.controls > button{flex:1 1 0;min-width:0;margin:0;display:flex}
+.controls > form > button,.controls > button{width:100%}
+
+/* ---------- roster preview ---------- */
+.rlab{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:6px 0 2px;flex-wrap:wrap}
+.rlab .k{font-family:var(--head);font-weight:700;font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+.rlab .k em{font-style:normal;color:var(--orange-deep);text-transform:none;letter-spacing:0;font-size:10.5px}
+.rlab .c{font-family:var(--head);font-weight:800;font-size:10px;letter-spacing:.08em;color:var(--orange-deep);text-transform:uppercase;
+  background:rgba(228,97,31,.1);border:1px solid rgba(228,97,31,.3);border-radius:999px;padding:4px 10px;text-decoration:none}
+.roster{display:flex;flex-direction:column}
+.r{display:flex;align-items:center;gap:11px;padding:7px 8px;border-radius:12px;text-decoration:none;color:inherit}
+.r + .r{margin-top:1px}
+.r.me{background:rgba(228,97,31,.1);box-shadow:inset 3px 0 0 var(--orange)}
+.av{width:38px;height:38px;border-radius:50%;flex:none;overflow:hidden;display:grid;place-items:center;
+  font-family:var(--head);font-weight:800;font-size:13px;color:#fff;background:linear-gradient(150deg,#2f7169,#1a453f);border:1.5px solid rgba(251,179,96,.5)}
+.av img{width:100%;height:100%;object-fit:cover}
+.av.guest{background:linear-gradient(150deg,#b9926a,#8a6440)}
+.nm{flex:1;font-family:var(--head);font-weight:600;font-size:14.5px;color:var(--ink)}
+.nm small{display:block;font-family:var(--body);font-weight:500;font-size:11px;color:var(--muted);margin-top:1px}
+.nm .tag{font-family:var(--head);font-weight:800;font-size:9px;letter-spacing:.1em;color:var(--burn);background:var(--foil);
+  border-radius:5px;padding:2px 7px;margin-left:8px;vertical-align:middle;box-shadow:0 1px 5px rgba(228,97,31,.4)}
+.go{flex:none;color:rgba(34,35,29,.32);font-size:20px;font-weight:700;margin-left:2px}
+
+/* ---------- badge hierarchy (host loudest → guest quietest) ---------- */
+.bdg{font-family:var(--head);font-weight:800;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;
+  padding:5px 11px;border-radius:999px;white-space:nowrap;display:inline-block}
+.bdg.host{background:var(--solid);color:#fff;box-shadow:0 2px 9px rgba(228,97,31,.5)}
+.bdg.team{background:var(--foil);color:var(--burn);box-shadow:0 2px 8px rgba(228,97,31,.4)}
+.bdg.core{background:rgba(34,97,90,.09);color:var(--teal);border:1px solid rgba(34,97,90,.3)}
+.bdg.guest{color:var(--muted);border:1px solid rgba(34,35,29,.16)}
+.bdg.reg{color:var(--muted);border:1px solid rgba(34,35,29,.14)}
+
+/* ---------- waitlist line + court notes ---------- */
+.wait{font-family:var(--body);font-size:12px;color:var(--muted);padding:1px 8px;margin:2px 0}
+.wait b{font-family:var(--head);font-weight:700;color:var(--ink);letter-spacing:.04em}
+.ann{border-radius:14px;padding:12px 15px;background:#FCF7F1;border-left:3px solid var(--orange);margin:12px 0}
+.ann .k{font-family:var(--head);font-weight:800;font-size:10px;letter-spacing:.2em;text-transform:uppercase;
+  background:var(--foil);-webkit-background-clip:text;background-clip:text;color:transparent}
+.ann .t{font-size:13px;color:var(--ink);line-height:1.4;margin-top:4px;white-space:pre-wrap}
+
+/* ---------- buttons ---------- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:52px;
+  padding:15px 18px;border:1px solid transparent;border-radius:15px;cursor:pointer;
+  font-family:var(--head);font-weight:800;font-size:14px;letter-spacing:.06em;text-transform:uppercase;
+  background:var(--solid);color:#fff;text-decoration:none;
+  box-shadow:0 12px 28px -12px rgba(218,90,32,.75),inset 0 1px 0 rgba(255,255,255,.42);
+  text-shadow:0 1px 2px rgba(120,40,0,.32);
+  transition:transform .12s ease,box-shadow .15s ease;-webkit-tap-highlight-color:transparent}
+.btn.primary{background:var(--solid)}
+.btn:hover{box-shadow:0 16px 32px -12px rgba(218,90,32,.85),inset 0 1px 0 rgba(255,255,255,.45)}
+.btn:active{transform:translateY(1px)}
+.btn:focus-visible{outline:2px solid var(--orange);outline-offset:2px}
+.btn:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none}
+/* Share button starts hidden via [hidden]; shareScript reveals it only where
+   navigator.share exists. .btn's display:inline-flex would OTHERWISE beat the UA
+   [hidden]{display:none}, leaking a dead "Share…" button on desktop — re-assert it. */
+.sharebtn[hidden]{display:none}
+.btn.ghost{background:transparent;color:var(--muted);border:1px solid rgba(34,35,29,.16);box-shadow:none;text-shadow:none}
+.btn.ghost:hover{border-color:var(--orange);color:var(--orange-deep);box-shadow:none}
+.btn.leave{background:#fff;color:var(--bad);border:1px solid rgba(188,72,55,.4);box-shadow:none;text-shadow:none}
+.btn.leave:hover{background:rgba(188,72,55,.06);border-color:rgba(188,72,55,.6);box-shadow:none}
+.btn.sm{width:auto;min-height:44px;padding:10px 15px;font-size:12px;border-radius:12px}
+.btn.regstar{background:#fff;color:var(--orange-deep);border:1px solid rgba(228,97,31,.4);box-shadow:none;text-shadow:none}
+.btn.regstar:hover{background:rgba(228,97,31,.06)}
+.btn.voted{background:var(--teal);color:#fff;box-shadow:none;text-shadow:none}
+.spin{display:none;width:16px;height:16px;border:2px solid rgba(255,255,255,.45);border-top-color:#fff;border-radius:50%;animation:btnspin .7s linear infinite}
+.btn.sending .spin{display:inline-block}
+@keyframes btnspin{to{transform:rotate(360deg)}}
+
+/* ---------- full-roster sheet (roster page) ---------- */
+.sheet{background:var(--card);border:1px solid var(--line);border-radius:22px;overflow:hidden;margin:0 0 14px;
+  box-shadow:0 18px 44px -24px rgba(21,25,18,.4)}
+.sheet-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--line-soft)}
+.sheet-head h3{font-family:var(--anton);font-size:20px;color:var(--ink);letter-spacing:.01em;margin:0}
+.sheet-head h3 em{font-style:normal;background:var(--foil);-webkit-background-clip:text;background-clip:text;color:transparent}
+.sheet-head .x{width:32px;height:32px;border-radius:50%;background:rgba(34,35,29,.06);display:grid;place-items:center;
+  color:var(--muted);font-size:16px;font-weight:700;text-decoration:none}
+.sheet-body{padding:6px 14px 14px;display:flex;flex-direction:column;gap:1px}
+.subh{font-family:var(--head);font-weight:700;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);padding:12px 8px 5px}
+.lr{display:flex;align-items:center;gap:11px;padding:8px;text-decoration:none;color:inherit;flex-wrap:wrap}
+.lr + .lr{border-top:1px solid rgba(34,35,29,.06)}
+.ln{width:22px;text-align:center;font-family:var(--anton);font-size:13px;color:var(--orange-deep);flex:none}
+.lav{width:30px;height:30px;border-radius:50%;flex:none;overflow:hidden;display:grid;place-items:center;
+  font-family:var(--head);font-weight:800;font-size:11px;color:#fff;background:linear-gradient(150deg,#2f7169,#1a453f)}
+.lav img{width:100%;height:100%;object-fit:cover}
+.lav.wl{background:linear-gradient(150deg,#b9926a,#8a6440)}
+.lnm{flex:1;font-family:var(--head);font-weight:600;font-size:13.5px;color:var(--ink);min-width:90px}
+.sb{font-family:var(--head);font-weight:800;font-size:8.5px;letter-spacing:.06em;text-transform:uppercase;padding:3px 8px;border-radius:999px}
+.sb.host{background:var(--solid);color:#fff}
+.sb.team{background:var(--foil);color:var(--burn)}
+.sb.core{background:rgba(34,97,90,.1);color:var(--teal)}
+.sb.you{background:var(--orange);color:#fff}
+.sb.guest{color:var(--muted);border:1px solid rgba(34,35,29,.16)}
+.lr form{margin:0}
+
+/* ---------- profile (view) ---------- */
+.pback{display:inline-block;font-family:var(--head);font-weight:700;font-size:13px;color:var(--muted);text-decoration:none;margin:2px 0 6px}
+.phead{display:flex;align-items:center;gap:14px;padding:6px 2px 8px}
+.pav{width:74px;height:74px;border-radius:50%;overflow:hidden;flex:none;display:grid;place-items:center;
+  font-family:var(--head);font-weight:800;font-size:26px;color:#fff;background:linear-gradient(150deg,#2f7169,#1a453f);
+  border:2px solid rgba(251,179,96,.6);box-shadow:0 6px 16px -6px rgba(228,97,31,.4)}
+.pav img{width:100%;height:100%;object-fit:cover}
+.pname b{font-family:var(--anton);font-size:26px;color:var(--ink);letter-spacing:.01em;display:block;line-height:1}
+.pbadges{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap;align-items:center}
+.pbadges .tag{font-family:var(--head);font-weight:800;font-size:9px;letter-spacing:.1em;color:var(--burn);background:var(--foil);border-radius:5px;padding:3px 8px}
+.hostcall{margin:14px 0;padding:12px 15px;border-radius:14px;background:linear-gradient(180deg,#FCEEE1,#FBE3D1);
+  border:1px solid rgba(228,97,31,.32);border-left:3px solid var(--orange);display:flex;gap:11px;align-items:center}
+.hostcall .ic{width:34px;height:34px;border-radius:10px;background:var(--solid);color:#fff;flex:none;display:grid;place-items:center;
+  font-family:var(--anton);font-size:15px;box-shadow:0 3px 9px rgba(228,97,31,.5)}
+.hostcall .tx b{font-family:var(--head);font-weight:800;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--orange-deep);display:block}
+.hostcall .tx span{font-size:12.5px;color:var(--ink);line-height:1.35;display:block;margin-top:2px}
+.bigstat{margin:16px 0 0;padding:16px 18px;border-radius:16px;background:linear-gradient(150deg,#2b6c64,#173f3a);color:#fff;
+  position:relative;overflow:hidden;border:1.5px solid rgba(251,179,96,.4)}
+.bigstat .wood{position:absolute;inset:0;background:repeating-linear-gradient(90deg,rgba(255,255,255,.03) 0 2px,transparent 2px 30px)}
+.bigstat .n{font-family:var(--anton);font-size:52px;line-height:.85;position:relative}
+.bigstat .n em{font-style:normal;font-size:22px;background:var(--foil);-webkit-background-clip:text;background-clip:text;color:transparent}
+.bigstat .k{font-family:var(--head);font-weight:700;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:rgba(240,235,220,.8);position:relative;margin-top:6px}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:12px 0 0}
+.tile{background:#fff;border:1px solid rgba(34,35,29,.09);border-radius:14px;padding:13px 10px;text-align:center}
+.tile b{font-family:var(--anton);font-size:26px;color:var(--ink);display:block;line-height:1}
+.tile span{font-family:var(--head);font-weight:700;font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);display:block;margin-top:6px}
+.contact{margin:16px 0 0;padding:14px 16px;border-radius:14px;background:#fff;border:1px solid var(--line)}
+.contact .ck{font-family:var(--head);font-weight:700;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.contact .cv{font-size:14.5px;color:var(--ink);line-height:1.6}
+.contact .cv a{color:var(--orange-deep);font-weight:600}
+.prow{display:flex;gap:10px;margin:16px 0 0;flex-wrap:wrap}
+.prow .btn{flex:1;text-align:center;min-width:130px}
+
+/* ---------- profile (edit tab) ---------- */
+.bar{display:flex;align-items:center;justify-content:space-between;padding:12px 0 10px;border-bottom:1px solid var(--line-soft);margin-bottom:2px}
+.bar .bk{font-family:var(--head);font-weight:700;font-size:14px;color:var(--muted);text-decoration:none}
+.bar .ti{font-family:var(--head);font-weight:800;font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink)}
+.bar .dn{font-family:var(--head);font-weight:800;font-size:14px;background:var(--foil);-webkit-background-clip:text;background-clip:text;color:transparent;
+  border:none;cursor:pointer;padding:6px 4px;-webkit-tap-highlight-color:transparent}
+/* Compact identity row — a small avatar sits inline with the display-name field
+   (replaces the old big centered photo block, saving ~140px of vertical space). */
+.idrow{display:flex;align-items:flex-end;gap:13px;margin:6px 0 4px}
+.pic{width:54px;height:54px;border-radius:50%;overflow:hidden;position:relative;display:grid;place-items:center;flex:none;cursor:pointer;
+  font-family:var(--head);font-weight:800;font-size:20px;color:#fff;background:linear-gradient(150deg,#2f7169,#1a453f);
+  border:2px solid rgba(251,179,96,.6);box-shadow:0 6px 15px -8px rgba(228,97,31,.45);-webkit-tap-highlight-color:transparent}
+.pic img{width:100%;height:100%;object-fit:cover}
+.pic .cam{position:absolute;right:-2px;bottom:-2px;width:21px;height:21px;border-radius:50%;background:var(--solid);
+  border:2px solid var(--bg);display:grid;place-items:center;color:#fff;font-size:10px}
+.idrow .field{flex:1;min-width:0;margin:0}
+.idrow .field > label{display:flex;align-items:center;gap:8px}
+.hostpill{font-family:var(--head);font-weight:800;font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--burn);
+  background:var(--foil);border-radius:5px;padding:2px 7px}
+.phsoon{margin-left:auto;font-family:var(--head);font-weight:700;font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.phactions{margin-left:auto;display:flex;align-items:center}
+.phbtn{font-family:var(--head);font-weight:700;font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--burn);
+  background:none;border:none;padding:2px 0;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.field{margin:0 0 4px}
+.field > label{font-family:var(--head);font-weight:700;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);display:block;margin:0 0 4px}
+/* Profile-scoped input compaction: trimmer than the global 48px control while keeping
+   the 16px font floor (zero-zoom) and a ~44px tap target. Scoped to .pedit so the
+   apply/login forms keep their roomier inputs. */
+.pedit input{min-height:44px;padding:11px 13px}
+.two{display:flex;gap:11px}
+.two > .field{flex:1;min-width:0}
+.sec{margin:5px 0 5px}
+.sec .lb{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px;gap:8px;flex-wrap:wrap}
+.sec .lb b{font-family:var(--head);font-weight:700;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.sec .lb span{font-family:var(--body);font-size:11px;color:var(--muted)}
+.chips{display:flex;gap:7px}
+.chip{flex:1;min-width:0;text-align:center;padding:9px 0 8px;border-radius:12px;font-family:var(--anton);font-size:17px;letter-spacing:.02em;
+  border:1.5px solid rgba(34,35,29,.15);color:var(--muted);background:#fff;cursor:pointer;position:relative}
+.chip small{display:block;font-family:var(--head);font-weight:700;font-size:7px;letter-spacing:.04em;color:var(--muted);margin-top:2px}
+.chip.on,.chip:has(:checked){background:var(--solid);color:#fff;border-color:transparent;box-shadow:0 8px 18px -6px rgba(228,97,31,.6)}
+.chip.on small,.chip:has(:checked) small{color:rgba(255,255,255,.85)}
+.statcard{display:flex;gap:14px;align-items:center;padding:9px 15px;border-radius:13px;background:#fff;border:1px solid rgba(34,35,29,.09);margin:4px 0 0}
+.statcard .g{font-family:var(--anton);font-size:30px;color:var(--ink);line-height:.9;flex:none}
+.statcard .g em{font-style:normal;font-size:14px;background:var(--foil);-webkit-background-clip:text;background-clip:text;color:transparent}
+.statcard .d{font-family:var(--head);font-weight:700;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);line-height:1.45}
+
+/* ---------- bottom tab bar ---------- */
+.tabs{position:fixed;left:0;right:0;bottom:0;z-index:10;background:var(--card);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
+.tabrow{display:flex;max-width:580px;margin:0 auto}
+.tab{flex:1;text-align:center;padding:11px 0 13px;font-family:var(--head);font-weight:700;font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted);text-decoration:none;-webkit-tap-highlight-color:transparent}
+.tab .ic{width:22px;height:22px;margin:0 auto 5px;display:block}
+.tab.on{color:var(--orange-dark)}
+.tab.on .ic path,.tab.on .ic circle,.tab.on .ic rect{stroke:var(--orange-dark)}
+
+/* ---------- legacy typographic scale (names preserved, retinted) ---------- */
+h1,h2{font-family:var(--anton);margin:0 0 12px;color:var(--ink);letter-spacing:.01em;line-height:1.05;font-weight:400}
+h1{font-size:34px}
+h2{font-size:23px}
+.lead{color:var(--muted);font-size:15px;max-width:60ch;margin:0 0 4px;line-height:1.55}
+.lead b{color:var(--ink);font-weight:600}
+.eyebrow{font-family:var(--head);font-weight:800;font-size:11px;letter-spacing:.28em;text-transform:uppercase;color:var(--orange);display:block;margin:0 0 10px}
+
+/* ---------- cards ---------- */
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:20px;margin:16px 0;
+  box-shadow:0 1px 2px rgba(28,32,25,.04),0 10px 28px -18px rgba(28,32,25,.18)}
+.card.rail{border-top:3px solid var(--orange)}
+
+/* ---------- check-in info section: meet-your-host + game format ---------- */
+/* Ported from the game_format mockup, scoped under .infosec so the generic
+   class names (.host/.rows/.row/.ic/.rtx/.rval) can't collide with tabs, the
+   admin roster, or the profile host-callout. */
+.infosec{margin:22px 0 4px}
+.infosec .clab{font-family:var(--head);font-weight:800;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--teal)}
+.infosec .ctitle{font-family:var(--anton);font-size:24px;color:var(--ink);letter-spacing:.01em;margin-top:5px}
+/* host card */
+.infosec .host{display:flex;gap:14px;align-items:center;margin-top:14px}
+.infosec .hav{width:56px;height:56px;border-radius:50%;overflow:hidden;flex:none;display:grid;place-items:center;
+  border:2px solid rgba(251,179,96,.6);box-shadow:0 6px 16px -8px rgba(228,97,31,.4);
+  background:var(--hero);color:var(--chalk);font-family:var(--head);font-weight:800;font-size:18px}
+.infosec .hav img{width:100%;height:100%;object-fit:cover}
+.infosec .who b{font-family:var(--anton);font-size:19px;color:var(--ink);display:block;line-height:1;margin-bottom:7px}
+.infosec .hcopy{font-size:13.5px;color:var(--ink);line-height:1.5;margin-top:14px}
+.infosec .host + .btn,.infosec .hcopy + .btn{margin-top:14px}
+/* format rows */
+.infosec .rows{margin-top:14px;display:flex;flex-direction:column}
+.infosec .row{display:flex;align-items:center;gap:14px;padding:13px 2px}
+.infosec .row + .row{border-top:1px solid var(--line-soft)}
+.infosec .ic{width:38px;height:38px;border-radius:11px;flex:none;display:grid;place-items:center;
+  background:rgba(34,97,90,.09);border:1px solid rgba(34,97,90,.16)}
+.infosec .ic svg{width:20px;height:20px;stroke:var(--teal);fill:none;stroke-width:2}
+.infosec .rtx{flex:1}
+.infosec .rtx b{font-family:var(--head);font-weight:700;font-size:15px;color:var(--ink);display:block}
+.infosec .rtx span{font-size:12.5px;color:var(--muted)}
+.infosec .rval{font-family:var(--anton);font-size:26px;color:var(--ink);letter-spacing:.01em}
+.infosec .rval em{font-style:normal;background:var(--foil);-webkit-background-clip:text;background-clip:text;color:transparent}
+
+/* ---------- add-to-home-screen prompt ---------- */
+.a2hs h3{font-family:var(--head);font-weight:800;font-size:18px;color:var(--ink);margin:2px 0 2px}
+.a2hs .steps{margin-top:12px;display:flex;flex-direction:column;gap:10px}
+.a2hs .step{display:flex;gap:12px;align-items:flex-start;font-size:14px;color:var(--ink);line-height:1.5}
+.a2hs .plat{font-family:var(--head);font-weight:800;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--teal);flex:none;min-width:58px;padding-top:3px}
+.a2hs .sub{margin-top:14px;font-size:13px;color:var(--muted);line-height:1.5}
+
+/* ---------- forms ---------- */
+label{display:block;font-family:var(--head);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);font-weight:700;margin:16px 0 7px}
+input,select,textarea{width:100%;background:#fff;color:var(--ink);border:1px solid var(--line);border-radius:12px;
+  padding:14px;font:inherit;min-height:48px;transition:border-color .15s ease,box-shadow .15s ease}
+/* Zoom kill (owner: "never zoom ever"): iOS Safari zooms the page when focusing
+   any field under 16px. Global 16px floor on every input/textarea/select so focus
+   never triggers a zoom. Paired with the viewport user-scalable=no in views.js. */
+input,textarea,select{font-size:16px}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--orange);box-shadow:0 0 0 3px rgba(228,97,31,.15)}
+textarea{min-height:84px;resize:vertical}
+::placeholder{color:#b3ab98}
+.check{display:flex;gap:12px;align-items:flex-start;margin-top:18px}
+.check input{width:22px;height:22px;min-height:22px;margin-top:1px;flex:0 0 auto;accent-color:var(--orange)}
+.check label{margin:0;text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink);font-weight:400;line-height:1.5;font-family:var(--body)}
+.levels{display:grid;gap:2px;margin-top:6px}
+.lvl{display:flex;align-items:center;gap:12px;margin:0;padding:9px 2px;text-transform:none;letter-spacing:0;font-size:15px;
+  color:var(--ink);font-weight:400;cursor:pointer;border-radius:8px;font-family:var(--body)}
+.lvl input{width:20px;height:20px;min-height:20px;margin:0;flex:0 0 auto;accent-color:var(--orange)}
+
+/* ---------- notices ---------- */
+.notice{border-radius:14px;padding:14px 18px;margin:14px 0;font-size:14.5px;background:#fff;border:1px solid var(--line);
+  border-left:3px solid var(--teal);box-shadow:0 1px 2px rgba(28,32,25,.04)}
+.notice.good{border-color:rgba(46,125,83,.35);border-left-color:var(--good)}
+.notice.warn{border-color:rgba(162,117,27,.35);border-left-color:var(--warn)}
+.notice.bad{border-color:rgba(188,72,55,.4);border-left-color:var(--bad)}
+/* waitlist offer banner — loud/foil-accented so a held spot can't be missed */
+.notice.claim{border:1px solid rgba(228,97,31,.5);border-left:4px solid var(--burn);
+  background:linear-gradient(90deg,rgba(251,179,96,.16),rgba(255,255,255,.6));line-height:1.5}
+
+/* ---------- announcement banner (in-app latest announcement — all players) ---------- */
+.annbanner{display:flex;gap:12px;align-items:flex-start;margin:14px 0;padding:13px 12px 13px 16px;
+  border-radius:16px;background:linear-gradient(90deg,rgba(34,97,90,.10),rgba(255,255,255,.55));
+  border:1px solid rgba(34,97,90,.28);border-left:4px solid var(--teal);box-shadow:0 1px 2px rgba(28,32,25,.04)}
+.annbanner-i{font-size:19px;line-height:1.3;flex:none}
+.annbanner-b{flex:1;min-width:0}
+.annbanner-t{font-size:14.5px;color:var(--ink);line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
+.annbanner-m{margin-top:6px;font-family:var(--head);font-weight:700;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.annbanner-x{flex:none;width:28px;height:28px;border:none;background:transparent;color:var(--muted);
+  display:flex;align-items:center;justify-content:center;border-radius:50%;cursor:pointer;padding:0}
+.annbanner-x:hover{background:rgba(34,35,29,.06);color:var(--ink)}
+html:not(.noanim) .annbanner{animation:a-rise var(--t-fast) var(--ez-out) both}
+
+/* ---------- status pills (retinted to badge palette) ---------- */
+.pill{display:inline-block;font-family:var(--head);font-weight:800;text-transform:uppercase;letter-spacing:.1em;font-size:10px;padding:5px 12px;border-radius:999px}
+.pill.approved{background:rgba(46,125,83,.10);color:var(--good);border:1px solid rgba(46,125,83,.25)}
+.pill.tryout{background:rgba(162,117,27,.10);color:var(--warn);border:1px solid rgba(162,117,27,.25)}
+.pill.pending{background:rgba(138,132,116,.12);color:var(--muted);border:1px solid rgba(138,132,116,.3)}
+.pill.rejected{background:rgba(188,72,55,.10);color:var(--bad);border:1px solid rgba(188,72,55,.25)}
+
+/* ---------- legacy tags (admin/people inline) → badge palette ---------- */
+.tag{font-family:var(--head);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:800;
+  padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--muted);background:#fff;white-space:nowrap}
+.tag.team{color:var(--burn);border-color:transparent;background:var(--foil)}
+.tag.reg{color:var(--teal);border-color:rgba(34,97,90,.3);background:rgba(34,97,90,.09)}
+.tag.tryout{color:var(--warn);border-color:rgba(162,117,27,.35);background:rgba(162,117,27,.08)}
+.tag.host{color:#fff;border-color:transparent;background:var(--solid)}
+
+.subhead{font-family:var(--head);font-weight:800;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--orange-deep);
+  margin:26px 0 4px;padding-top:14px;border-top:1px solid var(--line)}
+
+/* ---------- run state (operator) ---------- */
+.runstate{display:flex;align-items:center;gap:10px;font-size:14.5px;padding:14px 18px;border-radius:14px;background:#fff;border:1px solid var(--line)}
+.runstate .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+.runstate.open{border-color:rgba(46,125,83,.45);background:rgba(46,125,83,.07);color:var(--good)}
+.runstate.open b{color:var(--good)}
+.runstate.open .dot{background:var(--good);box-shadow:0 0 0 4px rgba(46,125,83,.16)}
+.runstate.closed{border-color:rgba(188,72,55,.45);background:rgba(188,72,55,.07);color:var(--bad)}
+.runstate.closed b{color:var(--bad)}
+.runstate.closed .dot{background:var(--bad);box-shadow:0 0 0 4px rgba(188,72,55,.14)}
+
+/* ---------- operator player list ---------- */
+.plist{list-style:none;padding:0;margin:8px 0 0}
+.plist li{display:flex;align-items:center;gap:10px;padding:11px 2px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.plist .num{font-family:var(--anton);font-weight:400;color:var(--orange-deep);width:24px;text-align:right;font-size:15px}
+.plist .pn{flex:1;font-family:var(--head);font-weight:600;color:var(--ink);min-width:100px}
+.plist .me{color:var(--orange-deep);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;font-weight:800}
+.plist-admin li{flex-wrap:wrap;gap:8px}
+.plist-admin .pn{min-width:110px}
+.plist-admin form{margin:0}
+
+/* ---------- admin rows ---------- */
+.arow{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px;margin:12px 0;
+  box-shadow:0 1px 2px rgba(28,32,25,.04);transition:box-shadow .15s ease}
+.arow[open]{box-shadow:0 10px 28px -18px rgba(28,32,25,.24)}
+.arow summary{cursor:pointer;-webkit-tap-highlight-color:transparent;list-style:none;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.arow summary::-webkit-details-marker{display:none}
+.arow .an{font-family:var(--head);font-weight:700;font-size:16px;color:var(--ink)}
+.arow .ae{font-size:13px;color:var(--muted);margin-top:2px}
+.arow .ad{font-size:13.5px;color:var(--muted);margin-top:10px;line-height:1.6}
+.arow .ad b{color:var(--ink)}
+.arow .acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.acts form{margin:0}
+
+/* ---------- council tally ---------- */
+.tally{font-size:13.5px;margin-top:12px;color:var(--ink)}
+.tally b{font-family:var(--head);font-weight:800;color:var(--orange-deep);font-size:15px}
+.tally-note{font-family:var(--body);font-size:12px;color:var(--muted);margin-top:3px}
+
+/* ---------- people edit form ---------- */
+.editrow{margin:10px 0 0;display:grid;gap:8px}
+.editrow label{display:flex;flex-direction:column;gap:4px;margin:0;text-transform:none;letter-spacing:0;font-size:11px;color:var(--muted);font-weight:700;font-family:var(--head)}
+.editrow input{min-height:42px}
+.editacts{margin-top:2px}
+textarea#phones{width:100%;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;
+  font-family:var(--mono);font-size:16px;color:var(--ink);resize:vertical}
+
+/* ---------- announcements ---------- */
+.announce{background:#FCF7F1;border:1px solid rgba(228,97,31,.28);border-left:3px solid var(--orange);border-radius:14px;padding:16px 18px;margin:16px 0}
+.announce-h{font-family:var(--head);font-weight:800;font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--orange-deep);margin-bottom:8px}
+.announce-b{font-family:var(--head);font-weight:600;font-size:15px;line-height:1.5;color:var(--ink);white-space:pre-wrap}
+.announce-meta{font-size:11.5px;color:var(--muted);margin-top:10px;letter-spacing:.02em}
+.announce-compose{margin:14px 0;font-size:13.5px}
+.announce-compose summary{cursor:pointer;color:var(--orange-deep);font-weight:700;font-family:var(--head);padding:8px 0;-webkit-tap-highlight-color:transparent}
+.announce-compose summary:hover{color:var(--orange-dark)}
+.announce-compose textarea{min-height:70px}
+.annlog{list-style:none;padding:0;margin:8px 0 0}
+.annlog li{padding:12px 0;border-bottom:1px solid var(--line)}
+.annlog li:last-child{border-bottom:0}
+.annlog-b{font-size:14px;color:var(--ink);white-space:pre-wrap;line-height:1.5}
+.annlog-m{font-size:11.5px;color:var(--muted);margin-top:5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.annlog-state{font-family:var(--head);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;font-weight:800;padding:2px 8px;border-radius:999px}
+.annlog-state.live{color:var(--good);background:rgba(46,125,83,.10)}
+.annlog-state.past{color:var(--muted);background:rgba(138,132,116,.12)}
+
+/* ---------- council filter tabs ---------- */
+.ftabs{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0 4px}
+.ftab{display:inline-flex;align-items:center;gap:7px;min-height:44px;padding:9px 16px;border-radius:999px;border:1px solid var(--line);
+  background:#fff;color:var(--muted);font-family:var(--head);font-weight:700;font-size:13px;text-decoration:none;transition:border-color .15s ease}
+.ftab:hover{border-color:var(--orange);color:var(--orange-deep)}
+.ftab.on{background:var(--teal);color:#fff;border-color:var(--teal)}
+.ftab.on:hover{color:#fff}
+.ftab .fcount{font-size:11px;padding:1px 8px;border-radius:999px;background:rgba(34,97,90,.1);color:var(--teal)}
+.ftab.on .fcount{background:rgba(255,255,255,.22);color:#fff}
+
+/* ---------- operator page switcher ---------- */
+.opsnav{display:flex;gap:7px;justify-content:flex-end;flex-wrap:wrap;margin:8px 0 0}
+.opsnav a{display:inline-flex;align-items:center;min-height:35px;padding:7px 13px;font-size:12.5px;border-radius:999px;border:1px solid var(--line);
+  background:#fff;color:var(--teal);font-family:var(--head);font-weight:700;font-size:13px;text-decoration:none;transition:border-color .15s ease}
+.opsnav a:hover{border-color:var(--orange)}
+.opsnav a.on{background:var(--teal);color:#fff;border-color:var(--teal)}
+
+/* ---------- QR + location ---------- */
+.qr{display:flex;gap:18px;align-items:center;background:var(--hero);color:#F3FAF9;border-radius:18px;padding:18px 20px;margin:14px 0}
+.qr img{width:116px;height:116px;flex:0 0 auto;border-radius:12px;background:#fff;padding:7px}
+.qr .t b{display:block;font-family:var(--head);font-weight:800;font-size:15px;letter-spacing:.02em}
+.qr .t p{margin:4px 0 0;font-size:12.5px;color:rgba(240,235,220,.85);line-height:1.5}
+.qr .t a{color:var(--peach);font-weight:600;text-decoration:underline}
+.loc{border-top:1px solid var(--line);padding:14px 2px 0;margin:12px 0 0}
+.loc-h{font-family:var(--head);font-size:10px;letter-spacing:.2em;text-transform:uppercase;font-weight:800;color:var(--orange);margin-right:8px}
+.loc-a{font-size:12.5px;line-height:1.55;color:var(--muted)}
+.loc-a b{color:var(--ink)}
+.loc-map{font-weight:600;white-space:nowrap}
+
+/* ---------- share page QR ---------- */
+.qrbox{max-width:260px;margin:0 auto;background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px}
+.qrbox svg{width:100%;height:auto;display:block}
+.qrbox-sm{max-width:168px}
+
+/* ---------- closed badge (legacy) ---------- */
+.closedbadge{font-family:var(--head);font-size:10px;letter-spacing:.14em;text-transform:uppercase;font-weight:800;color:var(--bad);
+  border:1px solid rgba(188,72,55,.5);border-radius:999px;padding:3px 10px;vertical-align:3px;margin-left:8px;background:rgba(188,72,55,.1)}
+
+/* ---------- footer ---------- */
+.foot{font-family:var(--head);font-weight:700;font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--muted);
+  text-align:center;margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
+.foot a{color:var(--orange-deep);text-transform:none;letter-spacing:.02em;font-weight:700}
+/* Compact sign-out row on the profile tab (a second .foot — the tagline — follows it). */
+.foot.signout{margin-top:8px;padding-top:8px}
+
+/* ---------- responsive + a11y ---------- */
+@media (min-width:640px){
+  h1{font-size:40px}
+  .wrap{padding-left:24px;padding-right:24px}
+}
+@media (max-width:380px){
+  h1{font-size:28px}
+  .count .n{font-size:54px}
+  .when{display:none}
+  .tiles{gap:8px}
+}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none!important;animation:none!important}
+}
+
+/* ---------- gym banner + Next Run caption (under the masthead rule) ---------- */
+.gymbanner{position:relative;margin:2px 0 14px;border-radius:16px;overflow:hidden;border:1px solid var(--line);box-shadow:0 14px 32px -24px rgba(30,28,20,.55);line-height:0}
+.gymbanner img{width:100%;height:240px;object-fit:cover;display:block}
+/* Solid caption band over the bottom of the photo — no gradient/blend, just a
+   dark semi-opaque bar so the Next Run / countdown reads cleanly on any photo. */
+.gymcap{position:absolute;left:0;right:0;bottom:0;line-height:normal;display:flex;align-items:center;justify-content:space-between;gap:14px;
+  padding:13px 16px;background:rgba(18,20,14,.72)}
+.gymcap .l{font-family:var(--head);font-weight:700;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:rgba(240,235,220,.72)}
+.gymcap .l b{display:block;font-family:var(--head);font-weight:800;font-size:13px;letter-spacing:.02em;color:var(--chalk);text-transform:none;margin-top:3px}
+.gymcap .r{text-align:right;flex:none}
+.gymcap .r span{font-family:var(--head);font-weight:700;font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:rgba(240,235,220,.72)}
+.gymcap .r b{display:block;font-family:var(--mono);font-size:19px;letter-spacing:.02em;margin-top:2px;
+  background:var(--foil);-webkit-background-clip:text;background-clip:text;color:transparent}
+
+/* ---------- "Who's going" overlay (opens on top of check-in) ---------- */
+.score[role=button]{cursor:pointer}
+.wgwrap{display:none;position:fixed;inset:0;z-index:60}
+.wgwrap.open{display:block}
+.wgscrim{position:absolute;inset:0;background:rgba(18,20,14,.55)}
+.wgsheet{position:absolute;left:0;right:0;bottom:0;max-width:580px;margin:0 auto;height:80vh;display:flex;flex-direction:column;background:var(--bg);border-radius:22px 22px 0 0;box-shadow:0 -20px 50px -20px rgba(0,0,0,.45);animation:wgup .22s cubic-bezier(.2,.7,.2,1)}
+@keyframes wgup{from{transform:translateY(24px);opacity:.4}to{transform:none;opacity:1}}
+@media (prefers-reduced-motion:reduce){.wgsheet{animation:none}}
+.wgsheet-h{display:flex;align-items:center;justify-content:space-between;padding:15px 18px 12px;border-bottom:1px solid var(--line)}
+.wgsheet-h b{font-family:var(--anton);font-size:18px;letter-spacing:.01em}
+.wgx{width:32px;height:32px;border-radius:50%;border:none;background:rgba(34,35,29,.06);color:var(--muted);font-size:15px;font-weight:700;cursor:pointer}
+.wgsheet-b{overflow-y:auto;padding:8px 14px 22px}
+
+/* ================= PHASE 2 — in-app messaging ================= */
+/* ---- tab bar unread badge (Messages tab) ---- */
+.tab{position:relative}
+.tabbadge{position:absolute;top:5px;left:calc(50% + 6px);min-width:16px;height:16px;padding:0 4px;border-radius:999px;
+  background:var(--solid);color:#fff;font-family:var(--head);font-weight:800;font-size:9px;line-height:16px;text-align:center;
+  box-shadow:0 1px 5px rgba(228,97,31,.5);letter-spacing:0}
+/* @-mention marker: DISTINCT teal (vs the orange plain-unread badge) so "you were
+   tagged" reads apart from ordinary unread at a glance. */
+.tabbadge.mention{background:var(--teal);box-shadow:0 1px 5px rgba(34,97,90,.5)}
+
+/* ---- inbox ---- */
+.mh1{font-family:var(--anton);font-size:30px;margin:2px 0 12px}
+/* Tighter divider above the profile-tab inbox header (scoped so other .subhead uses
+   keep their roomier spacing). */
+#dminbox .subhead{margin-top:8px;padding-top:10px}
+/* The host DM inbox lives on the (fixed, one-screen) profile tab. Bound the row list
+   so a long inbox scrolls WITHIN its own region and never grows the page. ~3 compact
+   rows fit without an internal scrollbar (the common 0–3 message case). */
+.mlist{display:flex;flex-direction:column;max-height:168px;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+.mrow{display:flex;align-items:center;gap:10px;padding:5px 8px;border-radius:12px;text-decoration:none;color:inherit}
+.mrow + .mrow{border-top:1px solid rgba(34,35,29,.07)}
+.mrow.unread{background:rgba(228,97,31,.05)}
+.mav{width:38px;height:38px;border-radius:50%;flex:none;overflow:hidden;display:grid;place-items:center;
+  font-family:var(--head);font-weight:800;font-size:13px;color:#fff;background:linear-gradient(150deg,#2f7169,#1a453f);border:1.5px solid rgba(251,179,96,.5)}
+.mav img{width:100%;height:100%;object-fit:cover}
+.mtx{flex:1;min-width:0}
+.mnm{display:block;font-family:var(--head);font-weight:700;font-size:14px;color:var(--ink);text-transform:uppercase;letter-spacing:.015em}
+.msnip{display:block;font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.mrow.unread .msnip{color:var(--ink);font-weight:500}
+.mmeta{flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:6px;text-align:right}
+.mtime{font-size:11px;color:var(--muted);white-space:nowrap}
+.mdot{min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--solid);color:#fff;
+  font-family:var(--head);font-weight:800;font-size:11px;line-height:20px;text-align:center;box-shadow:0 1px 6px rgba(228,97,31,.45)}
+.mempty{text-align:center;padding:20px 20px 6px}
+.mempty .mei{font-size:30px;margin-bottom:4px}
+.mempty b{font-family:var(--anton);font-size:19px;color:var(--ink);display:block}
+.mempty p{color:var(--muted);font-size:13px;margin:5px auto 0;max-width:38ch;line-height:1.45}
+.mempty .btn{max-width:280px;margin:0 auto}
+
+/* ---- thread page (own layout: fixed top bar + composer, no bottom tabs) ---- */
+body.thread-page .wrap{padding-bottom:calc(96px + env(safe-area-inset-bottom));padding-top:60px}
+.pbar{position:fixed;top:0;left:0;right:0;z-index:20;background:rgba(248,245,239,.92);backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--line);display:flex;align-items:center;gap:6px;padding:9px 14px;padding-top:calc(9px + env(safe-area-inset-top))}
+.pbar > *{max-width:580px}
+.pbback{font-family:var(--head);font-weight:800;font-size:26px;line-height:1;color:var(--orange-deep);text-decoration:none;padding:0 6px 3px;flex:none}
+.pbwho{display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;min-width:0}
+.pbav{width:34px;height:34px;border-radius:50%;flex:none;overflow:hidden;display:grid;place-items:center;
+  font-family:var(--head);font-weight:800;font-size:12px;color:#fff;background:linear-gradient(150deg,#2f7169,#1a453f);border:1.5px solid rgba(251,179,96,.5)}
+.pbav img{width:100%;height:100%;object-fit:cover}
+.pbnm{font-family:var(--head);font-weight:700;font-size:15px;color:var(--ink);text-transform:uppercase;letter-spacing:.015em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pbnm small{display:block;font-family:var(--head);font-weight:800;font-size:8.5px;letter-spacing:.08em;color:var(--orange-deep);text-transform:uppercase;margin-top:1px}
+
+.vsteps{list-style:none;margin:0;padding:0;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:16px}
+.vsteps>li{display:flex;gap:12px;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line-soft)}
+.vsteps>li:last-child{border-bottom:none}
+.vsteps .vpic{flex:0 0 50px;width:50px;height:50px;display:grid;place-items:center;background:var(--bg);border:1px solid var(--line-soft);border-radius:13px}
+.vsteps .vpic svg{width:30px;height:30px}
+.vsteps .vtxt{min-width:0}
+.vsteps .vtxt>b{display:block;font-family:var(--head);font-weight:800;font-size:13.5px;color:var(--ink);margin-bottom:2px}
+.vsteps .vtxt>span{font-size:12px;color:var(--muted);line-height:1.4}
+.vsteps .vtxt>span b{color:var(--ink);font-weight:700}
+ol.ig{margin:4px 0 0;padding-left:20px}
+ol.ig li{margin:0 0 9px;font-size:14px;line-height:1.45;color:var(--ink)}
+ol.ig li:last-child{margin:0}
+ol.ig li b{font-weight:700}
+.codein{width:100%;box-sizing:border-box;font-size:26px;font-weight:800;letter-spacing:.35em;text-align:center;
+  font-family:ui-monospace,Menlo,monospace;padding:12px 10px;border:1px solid var(--line);border-radius:12px;
+  background:var(--bg);color:var(--ink);text-indent:.35em}
+/* First-run coach-mark tour (spotlight an element + tooltip explaining it). */
+#tour{position:fixed;inset:0;z-index:400}
+#tourcatch{position:absolute;inset:0}
+#tourhole{position:absolute;border-radius:14px;box-shadow:0 0 0 9999px rgba(18,20,14,.72);pointer-events:none;
+  transition:left .25s var(--ez-out),top .25s var(--ez-out),width .25s var(--ez-out),height .25s var(--ez-out)}
+#tourtip{position:absolute;width:290px;max-width:calc(100vw - 24px);background:var(--card);border:1px solid var(--line);
+  border-radius:16px;padding:16px;box-shadow:0 18px 44px -14px rgba(0,0,0,.55);transition:top .25s var(--ez-out),left .25s var(--ez-out)}
+#tourttl{font-family:var(--head);font-weight:800;font-size:15.5px;color:var(--ink);margin-bottom:4px}
+#tourtxt{font-size:13px;color:var(--muted);line-height:1.45}
+#tourbtns{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px}
+#tourskip{background:none;border:none;color:var(--muted);font-size:13px;cursor:pointer;padding:6px 2px}
+#tourdots{display:flex;gap:5px}
+#tourdots i{width:6px;height:6px;border-radius:50%;background:var(--line);display:block}
+#tourdots i.on{background:var(--orange)}
+.notifprompt[hidden]{display:none}   /* the display:flex below otherwise overrides the hidden attribute, so Enable/✕ couldn't hide it */
+.notifprompt{display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--card);
+  border:1px solid var(--line);border-radius:14px;padding:11px 14px;margin:12px 0}
+.notifprompt .np-b{display:flex;flex-direction:column;gap:2px;min-width:0}
+.notifprompt .np-b b{font-family:var(--head);font-weight:800;font-size:13px;color:var(--ink)}
+.notifprompt .np-b span{font-size:12px;color:var(--muted);line-height:1.35}
+.notifprompt .np-a{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.notifprompt .np-x{background:none;border:none;color:var(--muted);padding:6px;cursor:pointer;display:flex;-webkit-tap-highlight-color:transparent}
+.notifprompt .np-x svg{width:15px;height:15px}
+.pinned{background:var(--card);border:1px solid var(--line);border-radius:12px;margin:8px 0 2px;overflow:hidden}
+.pinned>summary{font-family:var(--head);font-weight:800;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:9px 12px;cursor:pointer;list-style:none;-webkit-tap-highlight-color:transparent}
+.pinned>summary::-webkit-details-marker{display:none}
+.pinrow{display:flex;align-items:center;gap:4px;border-top:1px solid var(--line-soft);padding:0 4px 0 12px}
+.pinjump{flex:1;min-width:0;text-align:left;background:none;border:none;padding:9px 0;font-size:13px;color:var(--ink);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;-webkit-tap-highlight-color:transparent}
+.pinjump b{font-weight:700}.pinjump span{color:var(--muted)}
+.pinx-f{margin:0}
+.pinx{background:none;border:none;color:var(--muted);padding:7px;cursor:pointer;display:flex;-webkit-tap-highlight-color:transparent}
+.pinx svg{width:15px;height:15px}
+.msg.flash .mb{animation:pinflash 1.2s ease}
+@keyframes pinflash{0%,100%{box-shadow:0 0 0 0 transparent}30%{box-shadow:0 0 0 3px var(--orange)}}
+.thread{display:flex;flex-direction:column;gap:2px;padding:8px 0 4px}
+.loadmore{align-self:center;margin:6px 0 12px;padding:7px 18px;border:none;cursor:pointer;
+  font-family:var(--head);font-weight:700;font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted);background:rgba(34,35,29,.06);border-radius:999px;-webkit-tap-highlight-color:transparent}
+.loadmore:active{background:rgba(34,35,29,.12)}
+.mday{text-align:center;margin:14px 0 8px}
+.mday span{font-family:var(--head);font-weight:700;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
+  background:rgba(34,35,29,.05);padding:4px 12px;border-radius:999px}
+.msg{display:flex;flex-direction:column;max-width:82%}
+.msg.mine{align-self:flex-end;align-items:flex-end}
+.msg.theirs{align-self:flex-start;align-items:flex-start}
+.msg.grouped{margin-top:1px}
+.msg:not(.grouped){margin-top:9px}
+.mbwrap{display:flex;align-items:center;gap:6px}
+.msg.mine .mbwrap{flex-direction:row}
+.msg.theirs .mbwrap{flex-direction:row-reverse}
+.mb{padding:9px 14px;border-radius:19px;font-size:15px;line-height:1.35;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
+.msg.mine .mb{background:linear-gradient(180deg,#34A9FF,#0A7AFF);color:#fff;border-bottom-right-radius:19px;box-shadow:0 1px 2px rgba(10,110,255,.3)}
+.msg.theirs .mb{background:#ECEAE4;color:var(--ink)}
+.msg.mine.tail .mb{border-bottom-right-radius:5px}
+.msg.theirs.tail .mb{border-bottom-left-radius:5px}
+.mquote{max-width:100%;font-size:12px;color:var(--muted);padding:3px 12px 5px;margin-bottom:-2px;
+  border-left:2px solid rgba(228,97,31,.4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.msg.mine .mquote{border-left:none;border-right:2px solid rgba(10,132,255,.45);text-align:right}
+.mquote b{color:var(--ink);font-weight:600}
+.mquote.muted{font-style:italic;opacity:.75;border-color:var(--line)}
+.mt{font-size:10px;color:var(--muted);margin:2px 4px 0}
+.mstate{font-family:var(--head);font-weight:700;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:1px 4px 0}
+
+/* reaction chips (displayed under a bubble). The old always-on reply/react/delete
+   icon tools (.mtools/.mreply/.rpick/.rpop/.rp/.rfree) are gone — those actions now
+   live in the press-and-hold menu (see .lpmenu below). */
+.tapbacks{display:flex;gap:4px;flex-wrap:wrap;margin:3px 2px 0}
+.tbf{margin:0}
+.tb{display:inline-flex;align-items:center;gap:3px;min-height:0;width:auto;padding:2px 8px;border-radius:999px;
+  background:#fff;border:1px solid var(--line);font-size:12.5px;color:var(--ink);cursor:pointer;box-shadow:none;text-shadow:none;font-family:var(--body);letter-spacing:0;text-transform:none}
+.tb span{font-family:var(--head);font-weight:700;font-size:11px;color:var(--muted)}
+.tb.mine{background:rgba(10,132,255,.12);border-color:rgba(10,132,255,.4)}
+.mstart{text-align:center;padding:40px 20px 20px}
+.mstartav{width:70px;height:70px;border-radius:50%;overflow:hidden;margin:0 auto 12px;display:grid;place-items:center;
+  font-family:var(--head);font-weight:800;font-size:24px;color:#fff;background:linear-gradient(150deg,#2f7169,#1a453f);border:2px solid rgba(251,179,96,.6)}
+.mstart b{font-family:var(--anton);font-size:22px;color:var(--ink);text-transform:uppercase}
+.mstart p{color:var(--muted);font-size:14px;margin-top:8px}
+
+/* composer (pinned bottom pill) */
+.composer{position:fixed;left:0;right:0;bottom:0;z-index:15;background:rgba(248,245,239,.94);backdrop-filter:blur(10px);
+  border-top:1px solid var(--line);padding:10px 14px calc(10px + env(safe-area-inset-bottom))}
+.composer,.replychip,.crow{max-width:580px;margin-left:auto;margin-right:auto}
+.composer.disabled{text-align:center;color:var(--muted);font-size:13px;padding-top:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom))}
+/* Reply chip: hidden by default via the [hidden] attribute. .replychip sets
+   display:flex, which would OTHERWISE beat the UA [hidden]{display:none} and leak
+   an empty "Replying to" — so re-assert display:none while [hidden] is present. */
+.replychip{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);padding:2px 6px 8px}
+.replychip[hidden]{display:none}
+.replychip b{color:var(--ink)}
+.rcx{width:auto;min-height:0;padding:0 4px;background:none;border:none;box-shadow:none;text-shadow:none;color:var(--muted);font-size:13px;cursor:pointer;margin-left:auto}
+/* iMessage-style row: rounded pill input that flexes, blue circular send fixed at
+   the right. width:100% + min-width:0 on the textarea guarantee the send button
+   is always fully visible with no horizontal overflow at any width. */
+.crow{display:flex;align-items:flex-end;gap:9px;width:100%}
+/* The message box is a plain <textarea>. font-size:16px keeps iOS from zoom-on-focus;
+   max-height + overflow-y:auto make it scroll past ~5 lines instead of growing forever
+   (JS auto-grow sets the height up to this cap). Native placeholder + maxlength. */
+.crow textarea{flex:1 1 auto;min-width:0;min-height:44px;max-height:132px;overflow-y:auto;padding:11px 16px;border:1px solid var(--line);border-radius:22px;resize:none;font-size:16px;line-height:1.3;background:#fff;color:var(--ink)}
+.crow textarea:focus{outline:none;border-color:var(--orange);box-shadow:0 0 0 3px rgba(228,97,31,.15)}
+.csend{flex:0 0 44px;width:44px;height:44px;min-height:44px;padding:0;border-radius:50%;
+  background:linear-gradient(180deg,#34A9FF,#0A7AFF);color:#fff;
+  border:none;font-size:20px;font-weight:800;cursor:pointer;box-shadow:0 4px 12px -4px rgba(10,110,255,.6);display:grid;place-items:center}
+.csend:active{transform:translateY(1px) scale(.96)}
+
+/* ---- Run Chat (group room) — reuses the thread/composer system ---- */
+/* The Chat tab hosts the Run Chat with the pinned composer sitting just above the
+   bottom tab bar (no fixed top bar here): reserve room for both. */
+body.has-chat .wrap{padding-bottom:calc(158px + env(safe-area-inset-bottom))}
+body.has-chat .composer{bottom:calc(58px + env(safe-area-inset-bottom))}
+/* Typing in chat: JS (composerInitJS) sets body.kb-open + drives .composer's inline
+   bottom/left/right from visualViewport so it rests on the keyboard w/o clipping. */
+body.kb-open .tabs{visibility:hidden}
+body.kb-open .composer{padding-bottom:10px}
+body.kb-open .wrap{padding-bottom:calc(100px + var(--kb, 0px))}
+
+/* ---- photo + sticker messages ---- */
+/* Photo bubble: the image IS the bubble (no gradient frame) when there's no caption;
+   with a caption the frame returns and the text sits below the image. .mphoto is
+   capped at ~220px, rounded, lazy; tap opens the lightbox (see below). */
+.mb-img{padding:0;background:none!important;box-shadow:none!important;overflow:hidden;border-radius:18px;max-width:230px}
+.mb-img.mb-cap{padding:4px 4px 2px}
+.msg.mine .mb-img.mb-cap{background:linear-gradient(180deg,#34A9FF,#0A7AFF)!important;box-shadow:0 1px 2px rgba(10,110,255,.3)!important}
+.msg.theirs .mb-img.mb-cap{background:#ECEAE4!important}
+.mphoto{display:block;max-width:220px;width:100%;height:auto;border-radius:16px;object-fit:cover;cursor:zoom-in;background:rgba(34,35,29,.05)}
+.mb-cap .mphoto{border-radius:14px}
+.mcap{padding:6px 10px 4px;font-size:15px;line-height:1.35;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
+/* Video message — native <video> in a rounded frame; capped so a portrait clip can't
+   dominate the thread. Black backdrop while the poster frame loads. */
+.mb-video{padding:0;background:none!important;box-shadow:none!important;overflow:hidden;border-radius:18px;max-width:230px}
+.mvideo{display:block;width:100%;max-width:230px;max-height:340px;height:auto;border-radius:16px;background:#000}
+/* Sticker: floats bubble-less (iMessage-style), larger, aligned mine/theirs. */
+.mb-sticker{padding:0;background:none!important;box-shadow:none!important}
+.msticker{display:block;width:110px;height:110px;object-fit:contain}
+/* Voice message — custom player (play/pause + progress track + m:ss); see voicePlayerScript */
+.mb-voice{display:flex;align-items:center;gap:9px;padding:7px 12px 7px 8px;min-width:168px;max-width:250px}
+.vpp{flex:0 0 30px;width:30px;height:30px;padding:0;border:none;border-radius:50%;display:grid;place-items:center;cursor:pointer;background:rgba(34,35,29,.08);color:var(--ink);-webkit-tap-highlight-color:transparent}
+.msg.mine .vpp{background:rgba(255,255,255,.22);color:#fff}
+.vpp:active{transform:scale(.93)}
+.vpp .ic-play,.vpp .ic-pause{display:inline-flex}
+.vpp .ic-pause{display:none}
+.mb-voice.playing .vpp .ic-play{display:none}
+.mb-voice.playing .vpp .ic-pause{display:inline-flex}
+.vtrack{flex:1 1 auto;height:4px;border-radius:2px;background:rgba(34,35,29,.18);position:relative;cursor:pointer;min-width:80px}
+.msg.mine .vtrack{background:rgba(255,255,255,.35)}
+.vfill{position:absolute;left:0;top:0;bottom:0;width:0;border-radius:2px;background:var(--ink)}
+.msg.mine .vfill{background:#fff}
+.vdur{flex:0 0 auto;font-size:12px;opacity:.8;font-variant-numeric:tabular-nums;min-width:30px;text-align:right}
+.mb-voice .vaudio{display:none}
+.mb-vpending{opacity:.55;font-size:14px}
+/* Composer mic ⇄ send toggle (iMessage): mic when empty, send arrow once you type. */
+.cmic{flex:0 0 44px;width:44px;height:44px;min-height:44px;padding:0;border-radius:50%;display:grid;place-items:center;
+  border:1px solid var(--line);background:none;color:var(--muted);cursor:pointer;touch-action:none;
+  -webkit-tap-highlight-color:transparent;box-shadow:none;text-shadow:none;transition:transform .12s,background .12s}
+.cmic .mi{color:var(--muted)}
+.cmic:active{transform:scale(.92)}
+.voice-composer:not(.has-text) .csend{display:none}
+.voice-composer.has-text .cmic{display:none}
+/* Holding the mic: it goes live (orange), red in the slide-up cancel zone. */
+.composer.vrecording .cmic{background:var(--orange);border-color:var(--orange);color:#fff;transform:scale(1.1)}
+.composer.vrecording .cmic .mi{color:#fff}
+.composer.vrecording.cancelzone .cmic{background:#e5484d;border-color:#e5484d}
+/* Voice recording bar — sits above the composer row while holding (crow stays put). */
+.voicebar{display:flex;align-items:center;gap:10px;width:100%;max-width:580px;margin:0 auto 7px;padding:8px 14px;
+  background:var(--card);border:1px solid var(--line);border-radius:22px}
+.voicebar[hidden]{display:none}
+.composer.cancelzone .voicebar{background:rgba(229,72,77,.1);border-color:#e5484d}
+.vspacer{flex:1 1 auto}
+.vtime{font-variant-numeric:tabular-nums;font-size:15px;color:var(--ink);min-width:44px}
+.vhint{font-size:12.5px;color:var(--muted)}
+.composer.cancelzone .vhint{color:#e5484d}
+.voicebar.tip .vrecdot,.voicebar.tip .vtime{display:none}
+.voicebar.tip .vhint{color:var(--muted)}
+.vrecdot{flex:0 0 auto;width:10px;height:10px;border-radius:50%;background:#e5484d;animation:vpulse 1s ease-in-out infinite}
+.vrecdot[hidden]{display:none}
+@keyframes vpulse{0%,100%{opacity:1}50%{opacity:.25}}
+
+/* Lightbox — full-image overlay opened by tapping a photo */
+.lightbox{position:fixed;inset:0;z-index:130;background:rgba(8,10,8,.9);display:flex;align-items:center;justify-content:center;padding:20px;cursor:zoom-out}
+.lightbox[hidden]{display:none}
+.lightbox img{max-width:100%;max-height:100%;border-radius:10px;object-fit:contain}
+.lbsave{position:fixed;top:calc(env(safe-area-inset-top,0px) + 14px);right:16px;z-index:131;display:inline-flex;align-items:center;gap:6px;
+  padding:9px 14px;border:none;border-radius:20px;background:rgba(255,255,255,.18);color:#fff;font-size:14px;font-weight:600;
+  font-family:var(--body);cursor:pointer;-webkit-tap-highlight-color:transparent;backdrop-filter:blur(6px)}
+.lbsave .mi{color:#fff}
+.lbsave:active{transform:scale(.95)}
+
+/* ---- composer: attach (＋) button, Photo/Sticker menu, sticker tray ---- */
+.cattach{flex:0 0 40px;width:40px;height:40px;min-height:40px;padding:0;border-radius:50%;
+  background:none;border:1px solid var(--line);color:var(--muted);cursor:pointer;display:grid;place-items:center;
+  box-shadow:none;text-shadow:none;-webkit-tap-highlight-color:transparent}
+.cattach:active{transform:scale(.94)}
+.cattach .mi{color:var(--muted)}
+/* small popover menu above the ＋ */
+.attmenu{position:absolute;left:14px;bottom:calc(100% - 6px);z-index:16;background:var(--card);border:1px solid var(--line);
+  border-radius:14px;overflow:hidden;box-shadow:0 18px 40px -12px rgba(20,20,10,.5);min-width:172px}
+.attmenu[hidden]{display:none}
+.attitem{display:flex;align-items:center;gap:12px;width:100%;min-height:0;padding:12px 16px;background:none;border:none;
+  border-bottom:1px solid var(--line-soft);font-family:var(--body);font-size:15.5px;color:var(--ink);text-align:left;cursor:pointer;
+  box-shadow:none;text-shadow:none;letter-spacing:0;text-transform:none}
+.attitem:last-child{border-bottom:none}
+.attitem:hover{background:rgba(34,35,29,.05)}
+.attitem .mi{color:var(--muted)}
+/* sticker tray — a scrollable grid sitting just above the input row */
+.stickertray{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;padding:10px 6px;margin-bottom:6px;
+  max-height:184px;overflow-y:auto;background:rgba(34,35,29,.04);border:1px solid var(--line);border-radius:16px}
+.stickertray[hidden]{display:none}
+.stik{width:100%;aspect-ratio:1/1;min-height:0;padding:6px;border-radius:12px;background:var(--card);border:1px solid var(--line-soft);
+  cursor:pointer;display:grid;place-items:center;box-shadow:none;text-shadow:none;-webkit-tap-highlight-color:transparent}
+.stik:active{transform:scale(.92)}
+.stik img{width:100%;height:100%;object-fit:contain;pointer-events:none}
+/* section header introducing the chat below the roster list */
+.chatsec{margin:20px 0 2px;border-top:1px solid var(--line);padding-top:14px}
+/* on the standalone Chat page the header sits at the very top — no divider/gap */
+.chatsec.chatsec-top{margin:6px 0 2px;border-top:none;padding-top:0}
+.chatsec-h{display:flex;align-items:center;gap:12px;padding:2px}
+.chatsec-h .chav{width:40px;height:40px}
+.chatsec-t{min-width:0}
+.chatsec-t b{display:block;font-family:var(--head);font-weight:800;font-size:14px;text-transform:uppercase;letter-spacing:.015em;color:var(--ink)}
+.chatsec-t span{display:block;font-size:12.5px;color:var(--muted);margin-top:1px}
+/* Tappable header → opens the members overlay. Full-width tap target with a chevron
+   affordance; presses down like the other .lr/.tab controls. */
+.chatsec-tap{width:100%;text-align:left;cursor:pointer;border-radius:14px;padding:6px 8px;transition:background .15s ease}
+.chatsec-tap:hover{background:rgba(34,97,90,.05)}
+.chatsec-tap:active{transform:scale(.99)}
+.chatsec-tap .chatsec-t{flex:1}
+.chatsec-chev{font-size:24px;color:var(--muted);font-weight:700;line-height:1;padding-right:4px;flex:none}
+/* linkified @-mention inside a message body — teal, no underline, subtle tint pill */
+.mention{color:var(--teal);font-weight:600;text-decoration:none;background:rgba(34,97,90,.10);
+  border-radius:5px;padding:0 3px;margin:0 -1px}
+.msg.mine .mention{color:#eaf6ff;background:rgba(255,255,255,.22)}
+.mention:hover{background:rgba(34,97,90,.18)}
+/* @-mention autocomplete dropdown — floats above the composer row (same anchor as
+   the attach menu). Scrolls if the 8 results overflow; each row is a tap target. */
+.mentionbox{position:absolute;left:14px;right:14px;bottom:calc(100% - 6px);z-index:17;max-height:244px;overflow-y:auto;
+  background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 34px -12px rgba(0,0,0,.35);padding:5px}
+.mentionbox[hidden]{display:none}
+.mopt{display:flex;align-items:center;gap:10px;width:100%;padding:8px 9px;border:none;background:none;
+  border-radius:10px;cursor:pointer;text-align:left;font-family:inherit}
+.mopt.on,.mopt:hover{background:rgba(34,97,90,.09)}
+.mopt img,.mopt-av{width:30px;height:30px;border-radius:50%;flex:none;object-fit:cover}
+.mopt-av{display:grid;place-items:center;background:linear-gradient(150deg,#2b6c64,#153a35);color:#fff;
+  font-family:var(--head);font-weight:800;font-size:11px}
+.mopt-n{flex:1;min-width:0;font-family:var(--head);font-weight:600;font-size:13.5px;color:var(--ink);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* sender name label above received bubbles (theirs); no label on sent (mine) */
+.mname{display:inline-flex;align-items:center;gap:6px;margin:0 2px 3px 4px;text-decoration:none;
+  font-family:var(--head);font-weight:700;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.gav{width:20px;height:20px;border-radius:50%;flex:none;overflow:hidden;display:inline-grid;place-items:center;
+  font-family:var(--head);font-weight:800;font-size:8px;color:#fff;background:linear-gradient(150deg,#2f7169,#1a453f);border:1px solid rgba(251,179,96,.5)}
+.gav img{width:100%;height:100%;object-fit:cover}
+.pbav svg,.mgav svg,.chav svg,.mstartav svg{display:block}
+
+/* Run Chat avatar disc — used by the roster chat-section header + empty state */
+.chav{width:44px;height:44px;border-radius:50%;flex:none;overflow:hidden;display:grid;place-items:center;
+  background:linear-gradient(150deg,#2f7169,#1a453f);border:1.5px solid rgba(251,179,96,.5)}
+
+/* ---------- button press feedback (all buttons) + uppercase names ---------- */
+.btn,button,.opsnav a,.score[role=button],.chip{transition:transform .09s ease, filter .09s ease, box-shadow .12s ease}
+.btn:active,button:active,.opsnav a:active,.score[role=button]:active,.chip:active{transform:translateY(1px) scale(.97);filter:brightness(.93)}
+.btn.primary:active{box-shadow:0 6px 14px -8px rgba(218,90,32,.8),inset 0 1px 0 rgba(255,255,255,.35)}
+.nm,.lnm,.pn,.an,.host .who b,.pname b,.hav ~ .who b{text-transform:uppercase;letter-spacing:.015em}
+.nm small{text-transform:none;letter-spacing:0}
+
+/* ================= ANIMATION SYSTEM =================
+   "Clicking anything animates" — action is always instant, the animation only
+   trails it; nothing here gates functionality. transform/opacity/filter only,
+   so it's cheap and never reflows. The global prefers-reduced-motion kill above
+   zeroes every animation/transition; the html.noanim class (set before the 20s
+   auto-reload + during in-place swaps) suppresses ENTRY animations so they don't
+   replay on a refresh. */
+:root{--t-tap:120ms;--t-fast:180ms;--t-move:220ms;--t-spring:340ms;
+  --ez-out:cubic-bezier(.2,.7,.2,1);--ez-spring:cubic-bezier(.34,1.45,.64,1)}
+@keyframes a-rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes a-pop{0%{transform:scale(.55)}70%{transform:scale(1.12)}100%{transform:scale(1)}}
+@keyframes a-pulse{0%,100%{transform:none}35%{transform:scale(1.25)}}
+@keyframes a-send{from{opacity:.4;transform:translateX(12px) scale(.95)}to{opacity:1;transform:none}}
+/* iMessage-style slide-in: mine glides up from the right (springy pop), theirs from the left. */
+@keyframes a-send-r{from{opacity:0;transform:translate(26px,10px) scale(.94)}to{opacity:1;transform:none}}
+@keyframes a-send-l{from{opacity:0;transform:translate(-26px,10px) scale(.94)}to{opacity:1;transform:none}}
+@keyframes a-rulein{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+
+/* entry primitives — gated so a reload/swap (html.noanim) doesn't replay them */
+.ai{animation:a-rise var(--t-move) var(--ez-out) both}
+.ai.d1{animation-delay:40ms}.ai.d2{animation-delay:80ms}.ai.d3{animation-delay:120ms}
+html.noanim .ai,html.noanim .msg-in{animation:none!important}
+
+/* page-load reveal (capped ~3 staggered) — real navigations only */
+html:not(.noanim) .rule{transform-origin:left center;animation:a-rulein var(--t-move) var(--ez-out) both}
+html:not(.noanim) .gymbanner{animation:a-rise var(--t-move) var(--ez-out) both}
+html:not(.noanim) .hero{animation:a-rise var(--t-move) var(--ez-out) 40ms both}
+html:not(.noanim) .mh1,html:not(.noanim) .phead,html:not(.noanim) .bigstat{animation:a-rise var(--t-move) var(--ez-out) 40ms both}
+/* run state pill pops in; hero count pulses on a join/leave swap (always) */
+html:not(.noanim) .spill{animation:a-pop var(--t-spring) var(--ez-spring) both}
+.count .n.pulse-now{animation:a-pulse 320ms var(--ez-out)}
+/* selected position chips pop; notices + reaction popover rise on open */
+html:not(.noanim) .chip:has(:checked){animation:a-pop var(--t-spring) var(--ez-spring) both}
+html:not(.noanim) .notice{animation:a-rise var(--t-fast) var(--ez-out) both}
+/* new message bubbles slide into place (sender + newly-arrived) */
+.msg-in{animation:a-send var(--t-move) var(--ez-out) both}
+.msg.mine.msg-in{animation:a-send-r var(--t-spring) var(--ez-spring) both}
+.msg.theirs.msg-in{animation:a-send-l var(--t-move) var(--ez-out) both}
+
+/* extend the button-press feel to the other tap targets (press = instant) */
+.tab,.ftab,.mrow,.lr[href],.chatcard,.tb,.csend,.wgx,.rcx{
+  transition:transform var(--t-tap) ease,filter var(--t-tap) ease}
+.tab:active,.ftab:active,.mrow:active,.lr[href]:active,.chatcard:active,.tb:active,
+.csend:active,.wgx:active,.rcx:active{transform:scale(.94)}
+/* active tab lifts slightly */
+.tab.on .ic{transition:transform var(--t-fast) var(--ez-out)}
+html:not(.noanim) .tab.on .ic{transform:translateY(-1px)}
+/* optimistic busy state on an intercepted check-in action button */
+.btn.is-busy{opacity:.75;filter:saturate(.85)}
+.btn.is-busy::after{content:"";width:15px;height:15px;margin-left:8px;border-radius:50%;
+  border:2px solid rgba(255,255,255,.5);border-top-color:#fff;animation:btnspin .7s linear infinite}
+
+/* who's-going sheet: scrim fades, sheet slides down on close */
+html:not(.noanim) .wgscrim{animation:a-rise var(--t-fast) ease both}
+@keyframes wgdown{from{transform:none}to{transform:translateY(100%)}}
+.wgsheet.closing{animation:wgdown 200ms var(--ez-out) both}
+.wgwrap .wgsheet{will-change:transform}
+
+/* ================= messaging affordance icons (32px circular tap areas) =================
+   Inline SVGs (see IC_* in views.js) give the cancel-reply / close / send / back
+   controls a real 32×32 grid-centred hit target instead of a raw glyph. */
+.mi{display:block}
+.rcx,.wgx{width:32px;height:32px;min-height:32px;padding:0;
+  display:grid;place-items:center;border-radius:50%;color:var(--muted);background:none;border:none;
+  box-shadow:none;text-shadow:none;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.rcx:hover,.wgx:hover{background:rgba(34,35,29,.06)}
+.rcx{margin-left:auto}
+/* send button keeps its 44px solid disc; just centre the icon + tint it white */
+.csend .mi{color:#fff}
+.pbback{display:inline-grid;place-items:center;width:34px;height:40px}
+.pbback .mi{width:24px;height:24px}
+
+/* ================= press-and-hold message menu (iMessage-style) =================
+   Built at runtime by longPressScript(). A dimmed scrim covers the page; the
+   floating reaction row and Reply/Copy/Delete menu (both position:fixed, placed by
+   JS) sit above it, bracketing the pressed bubble. The row/menu z-index sits above
+   the scrim WITHIN the .lpmenu stacking context. Entry animation is gated by
+   html:not(.noanim) and killed outright by the global reduced-motion rule, so it
+   shows instantly with no scale/spring when motion is reduced. */
+.lpmenu{position:fixed;inset:0;z-index:80}
+.lpmenu[hidden]{display:none}
+/* Dim, do NOT blur: a flat dark translucent layer. The lifted clone reads against
+   it at full brightness (iMessage lifts the pressed bubble, dims everything else). */
+.lpscrim{position:absolute;inset:0;background:rgba(10,12,10,.44)}
+/* Lifted clone of the pressed bubble — a fixed, full-opacity copy of just the .mb,
+   carrying the msg mine/theirs/tail classes so the bubble gradient/tail-radius rules
+   match. JS sizes it to the original bubble rect and places it above the scrim.
+   pointer-events:none so a tap on it falls through to the scrim and dismisses. */
+.lpclone{position:fixed;z-index:2;max-width:none;pointer-events:none}
+.lpclone .mb{margin:0}
+.lpreact,.lpacts{position:fixed;z-index:3}
+.lpreact{display:flex;align-items:center;gap:2px;padding:6px;background:var(--card);border:1px solid var(--line);
+  border-radius:999px;box-shadow:0 14px 34px -12px rgba(20,20,10,.5)}
+.lpr{width:38px;height:38px;min-height:38px;padding:0;border-radius:50%;border:none;background:none;
+  font-size:21px;line-height:1;cursor:pointer;display:grid;place-items:center;box-shadow:none;text-shadow:none;-webkit-tap-highlight-color:transparent}
+.lpr:hover{background:rgba(34,35,29,.06)}
+.lpr.lpmore{font-family:var(--head);font-weight:800;color:var(--muted);font-size:20px}
+.lpfree{display:flex;gap:6px;align-items:center}
+.lpfree input{width:74px;height:34px;min-height:34px;padding:4px 10px;font-size:16px;border-radius:999px;border:1px solid var(--line);background:#fff}
+.lpr.lpadd{width:auto;height:34px;min-height:34px;padding:0 12px;border-radius:999px;font-family:var(--head);font-weight:800;
+  font-size:12px;text-transform:uppercase;color:var(--orange-deep);background:none;border:1px solid var(--line)}
+.lpacts{min-width:184px;max-width:calc(100vw - 16px);background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;
+  box-shadow:0 18px 40px -12px rgba(20,20,10,.5)}
+.lpact{display:flex;align-items:center;justify-content:space-between;gap:14px;width:100%;min-height:0;
+  padding:12px 16px;background:none;border:none;border-bottom:1px solid var(--line-soft);
+  font-family:var(--body);font-size:15.5px;color:var(--ink);text-align:left;cursor:pointer;box-shadow:none;text-shadow:none;letter-spacing:0;text-transform:none}
+.lpact:last-child{border-bottom:none}
+.lpact:hover{background:rgba(34,35,29,.05)}
+.lpact .mi{color:var(--muted)}
+.lpact.danger,.lpact.danger .mi{color:var(--bad)}
+/* stop the long-press from selecting bubble text / firing the iOS callout */
+.msg,.msg *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-user-drag:none;-webkit-tap-highlight-color:transparent}
+/* Springier, slower pop-in than the generic a-rise: the clone scales .96→1 with a
+   gentle spring; the reaction row + menu fade and rise. ~280–300ms. Gated by
+   html:not(.noanim) (so a 20s reload/swap doesn't replay) and killed outright by the
+   global prefers-reduced-motion rule above — under reduce it appears instantly at
+   scale 1 / full opacity with no spring. */
+@keyframes lp-pop{from{transform:scale(.96)}to{transform:scale(1)}}
+@keyframes lp-rise{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
+html:not(.noanim) .lpclone{animation:lp-pop 300ms cubic-bezier(.34,1.3,.55,1) both}
+html:not(.noanim) .lpreact{animation:lp-rise 280ms cubic-bezier(.34,1.3,.55,1) 20ms both}
+html:not(.noanim) .lpacts{animation:lp-rise 300ms cubic-bezier(.34,1.3,.55,1) 40ms both}
+
+/* NO View Transitions. The client router swaps tabs instantly (one synchronous .wrap
+   repaint), which is already fast + clean. The View Transitions API was removed because
+   iOS Safari leaves stuck ::view-transition snapshots — the old masthead ghosting over
+   the new page. Cross-document @view-transition and all ::view-transition rules are gone
+   so a tab switch is a crisp instant swap with zero overlap. */

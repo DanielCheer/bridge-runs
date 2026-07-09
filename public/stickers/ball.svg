@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="Basketball">
+  <circle cx="60" cy="60" r="46" fill="#E4611F"/>
+  <circle cx="60" cy="60" r="46" fill="none" stroke="#C24512" stroke-width="3"/>
+  <g fill="none" stroke="#7a2c0a" stroke-width="3.4" stroke-linecap="round">
+    <path d="M60 14v92"/>
+    <path d="M14 60h92"/>
+    <path d="M27 27c14 12 14 54 0 66"/>
+    <path d="M93 27c-14 12-14 54 0 66"/>
+  </g>
+</svg>

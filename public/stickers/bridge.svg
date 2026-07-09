@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="The Bridge">
+  <circle cx="60" cy="60" r="50" fill="#22615A"/>
+  <circle cx="60" cy="60" r="50" fill="none" stroke="#E4611F" stroke-width="4"/>
+  <circle cx="60" cy="60" r="42" fill="none" stroke="#FBB360" stroke-width="1.5" opacity="0.7"/>
+  <text x="60" y="52" text-anchor="middle" font-family="Arial, sans-serif" font-weight="700" font-size="12" letter-spacing="3" fill="#FBB360">THE</text>
+  <text x="60" y="76" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="22" letter-spacing="1" fill="#F8F5EF">BRIDGE</text>
+  <path d="M34 86h52" stroke="#E4611F" stroke-width="3" stroke-linecap="round"/>
+</svg>

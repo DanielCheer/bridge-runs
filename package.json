@@ -1,0 +1,23 @@
+{
+  "name": "bridge-adv-runs",
+  "version": "1.0.0",
+  "description": "The Bridge Adv Runs - intake form + Friday check-in",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "compression": "^1.8.1",
+    "cookie-parser": "^1.4.6",
+    "express": "^4.19.2",
+    "multer": "^2.2.0",
+    "nodemailer": "^6.9.14",
+    "qrcode": "^1.5.4",
+    "sharp": "^0.35.3",
+    "web-push": "^3.6.7"
+  }
+}
