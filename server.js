@@ -288,9 +288,12 @@ app.use((req, res, next) => {
     res.redirect = (arg1, arg2) => {
       const dest = String(arg2 !== undefined ? arg2 : arg1);
       res.set('Cache-Control', 'no-store');
+      // Defense-in-depth: %-encode "<> in the meta URL and < the JSON string so a
+      // redirect target can never break out of the attribute OR the </script> boundary.
+      const metaDest = dest.replace(/[<>"]/g, c => ({ '<': '%3C', '>': '%3E', '"': '%22' }[c]));
       res.status(200).type('html').send(
-        `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=${dest.replace(/"/g, '%22')}">`
-        + `<script>location.replace(${JSON.stringify(dest)})</script>`);
+        `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=${metaDest}">`
+        + `<script>location.replace(${JSON.stringify(dest).replace(/</g, '\\u003C')})</script>`);
     };
   }
   next();
@@ -918,7 +921,10 @@ function createLoginLink(req, email, next = '/checkin') {
 }
 // Local-path guard for post-login redirects (blocks open-redirects like //evil.com).
 function safeNextPath(next) {
-  return (typeof next === 'string' && next.startsWith('/') && !next.startsWith('//') && !next.includes('\\')) ? next : '/checkin';
+  // Strict path allowlist: must start with a single "/" and contain ONLY URL-path-safe
+  // characters. This blocks protocol-relative (`//evil`), backslash tricks, AND the
+  // `"<>` that would otherwise let a crafted ?next= break out of the client-redirect shim.
+  return (typeof next === 'string' && /^\/(?!\/)[A-Za-z0-9/_\-?=&.%#!:@~+]*$/.test(next)) ? next : '/checkin';
 }
 
 app.get('/login', (req, res) => {

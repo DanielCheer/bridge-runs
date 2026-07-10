@@ -7,7 +7,7 @@
    council / people markup barely changes. */
 
 :root{
-  --bg:#F8F5EF; --card:#FFFFFF; --ink:#20211c; --muted:#8a8474;
+  --bg:#F8F5EF; --card:#FFFFFF; --ink:#20211c; --muted:#6e6857;
   --line:rgba(34,35,29,.12); --line-soft:rgba(34,35,29,.08);
   --teal:#22615A; --hero:linear-gradient(150deg,#2b6c64 0%,#1d4f48 58%,#153a35 100%);
   --chalk:#F6F2E9; --chalk-dim:rgba(240,235,220,.6);
@@ -389,7 +389,7 @@ input,select,textarea{width:100%;background:#fff;color:var(--ink);border:1px sol
 input,textarea,select{font-size:16px}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--orange);box-shadow:0 0 0 3px rgba(228,97,31,.15)}
 textarea{min-height:84px;resize:vertical}
-::placeholder{color:#b3ab98}
+::placeholder{color:#79725f}
 .check{display:flex;gap:12px;align-items:flex-start;margin-top:18px}
 .check input{width:22px;height:22px;min-height:22px;margin-top:1px;flex:0 0 auto;accent-color:var(--orange)}
 .check label{margin:0;text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink);font-weight:400;line-height:1.5;font-family:var(--body)}

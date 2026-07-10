@@ -296,6 +296,19 @@ if(!window.__logoutBound){window.__logoutBound=1;
     if(!confirm("Sign out? You'll need the 6-digit code we email you to sign back in — you don't normally need to sign out.")) return;
     var f=document.createElement('form'); f.method='POST'; f.action='/logout'; document.body.appendChild(f); f.submit();
   });
+}
+// Global Escape → close whichever full-screen overlay/sheet is open (who's-going, run
+// members, announcements). a11y: these sheets are role=dialog; Esc + focus-restore are
+// handled by their close fns. Bound once (survives router swaps).
+if(!window.__ovEscBound){window.__ovEscBound=1;
+  document.addEventListener('keydown',function(e){
+    if(e.key!=='Escape')return;
+    var w=document.querySelector('.wgwrap.open'); if(!w)return;
+    var id=w.id;
+    if(id==='wgwrap'&&window.wgClose)window.wgClose();
+    else if(id==='memwrap'&&window.memClose)window.memClose();
+    else if(id==='annwrap'&&window.annClose)window.annClose();
+  });
 }`;
 // Tiny inline HEAD bootstrap: sets the build version (the ONLY server-interpolated value)
 // and the pre-paint no-animation flag BEFORE the engine loads, then pulls the cached engine
@@ -612,7 +625,7 @@ function annBell(ann) {
   const sheet = `
     <div id="annwrap" class="wgwrap">
       <div class="wgscrim" onclick="annClose()"></div>
-      <div class="wgsheet">
+      <div class="wgsheet" role="dialog" aria-modal="true" aria-label="Announcements">
         <div class="wgsheet-h"><b>Announcements</b><button class="wgx" type="button" onclick="annClose()" aria-label="Close">${IC_CLOSE}</button></div>
         <div class="wgsheet-b">${rows}</div>
       </div>
@@ -1735,9 +1748,9 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
           <div class="annbanner-t">${esc(announcement.body)}</div>
           <div class="annbanner-m">${announcement.authorName ? esc(announcement.authorName) + ' · ' : ''}${esc(fmtWhen(announcement.at))}</div>
         </div>
-        <button class="annbanner-x" type="button" aria-label="Dismiss" onclick="(function(){try{localStorage.setItem('annDismissed','${announcement.id}');}catch(e){}var b=document.getElementById('annbanner');if(b)b.parentNode.removeChild(b);})()">${IC_CLOSE}</button>
+        <button class="annbanner-x" type="button" aria-label="Dismiss" onclick="(function(){try{localStorage.setItem('annDismissed','${Number(announcement.id)}');}catch(e){}var b=document.getElementById('annbanner');if(b)b.parentNode.removeChild(b);})()">${IC_CLOSE}</button>
       </div>
-      <script>(function(){try{if(localStorage.getItem('annDismissed')==='${announcement.id}'){var b=document.getElementById('annbanner');if(b)b.parentNode.removeChild(b);}}catch(e){}})();</script>`
+      <script>(function(){try{if(localStorage.getItem('annDismissed')==='${Number(announcement.id)}'){var b=document.getElementById('annbanner');if(b)b.parentNode.removeChild(b);}}catch(e){}})();</script>`
     : '';
 
   // ----- info section: meet-your-host + game format (approved players only) -----
@@ -1822,7 +1835,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
   const wgSheet = canSeeRoster ? `
     <div id="wgwrap" class="wgwrap">
       <div class="wgscrim" onclick="wgClose()"></div>
-      <div class="wgsheet">
+      <div class="wgsheet" role="dialog" aria-modal="true" aria-label="Who's going">
         <div class="wgsheet-h"><b>On the floor · ${going} / ${cap}</b><button class="wgx" type="button" onclick="wgClose()" aria-label="Close">${IC_CLOSE}</button></div>
         <div class="wgsheet-b">
           ${inPlayers.length ? inPlayers.map((p, i) => wgRow(p, i + 1)).join('') : '<div class="subh">Nobody yet — be the first in.</div>'}
@@ -1887,11 +1900,12 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
     <script>
       // Who's-going overlay. Open is instant; close plays a slide-down (unless
       // reduced-motion / noanim) with the state flip only at the end.
-      window.wgOpen=function(){var w=document.getElementById('wgwrap');if(w){w.classList.add('open');document.body.style.overflow='hidden';}};
+      window.wgOpen=function(){var w=document.getElementById('wgwrap');if(w){window.__ovPrev=document.activeElement;w.classList.add('open');document.body.style.overflow='hidden';var sh=w.querySelector('.wgsheet');if(sh){sh.setAttribute('tabindex','-1');try{sh.focus();}catch(e){}}}};
       window.wgClose=function(){var w=document.getElementById('wgwrap');if(!w)return;var sh=w.querySelector('.wgsheet');
         var still=document.documentElement.classList.contains('noanim')||(window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches);
-        if(sh&&!still){sh.classList.add('closing');setTimeout(function(){w.classList.remove('open');sh.classList.remove('closing');document.body.style.overflow='';},200);}
-        else{w.classList.remove('open');document.body.style.overflow='';}};
+        function restore(){var p=window.__ovPrev;if(p&&p.focus)try{p.focus();}catch(e){}}
+        if(sh&&!still){sh.classList.add('closing');setTimeout(function(){w.classList.remove('open');sh.classList.remove('closing');document.body.style.overflow='';restore();},200);}
+        else{w.classList.remove('open');document.body.style.overflow='';restore();}};
 
       // (.wrap swap engine — window.__swapWrap — now lives once in ANIM_HEAD, shared
       // by these check-in action fetches and the client tab router.)
@@ -2038,7 +2052,7 @@ export function chatPage({ me, chat, runDate = '', hours = '7–10 PM', dmUnread
   const membersSheet = `
     <div id="memwrap" class="wgwrap">
       <div class="wgscrim" onclick="memClose()"></div>
-      <div class="wgsheet">
+      <div class="wgsheet" role="dialog" aria-modal="true" aria-label="Run members">
         <div class="wgsheet-h"><b>Run members · ${members.length}</b><button class="wgx" type="button" onclick="memClose()" aria-label="Close">${IC_CLOSE}</button></div>
         <div class="wgsheet-b">
           ${members.length ? members.map(memRow).join('') : '<div class="subh">No members yet.</div>'}
@@ -2059,11 +2073,12 @@ export function chatPage({ me, chat, runDate = '', hours = '7–10 PM', dmUnread
     <script>
       // Members bottom-sheet. Open is instant; close plays a slide-down (unless
       // reduced-motion / noanim). Mirrors the who's-going overlay wgOpen/wgClose.
-      window.memOpen=function(){var w=document.getElementById('memwrap');if(w){w.classList.add('open');document.body.style.overflow='hidden';}};
+      window.memOpen=function(){var w=document.getElementById('memwrap');if(w){window.__ovPrev=document.activeElement;w.classList.add('open');document.body.style.overflow='hidden';var sh=w.querySelector('.wgsheet');if(sh){sh.setAttribute('tabindex','-1');try{sh.focus();}catch(e){}}}};
       window.memClose=function(){var w=document.getElementById('memwrap');if(!w)return;var sh=w.querySelector('.wgsheet');
         var still=document.documentElement.classList.contains('noanim')||(window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches);
-        if(sh&&!still){sh.classList.add('closing');setTimeout(function(){w.classList.remove('open');sh.classList.remove('closing');document.body.style.overflow='';},200);}
-        else{w.classList.remove('open');document.body.style.overflow='';}};
+        function restore(){var p=window.__ovPrev;if(p&&p.focus)try{p.focus();}catch(e){}}
+        if(sh&&!still){sh.classList.add('closing');setTimeout(function(){w.classList.remove('open');sh.classList.remove('closing');document.body.style.overflow='';restore();},200);}
+        else{w.classList.remove('open');document.body.style.overflow='';restore();}};
     </script>
   ` + footWithTabs(tabNav('chat', { dm: dmUnread, group: groupUnread, groupMention }));
 }
@@ -3252,7 +3267,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
             <input readonly value="${esc(iv.link)}" style="font-size:16px" onclick="this.select()">
             <div style="height:6px"></div>
             <div style="display:flex;gap:8px;flex-wrap:wrap">
-              <button class="btn ghost sm" type="button" onclick="navigator.clipboard.writeText('${esc(iv.link)}');this.textContent='Copied ✓';setTimeout(()=>this.textContent='Copy link',1500)">Copy link</button>
+              <button class="btn ghost sm" type="button" onclick="var i=this.closest('li').querySelector('input[readonly]');if(i){i.select();try{navigator.clipboard.writeText(i.value);}catch(e){}}this.textContent='Copied ✓';setTimeout(()=>this.textContent='Copy link',1500)">Copy link</button>
               <form method="POST" action="/admin/people/invite/revoke" onsubmit="return confirm('Revoke this invite link? It will stop working.');" style="margin:0">
                 <input type="hidden" name="token" value="${esc(iv.token)}">
                 <button class="btn leave sm" type="submit">Revoke</button>
