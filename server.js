@@ -2432,7 +2432,7 @@ app.post('/admin/banner', requireApprover, (req, res) => {
       width = Math.max(1, Math.min(width, W - left)); height = Math.max(1, Math.min(height, H - top));
       const out = await sharp(file.buffer, { failOn: 'error' }).rotate()
         .extract({ left, top, width, height })
-        .resize(2320, 774, { fit: 'fill' })
+        .resize(2320, 1160, { fit: 'fill' }) // 2:1 banner — matches .gymbanner/.cropframe CSS
         .jpeg({ quality: 84, mozjpeg: true }).toBuffer();
       fs.writeFileSync(BANNER_PATH, out);
       audit(req.userEmail, req.actorRole, 'banner:update', `${width}x${height}`);
