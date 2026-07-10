@@ -135,6 +135,12 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_checkins_claim ON checkins(claim_token)'
 if (!ckCols.includes('confirmed_at')) {
   db.exec('ALTER TABLE checkins ADD COLUMN confirmed_at TEXT');
 }
+// Run cancellation (2026-07): a host can CANCEL a specific week's run. Per-run_date (so
+// cancelling this week never touches next week), additive + guarded. 1 = cancelled.
+const rsCols = db.prepare('PRAGMA table_info(run_state)').all().map(c => c.name);
+if (!rsCols.includes('cancelled')) {
+  db.exec('ALTER TABLE run_state ADD COLUMN cancelled INTEGER NOT NULL DEFAULT 0');
+}
 // auto_renew: team members default to a guaranteed weekly spot; can turn it off
 if (!appCols.includes('auto_renew')) {
   db.exec('ALTER TABLE applicants ADD COLUMN auto_renew INTEGER NOT NULL DEFAULT 1');

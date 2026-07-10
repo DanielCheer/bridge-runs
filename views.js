@@ -1602,7 +1602,7 @@ const COURT_SVG = `<svg class="court" viewBox="0 0 200 200" fill="none" aria-hid
 
 export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 PM', startLabel = '7 PM', tipoff = 0, cap, waitlistCap, going, waiting, full, runFull, isOpen, canSeeCount, regularSlotsFull,
                              myState, myWaitPos, myOffer = null, offerWindowHours = 3, iAmTeam, iAmRegular, iOptedOut, iAutoRenew,
-                             viewerIsAdmin, canOperate, canSeeRoster, suspended = false, suspendReason = '', myConfirmed = false, msg = '', bannerVer = '4', announcement = null, announcementLog = [], inPlayers, offeredPlayers = [], waitPlayers, host = null, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+                             viewerIsAdmin, canOperate, canSeeRoster, suspended = false, suspendReason = '', myConfirmed = false, msg = '', bannerVer = '4', cancelled = false, announcement = null, announcementLog = [], inPlayers, offeredPlayers = [], waitPlayers, host = null, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
 
   // Not cleared to play yet (admins always get through — they run the check-in)
   if (!viewerIsAdmin && status !== 'approved') {
@@ -1627,7 +1627,10 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
   // ----- my own action button (nine branches, unchanged POSTs) -----
   const canPlay = status === 'approved';
   let action = '';
-  if (suspended) {
+  if (cancelled) {
+    // Run cancelled → no check-in for anyone; the banner below explains (server blocks the POST too).
+    action = `<button class="btn" type="button" disabled>Run cancelled</button>`;
+  } else if (suspended) {
     // Suspended → no join CTA at all; a notice below explains why (server also blocks the POST).
     action = `<button class="btn" type="button" disabled>Check-in paused</button>`;
   } else if (!canPlay) {
@@ -1811,7 +1814,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
       <div class="wood"></div>
       ${COURT_SVG}
       <div class="htop">
-        <span class="spill${isOpen ? '' : ' closed'}">● Run ${isOpen ? 'Open' : 'Closed'}</span>
+        <span class="spill${(cancelled || !isOpen) ? ' closed' : ''}">● Run ${cancelled ? 'Cancelled' : (isOpen ? 'Open' : 'Closed')}</span>
         ${chatBtn}
       </div>
       ${scoreBlock}
@@ -1884,6 +1887,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
     </div>
     ${hero}
     ${annBanner}
+    ${cancelled ? `<div class="notice bad" style="margin-top:12px"><b>🚫 This week's run is cancelled.</b> No run ${esc(wdayFull(runDate))}, ${esc(runLabel)} — check-in is off. Watch for an announcement about the next one.</div>` : ''}
     ${msg ? `<div class="notice good" style="margin-top:12px">${esc(msg)}</div>` : ''}
     ${suspended ? `<div class="notice bad" style="margin-top:12px"><b>⊘ Your check-in is paused.</b>${suspendReason ? ' ' + esc(suspendReason) : ''} Reach out to the host if you think this is a mistake.</div>` : ''}
     ${mine}
@@ -2186,6 +2190,12 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
         <input type="hidden" name="email_everyone" value="1">
         <button class="btn ghost sm" type="submit">Reset to Friday 7–10 PM (${esc(runDay.defaultLabel)})</button>
       </form>` : ''}
+      <div class="rule" style="margin:14px 0 12px"></div>
+      ${runDay.cancelled
+        ? `<div class="notice bad" style="margin:0 0 10px"><b>🚫 This run is cancelled.</b> Players see it on the check-in page and were notified. Restore it to run check-in again.</div>
+           <form method="POST" action="/admin/run/cancel" style="margin:0"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Restore this run</button></form>`
+        : `<p class="tally-note" style="margin:0 0 8px">Something come up? Cancel this week's run — players get a "run cancelled" notification and check-in is blocked. (Only this week; next week is unaffected.)</p>
+           <form method="POST" action="/admin/run/cancel" style="margin:0" onsubmit="return confirm('Cancel this week\\'s run? Everyone will be notified it\\'s off.');"><input type="hidden" name="on" value="1"><button class="btn leave sm" type="submit">🚫 Cancel this week's run</button></form>`}
     </details>` : '';
   // Host-only: the DM inbox (players who messaged the host) lives on the host's own
   // profile tab now — there is no Messages tab. Players never see an inbox here.

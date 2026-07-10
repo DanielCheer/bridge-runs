@@ -1265,6 +1265,18 @@ function setRunOpen(runDate, open) {
               ON CONFLICT(run_date) DO UPDATE SET is_open = excluded.is_open`)
     .run(runDate, open ? 1 : 0);
 }
+// Run cancellation (per run_date). Cancelling closes the run too — a cancelled run can't
+// be open for check-in. Un-cancelling leaves it CLOSED (the host re-opens deliberately).
+const stmtRunCancelled = db.prepare('SELECT cancelled FROM run_state WHERE run_date = ?');
+function runIsCancelled(runDate) {
+  const row = stmtRunCancelled.get(runDate);
+  return !!(row && row.cancelled);
+}
+function setRunCancelled(runDate, cancelled) {
+  db.prepare(`INSERT INTO run_state (run_date, is_open, cancelled) VALUES (?, 0, ?)
+              ON CONFLICT(run_date) DO UPDATE SET cancelled = excluded.cancelled, is_open = CASE WHEN excluded.cancelled = 1 THEN 0 ELSE is_open END`)
+    .run(runDate, cancelled ? 1 : 0);
+}
 
 // Prepared once at startup (hot path), not per request.
 const stmtRun = db.prepare(`
@@ -1549,6 +1561,7 @@ app.get('/checkin', requireLogin, (req, res) => {
     viewerIsAdmin, canOperate, canSeeRoster,
     suspended: !!(a && a.suspended), suspendReason: (a && a.suspend_reason) || '',
     myConfirmed, msg: req.query.msg || '', bannerVer: bannerVersion(),
+    cancelled: runIsCancelled(runDate),
     announcement: latestAnnouncement(),
     // roster goes to anyone who can see it; controls only to operators
     inPlayers: canSeeRoster ? inPlayers : [],
@@ -1651,6 +1664,7 @@ app.get('/profile', requireLogin, (req, res) => {
     defaultLabel: runLabelFor(rdBase),
     today: ymdLocal(),
     maxDate: shiftYmd(ymdLocal(), 30),
+    cancelled: runIsCancelled(rdRunDate),
   } : null;
   const rdMsg = req.query.rdset ? 'set' : (req.query.rderr || '');
   // Photo upload/remove outcome → view notice. ok/removed = success; err:<code> maps
@@ -2204,6 +2218,7 @@ app.post('/checkin/join', requireLogin, (req, res) => {
   if (!a || a.status !== 'approved') return res.redirect('/checkin');
   if (a.suspended) return res.redirect('/checkin'); // suspended → can't check in (page shows why)
   const runDate = nextRunDate();
+  if (runIsCancelled(runDate)) return res.redirect('/checkin'); // run cancelled → no check-in (page shows why)
   // Pre-access: regulars and team can join while the run is still closed.
   const hasPreAccess = !!(a.is_regular || a.is_team);
   const runOpen = runIsOpen(runDate);
@@ -2365,6 +2380,7 @@ function autoJoinTeam(runDate) {
 
 app.post('/checkin/open', requireApprover, (req, res) => {
   const runDate = nextRunDate();
+  if (runIsCancelled(runDate)) return res.redirect('/checkin'); // must un-cancel before opening
   setRunOpen(runDate, true);
   autoJoinTeam(runDate); // team is dropped onto the floor the moment you open
   audit(req.userEmail, req.actorRole, 'run:open', runDate);
@@ -2375,6 +2391,31 @@ app.post('/checkin/close', requireApprover, (req, res) => {
   setRunOpen(runDate, false);
   audit(req.userEmail, req.actorRole, 'run:close', runDate);
   res.redirect('/checkin');
+});
+
+// Cancel / un-cancel THIS week's run (host or admin). Cancelling closes it (setRunCancelled)
+// and pushes a game-day "run cancelled" notice to players; un-cancelling leaves it closed for
+// the host to re-open deliberately. Per run_date, so next week is unaffected. No-op guarded.
+app.post('/admin/run/cancel', requireLogin, (req, res) => {
+  const email = req.userEmail;
+  const a = applicantByEmail(email);
+  const admin = isAdmin(email);
+  const host = !!(a && a.is_host);
+  if (!admin && !host) return res.status(403).send('Only the host or an admin can cancel the run.');
+  const runDate = nextRunDate();
+  const cancel = req.body.on === '1';
+  if (cancel === runIsCancelled(runDate)) return res.redirect('/profile'); // no state change → no push spam
+  setRunCancelled(runDate, cancel);
+  audit(email, admin ? 'admin' : 'host', cancel ? 'run:cancel' : 'run:uncancel', runDate);
+  if (cancel) {
+    // Game-day notification: push only (no email storm) — the check-in banner carries it in-app.
+    setImmediate(() => sendPush(approvedEmails(), {
+      title: 'Run cancelled',
+      body: `This week's run — ${runWeekday(runDate)}, ${runLabelFor(runDate)} — is cancelled. No run this week.`,
+      url: '/checkin', tag: 'announce',
+    }));
+  }
+  res.redirect('/profile?rdset=1');
 });
 
 // Run-day CONFIRM/RELEASE ping (host). Pushes every real floor player who hasn't yet
@@ -2964,7 +3005,7 @@ function autoRunState() {
   // Auto-OPEN at Wednesday 5 PM (once), only before the close time.
   if (now >= openAt && getSetting('autoopen_done') !== rd) {
     setSetting('autoopen_done', rd);
-    if (!runIsOpen(rd)) {
+    if (!runIsOpen(rd) && !runIsCancelled(rd)) { // never auto-open a cancelled run
       setRunOpen(rd, true); audit('system', 'system', 'run:autoopen', rd);
       const body = `Check-in is open for ${runWeekday(rd)}, ${runLabelFor(rd)} (${runTimeRange(rd)}) — grab your spot 🏀`;
       setImmediate(() => {
