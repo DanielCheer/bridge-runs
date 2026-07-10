@@ -8,3 +8,4 @@ backups/
 # user-generated content (PII: uploaded photos, voice, video, avatars) — never commit
 public/chat-media/
 public/avatars/
+_predesign_backup/

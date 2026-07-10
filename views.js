@@ -477,8 +477,6 @@ const roleWord = (p) => p.host ? 'Host' : p.team ? 'Team' : p.regular ? 'Core' :
 // opsNav at the top instead.
 const ICON = {
   checkin: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="#8a8474" stroke-width="2"><path d="M3 11l9-7 9 7"/><path d="M5 10v9h14v-9"/></svg>',
-  roster: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="#8a8474" stroke-width="2"><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg>',
-  messages: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="#8a8474" stroke-width="2"><path d="M4 5h16v11H8l-4 4z" stroke-linejoin="round"/></svg>',
   chat: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="#8a8474" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4z"/><path d="M8.5 10.5h.01M12 10.5h.01M15.5 10.5h.01"/></svg>',
   profile: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="#8a8474" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>',
 };
@@ -488,7 +486,6 @@ const ICON = {
 // crisp icons inside 32px circular tap areas (see .mi CSS).
 const mi = (inner, sz = 17) => `<svg class="mi" viewBox="0 0 24 24" width="${sz}" height="${sz}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
 const IC_REPLY = mi('<path d="M9 17l-5-5 5-5"/><path d="M4 12h11a4 4 0 0 1 4 4v2"/>');
-const IC_REACT = mi('<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5s1.2 1.7 3.5 1.7 3.5-1.7 3.5-1.7"/><path d="M9 9.5h.01M15 9.5h.01"/>');
 const IC_TRASH = mi('<path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M6.5 7l1 12.5h9L17.5 7"/>');
 const IC_PIN = mi('<path d="M12 17v5"/><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6z"/>');
 const IC_SEND = mi('<path d="M12 19V5"/><path d="M6 11l6-6 6 6"/>', 20);
@@ -1650,8 +1647,8 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
   // spot via the normal Sit-out. Independent of `action` so it rides alongside it.
   const confirmCta = (myState === 'in' && !suspended)
     ? (myConfirmed
-        ? `<div class="notice good" style="margin-top:10px">✓ Confirmed for tonight. Can't make it? Sit out to free your spot for the waitlist.</div>`
-        : `<form method="POST" action="/checkin/confirm" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming tonight</button></form>`)
+        ? `<div class="notice good" style="margin-top:10px">✓ Confirmed. Can't make it? Sit out to free your spot for the waitlist.</div>`
+        : `<form method="POST" action="/checkin/confirm" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming</button></form>`)
     : '';
   // Host: ping every unconfirmed floor player to confirm or release (run-day nudge).
   const confirmPing = canOperate
@@ -1730,7 +1727,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
         <span class="annbanner-i" aria-hidden="true">📣</span>
         <div class="annbanner-b">
           <div class="annbanner-t">${esc(announcement.body)}</div>
-          <div class="annbanner-m">${announcement.author ? esc(announcement.author) + ' · ' : ''}${esc(fmtWhen(announcement.at))}</div>
+          <div class="annbanner-m">${announcement.authorName ? esc(announcement.authorName) + ' · ' : ''}${esc(fmtWhen(announcement.at))}</div>
         </div>
         <button class="annbanner-x" type="button" aria-label="Dismiss" onclick="(function(){try{localStorage.setItem('annDismissed','${announcement.id}');}catch(e){}var b=document.getElementById('annbanner');if(b)b.parentNode.removeChild(b);})()">${IC_CLOSE}</button>
       </div>
@@ -1764,7 +1761,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
     </div>
     ${canSeeRoster ? '<div class="seeall"><div class="chev">›</div><span>Who\'s going</span></div>' : ''}`;
   const scoreBlock = canSeeRoster
-    ? `<div class="score" role="button" tabindex="0" onclick="wgOpen()">${scoreInner}</div>`
+    ? `<div class="score" role="button" tabindex="0" onclick="wgOpen()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();wgOpen()}">${scoreInner}</div>`
     : `<div class="score">${scoreInner}</div>`;
   // ----- hero "Group chat" button (beside the Run pill; links to the Chat tab
   //       where the Run Chat lives). Small unread dot when group unread > 0. -----
@@ -1811,7 +1808,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
   // the check-in fetch-swap interceptor only catches `.controls form`, not these.
   const wgRemoveForm = (p) => `<form method="POST" action="/checkin/remove" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn leave sm" type="submit" title="Remove">Remove</button></form>`;
   const wgBumpForm = (p) => `<form method="POST" action="/checkin/promote" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn sm" type="submit" title="Move into the run">Bump in</button></form>`;
-  const wgRow = (p, n) => `<div class="lr"><span class="ln">${n}</span><span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''}${p.confirmed_at ? ' <span class="tag reg" title="Confirmed for tonight">✓</span>' : ''}</span>${roleBadge(p)}${canOperate ? wgRemoveForm(p) : ''}</div>`;
+  const wgRow = (p, n) => `<div class="lr"><span class="ln">${n}</span><span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''}${p.confirmed_at ? ' <span class="tag reg" title="Confirmed">✓</span>' : ''}</span>${roleBadge(p)}${canOperate ? wgRemoveForm(p) : ''}</div>`;
   // Held offer row — the spot is taken (counts toward the floor) but the person hasn't
   // confirmed yet, so it's shown as "claiming" rather than as a settled floor player.
   const wgOfferRow = (p) => `<div class="lr"><span class="ln">·</span><span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''} <span class="tag">⏳ Claiming</span></span>${canOperate ? wgRemoveForm(p) : ''}</div>`;
@@ -2045,7 +2042,7 @@ export function chatPage({ me, chat, runDate = '', hours = '7–10 PM', dmUnread
   return HEAD('Run Chat — Adv Runs', 'has-chat') + header('', wdayShort(runDate), ann, hours) + WELCOME_MODAL + `
     <div class="rule"></div>
     <div class="chatsec chatsec-top">
-      <div class="chatsec-h chatsec-tap" role="button" tabindex="0" onclick="memOpen()" aria-label="View run members">
+      <div class="chatsec-h chatsec-tap" role="button" tabindex="0" onclick="memOpen()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();memOpen()}" aria-label="View run members">
         <span class="chav">${GROUP_ICON}</span>
         <div class="chatsec-t"><b>Run Chat</b><span>${chat.memberCount} member${chat.memberCount === 1 ? '' : 's'} · talk to the whole run</span></div>
         <span class="chatsec-chev" aria-hidden="true">›</span>

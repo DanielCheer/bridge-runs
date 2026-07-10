@@ -225,12 +225,6 @@ a.score{cursor:pointer}
 /* ---------- full-roster sheet (roster page) ---------- */
 .sheet{background:var(--card);border:1px solid var(--line);border-radius:22px;overflow:hidden;margin:0 0 14px;
   box-shadow:0 18px 44px -24px rgba(21,25,18,.4)}
-.sheet-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--line-soft)}
-.sheet-head h3{font-family:var(--anton);font-size:20px;color:var(--ink);letter-spacing:.01em;margin:0}
-.sheet-head h3 em{font-style:normal;background:var(--foil);-webkit-background-clip:text;background-clip:text;color:transparent}
-.sheet-head .x{width:32px;height:32px;border-radius:50%;background:rgba(34,35,29,.06);display:grid;place-items:center;
-  color:var(--muted);font-size:16px;font-weight:700;text-decoration:none}
-.sheet-body{padding:6px 14px 14px;display:flex;flex-direction:column;gap:1px}
 .subh{font-family:var(--head);font-weight:700;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);padding:12px 8px 5px}
 .lr{display:flex;align-items:center;gap:11px;padding:8px;text-decoration:none;color:inherit;flex-wrap:wrap}
 .lr + .lr{border-top:1px solid rgba(34,35,29,.06)}
@@ -457,14 +451,6 @@ html:not(.noanim) .annbanner{animation:a-rise var(--t-fast) var(--ez-out) both}
 .runstate.closed .dot{background:var(--bad);box-shadow:0 0 0 4px rgba(188,72,55,.14)}
 
 /* ---------- operator player list ---------- */
-.plist{list-style:none;padding:0;margin:8px 0 0}
-.plist li{display:flex;align-items:center;gap:10px;padding:11px 2px;border-bottom:1px solid var(--line);flex-wrap:wrap}
-.plist .num{font-family:var(--anton);font-weight:400;color:var(--orange-deep);width:24px;text-align:right;font-size:15px}
-.plist .pn{flex:1;font-family:var(--head);font-weight:600;color:var(--ink);min-width:100px}
-.plist .me{color:var(--orange-deep);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;font-weight:800}
-.plist-admin li{flex-wrap:wrap;gap:8px}
-.plist-admin .pn{min-width:110px}
-.plist-admin form{margin:0}
 
 /* ---------- admin rows ---------- */
 .arow{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px;margin:12px 0;
@@ -494,9 +480,6 @@ textarea#phones{width:100%;background:#fff;border:1px solid var(--line);border-r
 
 /* ---------- announcements ---------- */
 .announce{background:#FCF7F1;border:1px solid rgba(228,97,31,.28);border-left:3px solid var(--orange);border-radius:14px;padding:16px 18px;margin:16px 0}
-.announce-h{font-family:var(--head);font-weight:800;font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--orange-deep);margin-bottom:8px}
-.announce-b{font-family:var(--head);font-weight:600;font-size:15px;line-height:1.5;color:var(--ink);white-space:pre-wrap}
-.announce-meta{font-size:11.5px;color:var(--muted);margin-top:10px;letter-spacing:.02em}
 .announce-compose{margin:14px 0;font-size:13.5px}
 .announce-compose summary{cursor:pointer;color:var(--orange-deep);font-weight:700;font-family:var(--head);padding:8px 0;-webkit-tap-highlight-color:transparent}
 .announce-compose summary:hover{color:var(--orange-dark)}
@@ -545,8 +528,6 @@ textarea#phones{width:100%;background:#fff;border:1px solid var(--line);border-r
 .qrbox-sm{max-width:168px}
 
 /* ---------- closed badge (legacy) ---------- */
-.closedbadge{font-family:var(--head);font-size:10px;letter-spacing:.14em;text-transform:uppercase;font-weight:800;color:var(--bad);
-  border:1px solid rgba(188,72,55,.5);border-radius:999px;padding:3px 10px;vertical-align:3px;margin-left:8px;background:rgba(188,72,55,.1)}
 
 /* ---------- footer ---------- */
 .foot{font-family:var(--head);font-weight:700;font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--muted);
@@ -620,7 +601,6 @@ textarea#phones{width:100%;background:#fff;border:1px solid var(--line);border-r
 .tabbadge.mention{background:var(--teal);box-shadow:0 1px 5px rgba(34,97,90,.5)}
 
 /* ---- inbox ---- */
-.mh1{font-family:var(--anton);font-size:30px;margin:2px 0 12px}
 /* Tighter divider above the profile-tab inbox header (scoped so other .subhead uses
    keep their roomier spacing). */
 #dminbox .subhead{margin-top:8px;padding-top:10px}
@@ -938,7 +918,7 @@ body.kb-open .wrap{padding-bottom:calc(100px + var(--kb, 0px))}
 .gav{width:20px;height:20px;border-radius:50%;flex:none;overflow:hidden;display:inline-grid;place-items:center;
   font-family:var(--head);font-weight:800;font-size:8px;color:#fff;background:linear-gradient(150deg,#2f7169,#1a453f);border:1px solid rgba(251,179,96,.5)}
 .gav img{width:100%;height:100%;object-fit:cover}
-.pbav svg,.mgav svg,.chav svg,.mstartav svg{display:block}
+.pbav svg,.chav svg,.mstartav svg{display:block}
 
 /* Run Chat avatar disc — used by the roster chat-section header + empty state */
 .chav{width:44px;height:44px;border-radius:50%;flex:none;overflow:hidden;display:grid;place-items:center;
@@ -978,7 +958,7 @@ html.noanim .ai,html.noanim .msg-in{animation:none!important}
 html:not(.noanim) .rule{transform-origin:left center;animation:a-rulein var(--t-move) var(--ez-out) both}
 html:not(.noanim) .gymbanner{animation:a-rise var(--t-move) var(--ez-out) both}
 html:not(.noanim) .hero{animation:a-rise var(--t-move) var(--ez-out) 40ms both}
-html:not(.noanim) .mh1,html:not(.noanim) .phead,html:not(.noanim) .bigstat{animation:a-rise var(--t-move) var(--ez-out) 40ms both}
+html:not(.noanim) .phead,html:not(.noanim) .bigstat{animation:a-rise var(--t-move) var(--ez-out) 40ms both}
 /* run state pill pops in; hero count pulses on a join/leave swap (always) */
 html:not(.noanim) .spill{animation:a-pop var(--t-spring) var(--ez-spring) both}
 .count .n.pulse-now{animation:a-pulse 320ms var(--ez-out)}
@@ -991,9 +971,9 @@ html:not(.noanim) .notice{animation:a-rise var(--t-fast) var(--ez-out) both}
 .msg.theirs.msg-in{animation:a-send-l var(--t-move) var(--ez-out) both}
 
 /* extend the button-press feel to the other tap targets (press = instant) */
-.tab,.ftab,.mrow,.lr[href],.chatcard,.tb,.csend,.wgx,.rcx{
+.tab,.ftab,.mrow,.lr[href],.tb,.csend,.wgx,.rcx{
   transition:transform var(--t-tap) ease,filter var(--t-tap) ease}
-.tab:active,.ftab:active,.mrow:active,.lr[href]:active,.chatcard:active,.tb:active,
+.tab:active,.ftab:active,.mrow:active,.lr[href]:active,.tb:active,
 .csend:active,.wgx:active,.rcx:active{transform:scale(.94)}
 /* active tab lifts slightly */
 .tab.on .ic{transition:transform var(--t-fast) var(--ez-out)}

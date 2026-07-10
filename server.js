@@ -83,13 +83,20 @@ setInterval(() => {
   }
 }, 15 * 60 * 1000).unref(); // unref so the sweep never keeps the process alive
 function clientIp(req) {
-  // Behind Tailscale Funnel / any proxy, the real IP is in X-Forwarded-For.
-  return (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
+  // Behind ONE trusted proxy (Tailscale Funnel), the real client IP is the LAST hop the
+  // proxy appended to X-Forwarded-For — NOT the first. Taking the first trusts a value the
+  // client can inject (`X-Forwarded-For: 1.2.3.4`), letting an attacker rotate fake IPs past
+  // the per-IP rate limits (the exact email-bomb / Gmail-quota-burn the limiter guards). The
+  // last entry is the one Funnel set, so it can't be spoofed. Fall back to the socket peer.
+  const xff = (req.headers['x-forwarded-for'] || '').split(',').map(s => s.trim()).filter(Boolean);
+  return (xff.length ? xff[xff.length - 1] : '') || req.socket.remoteAddress || 'unknown';
 }
 
 // Hot path (rendered on every check-in + polled in the check-in fingerprint), so
 // the statement is prepared once at module scope rather than per call.
-const stmtLatestAnnouncement = db.prepare('SELECT * FROM announcements WHERE archived = 0 ORDER BY id DESC LIMIT 1');
+const stmtLatestAnnouncement = db.prepare(`SELECT a.*, COALESCE(ap.full_name, a.author) AS authorName
+  FROM announcements a LEFT JOIN applicants ap ON ap.email = a.author
+  WHERE a.archived = 0 ORDER BY a.id DESC LIMIT 1`); // authorName resolves the poster's email → name
 function latestAnnouncement() {
   // the live one players see — archived posts are history only
   return stmtLatestAnnouncement.get() || null;
@@ -1552,7 +1559,7 @@ app.get('/poll', requireLogin, (req, res) => {
     // Canonical sort order + per-row offered(o)/held(h) flags → catches join, leave,
     // promote/reorder at equal counts, offer-sent, and hold-state changes. Plus the
     // Friday-4pm held-release boundary and the live announcement id.
-    const order = part.rows.map(r => `${r.id}${r.offered_at != null ? 'o' : ''}${r.held ? 'h' : ''}`).join(',');
+    const order = part.rows.map(r => `${r.id}${r.offered_at != null ? 'o' : ''}${r.held ? 'h' : ''}${r.confirmed_at ? 'c' : ''}`).join(',');
     const ann = latestAnnouncement();
     f = `${runDate}:${runIsOpen(runDate) ? 1 : 0}:${heldReleased(runDate) ? 1 : 0}:${order}:${ann ? ann.id : 0}`;
   } else if (page === 'chat') {
@@ -1703,14 +1710,21 @@ app.post('/profile', requireLogin, (req, res) => {
   // Email opt-out — an unchecked checkbox doesn't POST, so absent = opted OUT.
   const email_optout = req.body.email_announce ? 0 : 1;
   const stats = attendanceStats(a.email);
+  // Full prop set so a validation error re-renders the WHOLE profile tab (bell, host inbox,
+  // run-day control, announcement history) — not a stripped-down page. Reused by every error branch.
+  const iAmHost = !!a.is_host, canOperate = isAdmin(req.userEmail) || !!a.is_team;
+  const errProps = {
+    a, stats, dmUnread: unreadCount(a.email), groupUnread: groupUnread(a.email), groupMention: groupMentionUnread(a.email, a.id),
+    canOperate, iAmHost, announcementLog: canOperate ? announcementHistory() : [], threads: iAmHost ? loadInbox(a.email) : [], ann: annPanel(a.email),
+  };
   if (!full_name || !phone || !email.includes('@'))
-    return res.send(profileTabPage({ a, stats, error: 'Name, phone, and a valid email are required.', dmUnread: unreadCount(a.email), groupUnread: groupUnread(a.email), groupMention: groupMentionUnread(a.email, a.id) }));
+    return res.send(profileTabPage({ ...errProps, error: 'Name, phone, and a valid email are required.' }));
   if (email !== a.email && db.prepare('SELECT 1 FROM applicants WHERE email = ? AND id != ?').get(email, a.id))
-    return res.send(profileTabPage({ a, stats, error: 'That email is already in use by another player.', dmUnread: unreadCount(a.email), groupUnread: groupUnread(a.email), groupMention: groupMentionUnread(a.email, a.id) }));
+    return res.send(profileTabPage({ ...errProps, error: 'That email is already in use by another player.' }));
   // Never let a self-service email change grant admin. Admin identity is the
   // ADMINS env set keyed by email, so changing INTO an admin address = takeover.
   if (email !== a.email && ADMINS.includes(email))
-    return res.send(profileTabPage({ a, stats, error: 'That email can’t be used. Pick another.', dmUnread: unreadCount(a.email), groupUnread: groupUnread(a.email), groupMention: groupMentionUnread(a.email, a.id) }));
+    return res.send(profileTabPage({ ...errProps, error: 'That email can’t be used. Pick another.' }));
   db.prepare('UPDATE applicants SET full_name=?, phone=?, email=?, position=?, email_optout=? WHERE id=?')
     .run(full_name, phone, email, position, email_optout, a.id);
   // If the email changed, atomically carry EVERY per-user row (checkins, attendance,
