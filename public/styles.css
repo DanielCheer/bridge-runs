@@ -441,6 +441,7 @@ html:not(.noanim) .annbanner{animation:a-rise var(--t-fast) var(--ez-out) both}
 .tag.reg{color:var(--teal);border-color:rgba(34,97,90,.3);background:rgba(34,97,90,.09)}
 .tag.tryout{color:var(--warn);border-color:rgba(162,117,27,.35);background:rgba(162,117,27,.08)}
 .tag.host{color:#fff;border-color:transparent;background:var(--solid)}
+.tag.susp{color:var(--bad);border-color:rgba(188,72,55,.35);background:rgba(188,72,55,.1)}
 
 .subhead{font-family:var(--head);font-weight:800;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--orange-deep);
   margin:26px 0 4px;padding-top:14px;border-top:1px solid var(--line)}
@@ -794,6 +795,17 @@ body.kb-open .wrap{padding-bottom:calc(100px + var(--kb, 0px))}
    dominate the thread. Black backdrop while the poster frame loads. */
 .mb-video{padding:0;background:none!important;box-shadow:none!important;overflow:hidden;border-radius:18px;max-width:230px}
 .mvideo{display:block;width:100%;max-width:230px;max-height:340px;height:auto;border-radius:16px;background:#000}
+/* Legal / policy prose (privacy, terms, conduct) — readable long-form text. */
+.legal{line-height:1.6;color:var(--ink);font-size:15px}
+.legal h1{font-family:var(--anton);font-size:26px;line-height:1.1;margin:16px 0 10px}
+.legal h2{font-family:var(--head);font-weight:800;font-size:17px;margin:22px 0 8px;color:var(--teal)}
+.legal h3{font-family:var(--head);font-weight:800;font-size:14px;letter-spacing:.02em;margin:16px 0 6px}
+.legal p{margin:0 0 12px}
+.legal ul,.legal ol{margin:0 0 14px;padding-left:22px}
+.legal li{margin:4px 0}
+.legal hr{border:none;border-top:1px solid var(--line);margin:18px 0}
+.legal em{color:var(--muted)}
+.legal strong{font-weight:700}
 /* Sticker: floats bubble-less (iMessage-style), larger, aligned mine/theirs. */
 .mb-sticker{padding:0;background:none!important;box-shadow:none!important}
 .msticker{display:block;width:110px;height:110px;object-fit:contain}

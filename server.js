@@ -21,17 +21,24 @@ import {
 import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap,
-  STICKERS, avatarUrlFor,
+  STICKERS, avatarUrlFor, mdToHtml, legalPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
-const CAP = Number(process.env.RUN_CAP || 15);
-const WAITLIST_CAP = Number(process.env.WAITLIST_CAP || 5);
-const TOTAL_CAP = CAP + WAITLIST_CAP;
+// Run capacities. `let` (not const) because a host can edit them in-app (stored in
+// app_settings, applied by reloadRunSettings() at startup + on save). The env values are
+// the DEFAULTS/fallback. Every consumer reads these at request time, so a live edit takes
+// effect on the next check-in with no restart. TOTAL_CAP is derived — recomputed on reload.
+const CAP_ENV = Number(process.env.RUN_CAP || 15);
+const WAITLIST_CAP_ENV = Number(process.env.WAITLIST_CAP || 5);
+const PREREG_CAP_ENV = Number(process.env.PREREG_CAP || process.env.REGULAR_CAP || 10);
+let CAP = CAP_ENV;
+let WAITLIST_CAP = WAITLIST_CAP_ENV;
+let TOTAL_CAP = CAP + WAITLIST_CAP;
 const VOTE_THRESHOLD = Number(process.env.VOTE_THRESHOLD || 3); // approvals to get in / rejects to block
-const PREREG_CAP = Number(process.env.PREREG_CAP || process.env.REGULAR_CAP || 10); // max team+regular pre-joining while closed; reserves the rest for normals
+let PREREG_CAP = PREREG_CAP_ENV; // max team+regular pre-joining while closed; reserves the rest for normals
 // Waitlist offer-and-confirm window. SINGLE source of truth, env-overridable so the
 // owner can lower it (e.g. to 1h) without a code change — ms is derived from it.
 const OFFER_WINDOW_HOURS = Number(process.env.OFFER_WINDOW_HOURS || 3);
@@ -121,6 +128,17 @@ function queueOpenEmailRecipients() {
 // helper that prunes dead subscriptions on 404/410. ----
 const getSetting = (k) => db.prepare('SELECT value FROM app_settings WHERE key = ?').get(k)?.value;
 const setSetting = (k, v) => db.prepare('INSERT OR REPLACE INTO app_settings (key,value) VALUES (?,?)').run(k, String(v));
+// Apply any host-saved capacity overrides (app_settings) over the env defaults. Called
+// once at startup and again whenever the host saves settings, so live edits need no
+// restart. A missing / non-positive stored value falls back to the env default.
+function reloadRunSettings() {
+  const g = (k, def) => { const v = getSetting(k); const n = Number(v); return (v != null && Number.isFinite(n) && n > 0) ? Math.floor(n) : def; };
+  CAP = g('run_cap', CAP_ENV);
+  WAITLIST_CAP = g('waitlist_cap', WAITLIST_CAP_ENV);
+  PREREG_CAP = Math.min(g('prereg_cap', PREREG_CAP_ENV), CAP); // pre-reg can't exceed the floor
+  TOTAL_CAP = CAP + WAITLIST_CAP;
+}
+reloadRunSettings();
 let VAPID_PUBLIC = getSetting('vapid_public'), VAPID_PRIVATE = getSetting('vapid_private');
 if (!VAPID_PUBLIC || !VAPID_PRIVATE) {
   const kp = webpush.generateVAPIDKeys();
@@ -965,6 +983,38 @@ app.post('/login/code', (req, res) => {
 app.get('/logout', (req, res) => { res.send(logoutPage()); });
 app.post('/logout', (req, res) => { clearSession(res); res.redirect('/'); });
 
+// ---------- LEGAL / POLICY PAGES (public) ----------
+// Renders the source drafts in legal/*.md through the app shell. The .md files stay
+// untouched as review copies (they carry an operator-only "DRAFT — have a lawyer review"
+// note + [PLACEHOLDERS]); we strip that note and fill the placeholders at RENDER time, so
+// the published page is clean while the file remains the reviewable source of truth.
+const LEGAL_DOCS = {
+  privacy: { file: 'privacy-policy.md', title: 'Privacy Policy' },
+  terms: { file: 'terms-of-use.md', title: 'Terms of Use' },
+  conduct: { file: 'code-of-conduct.md', title: 'Code of Conduct' },
+};
+function renderLegal(key) {
+  const d = LEGAL_DOCS[key];
+  if (!d) return null;
+  let md;
+  try { md = fs.readFileSync(path.join(__dirname, 'legal', d.file), 'utf8'); } catch { return null; }
+  md = md.replace(/^\s*\*\*[^\n]*DRAFT[^\n]*\*\*\s*\n/, '');                 // drop the operator-only draft note
+  md = md.replace(/\[DATE\]/g, 'July 9, 2026')
+         .replace(/\[HOST NAME\]/g, 'Daniel')
+         .replace(/\[NAME — e\.g\.,[^\]]*\]/g, 'Google (Gmail)')             // the email service sub-processor
+         .replace(/\[NAME\]/g, 'Daniel')
+         .replace(/\[EMAIL\/PHONE\]/g, 'danieljcheer@gmail.com')
+         .replace(/\[EMAIL\]/g, 'danieljcheer@gmail.com')
+         .replace(/,?\s*\[PHONE — optional\]/g, '');                         // optional → omit (with any leading comma)
+  return legalPage(d.title, mdToHtml(md));
+}
+for (const key of Object.keys(LEGAL_DOCS)) {
+  app.get('/' + key, (req, res) => {
+    const html = renderLegal(key);
+    if (html) res.send(html); else res.status(404).type('text').send('Not found');
+  });
+}
+
 // ---------- INVITE LINK (self-serve pre-approval) ----------
 // An admin creates a token — optionally with name/phone already filled in, or
 // totally blank. The player opens the link, fills in whatever's missing, and
@@ -1385,6 +1435,17 @@ function requirePlayer(req, res) {
   return { a, viewerIsAdmin };
 }
 
+// A suspended player keeps their account + history but is muted: no check-in (blocked in
+// /checkin/join) and no posting to chat/DMs. Callers use `if (mutedOut(gate, res, ...)) return;`
+// AFTER the requirePlayer gate. JSON endpoints (voice/video) get a 403; form posts bounce
+// back with ?err=suspended so the existing error strip explains it.
+function mutedOut(gate, res, { json = false, back = '/chat' } = {}) {
+  if (!gate || !gate.a || !gate.a.suspended) return false;
+  if (json) res.status(403).json({ err: 'suspended' });
+  else res.redirect(back + (back.includes('?') ? '&' : '?') + 'err=suspended');
+  return true;
+}
+
 app.get('/checkin', requireLogin, (req, res) => {
   const email = req.userEmail;
   const gate = requirePlayer(req, res);
@@ -1418,6 +1479,7 @@ app.get('/checkin', requireLogin, (req, res) => {
   // pre-registration cap reached (team + regulars) — only relevant while closed
   const preregCount = stmtPreregCount.get(runDate).r;
   const regularSlotsFull = !isOpen && iAmRegular && !iAmTeam && preregCount >= PREREG_CAP && myState === 'out';
+  const myConfirmed = myState === 'in' && !!(db.prepare('SELECT confirmed_at FROM checkins WHERE run_date = ? AND email = ?').get(runDate, email)?.confirmed_at);
 
   res.send(checkinPage({
     email, status,
@@ -1435,6 +1497,8 @@ app.get('/checkin', requireLogin, (req, res) => {
     myState, myWaitPos, myOffer, offerWindowHours: OFFER_WINDOW_HOURS,
     iAmTeam, iAmRegular, iOptedOut, iAutoRenew,
     viewerIsAdmin, canOperate, canSeeRoster,
+    suspended: !!(a && a.suspended), suspendReason: (a && a.suspend_reason) || '',
+    myConfirmed, msg: req.query.msg || '',
     announcement: latestAnnouncement(),
     // roster goes to anyone who can see it; controls only to operators
     inPlayers: canSeeRoster ? inPlayers : [],
@@ -1759,6 +1823,7 @@ app.post('/messages/:id', requireLogin, (req, res) => {
     const gate = requirePlayer(req, res);
     if (!gate) return;
     if (!gate.a) return res.redirect('/status');
+    if (mutedOut(gate, res, { back: '/messages/' + (Number(req.params.id) || 0) })) return; // suspended = muted
     const me = req.userEmail, a = gate.a;
     const p = db.prepare('SELECT * FROM applicants WHERE id = ?').get(Number(req.params.id) || 0);
     if (!p || !canMessage(me, a, p)) return res.redirect('/messages');
@@ -1882,6 +1947,7 @@ app.post('/chat', requireLogin, (req, res) => {
   uploadChatImage(req, res, async (err) => {
     const gate = requirePlayer(req, res);
     if (!gate) return;
+    if (mutedOut(gate, res, { back: '/chat' })) return; // suspended = muted
     const me = req.userEmail;
     if (err) return res.redirect('/chat?err=' + (err.code === 'LIMIT_FILE_SIZE' ? 'big' : 'bad'));
     const body = (req.body.body || '').trim().slice(0, 1000);
@@ -1992,6 +2058,7 @@ app.post('/chat/voice', requireLogin, (req, res) => {
   uploadChatAudio(req, res, (err) => {
     const gate = requirePlayer(req, res);
     if (!gate) return;
+    if (mutedOut(gate, res, { json: true })) return; // suspended = muted
     const me = req.userEmail;
     if (err) return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ err: err.code === 'LIMIT_FILE_SIZE' ? 'big' : 'bad' });
     const file = req.file;
@@ -2021,6 +2088,7 @@ app.post('/chat/video', requireLogin, (req, res) => {
   uploadChatVideo(req, res, (err) => {
     const gate = requirePlayer(req, res);
     if (!gate) return;
+    if (mutedOut(gate, res, { json: true })) return; // suspended = muted
     const me = req.userEmail;
     if (err) return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ err: err.code === 'LIMIT_FILE_SIZE' ? 'big' : 'bad' });
     const file = req.file;
@@ -2046,6 +2114,7 @@ app.post('/checkin/join', requireLogin, (req, res) => {
   const email = req.userEmail;
   const a = applicantByEmail(email);
   if (!a || a.status !== 'approved') return res.redirect('/checkin');
+  if (a.suspended) return res.redirect('/checkin'); // suspended → can't check in (page shows why)
   const runDate = nextRunDate();
   // Pre-access: regulars and team can join while the run is still closed.
   const hasPreAccess = !!(a.is_regular || a.is_team);
@@ -2209,6 +2278,34 @@ app.post('/checkin/close', requireApprover, (req, res) => {
   res.redirect('/checkin');
 });
 
+// Run-day CONFIRM/RELEASE ping (host). Pushes every real floor player who hasn't yet
+// confirmed: "confirm you're coming or release your spot". They confirm via /checkin/confirm
+// or release via the normal Sit-out (which offers the freed slot onward). Guarded to at most
+// once / 30 min per run so it can't spam. Guests (no inbox) are skipped.
+app.post('/checkin/confirmping', requireApprover, (req, res) => {
+  const runDate = nextRunDate();
+  if (rateLimited('confirmping', 'run:' + runDate, 1, 30 * 60 * 1000)) return res.redirect('/checkin?msg=' + encodeURIComponent('Already pinged in the last 30 min — hold off a bit.'));
+  const part = partitionRun(runDate);
+  const targets = part.floorReal.filter(p => !p.guest && !p.confirmed_at).map(p => p.email);
+  if (targets.length) {
+    sendPush(targets, {
+      title: 'Confirm your spot for tonight',
+      body: `You're on the floor for ${runLabelFor(runDate)}. Tap to confirm you're coming — or release your spot for the waitlist.`,
+      url: '/checkin', tag: 'confirm',
+    });
+  }
+  audit(req.userEmail, req.actorRole, 'confirm:ping', String(targets.length));
+  res.redirect('/checkin?msg=' + encodeURIComponent(`Confirm ping sent to ${targets.length} player${targets.length === 1 ? '' : 's'}.`));
+});
+
+// A floor player confirms they're coming (run-day ping response). Idempotent.
+app.post('/checkin/confirm', requireLogin, (req, res) => {
+  const runDate = nextRunDate();
+  db.prepare("UPDATE checkins SET confirmed_at = datetime('now') WHERE run_date = ? AND email = ? AND confirmed_at IS NULL")
+    .run(runDate, req.userEmail);
+  res.redirect('/checkin');
+});
+
 // A regular clears (or restores) their own auto-seat for this week.
 app.post('/checkin/optout', requireLogin, (req, res) => {
   const runDate = nextRunDate();
@@ -2279,11 +2376,24 @@ app.get('/admin', requireApprover, (req, res) => {
     'SELECT full_name, email, is_host FROM applicants WHERE is_team = 1 AND is_host = 0 ORDER BY full_name ASC').all();
   res.send(adminPage({
     applicants, runLabel: runLabelFor(runDate), runDate, hours: runTimeRange(runDate), checkedInCount, cap: CAP,
+    waitlistCap: WAITLIST_CAP, preregCap: PREREG_CAP,
     viewerIsAdmin, viewerIsTeam: req.actorRole === 'team',
     viewerIsHost: !!(db.prepare('SELECT is_host FROM applicants WHERE email = ?').get(String(req.userEmail).toLowerCase())?.is_host),
-    viewerEmail: req.userEmail, log,
+    viewerEmail: req.userEmail, log, msg: req.query.msg || '',
     filter, counts, teamMembers, ann: annPanel(req.userEmail),
   }));
+});
+
+// Host-editable run capacities (admin). Stored in app_settings, applied immediately via
+// reloadRunSettings() — no restart. Clamped to sane bounds; blank/garbage falls back.
+app.post('/admin/settings', requireAdmin, (req, res) => {
+  const clamp = (v, lo, hi, def) => { const n = Math.floor(Number(v)); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : def; };
+  setSetting('run_cap', clamp(req.body.run_cap, 1, 100, CAP));
+  setSetting('waitlist_cap', clamp(req.body.waitlist_cap, 0, 100, WAITLIST_CAP));
+  setSetting('prereg_cap', clamp(req.body.prereg_cap, 0, 100, PREREG_CAP));
+  reloadRunSettings();
+  audit(req.userEmail, 'admin', 'settings:caps', `cap=${CAP} wl=${WAITLIST_CAP} prereg=${PREREG_CAP}`);
+  res.redirect('/admin?msg=' + encodeURIComponent('Run settings saved'));
 });
 
 // An approver casts (or changes) their vote. Unanimous approve → approved;
@@ -2605,6 +2715,27 @@ app.post('/admin/people/edit', requireAdmin, (req, res) => {
   db.prepare('UPDATE checkins SET name=? WHERE email=?').run(full_name, email);
   audit(req.userEmail, 'admin', 'people:edit', email);
   res.redirect('/admin/people?msg=Saved');
+});
+
+// Suspend / unsuspend a person (admin). Suspended = keeps account + history but can't
+// check in or post (see /checkin/join + mutedOut). Suspending also drops any current
+// check-in, offering a freed floor slot onward — a muted player shouldn't hold a spot.
+app.post('/admin/people/suspend', requireAdmin, (req, res) => {
+  const id = Number(req.body.id) || 0;
+  const on = req.body.on === '1';
+  const reason = (req.body.reason || '').trim().slice(0, 300);
+  const cur = db.prepare('SELECT email FROM applicants WHERE id = ?').get(id);
+  if (!cur) return res.redirect('/admin/people');
+  db.prepare('UPDATE applicants SET suspended = ?, suspend_reason = ? WHERE id = ?')
+    .run(on ? 1 : 0, on ? (reason || null) : null, id);
+  if (on) {
+    const runDate = nextRunDate();
+    const offeree = offereeForFloorLeave(runDate, cur.email);
+    db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ?').run(runDate, cur.email);
+    if (offeree) createOffer(runDate, offeree, req);
+  }
+  audit(req.userEmail, 'admin', on ? 'people:suspend' : 'people:unsuspend', cur.email);
+  res.redirect('/admin/people?msg=' + encodeURIComponent(on ? 'Suspended' : 'Unsuspended'));
 });
 
 app.post('/admin/people/delete', requireAdmin, (req, res) => {

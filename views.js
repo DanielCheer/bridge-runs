@@ -400,7 +400,15 @@ ${wall ? WALL_HEAD : ''}
 <link rel="stylesheet" href="/styles.css?v=${CSS_VER}">
 </head><body class="${bodyClass}">${SPLASH_BODY}${wall ? WALL_BODY : ''}<div class="wrap">`;
 
-const FOOT = `<div class="foot">The Bridge Adv Runs · Markham · Fridays 7–10PM</div></div></body></html>`;
+const FOOTER_LINKS = `<div class="foot">The Bridge Adv Runs · Markham · Fridays 7–10PM</div><div class="foot legalfoot"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/conduct">Conduct</a></div>`;
+const FOOT = `${FOOTER_LINKS}</div></body></html>`;
+// Tab-bar pages: render the fixed bottom tab bar as the LAST child of `.wrap`, with the footer
+// text BEFORE it. It must stay inside `.wrap` (the client router swaps `.wrap` — the active-tab
+// highlight comes from re-rendering it), but nothing must sit AFTER it in the scroll flow: on
+// iOS Safari, in-flow content after a fixed bottom bar peeks out below it on overscroll (the
+// tabs looked like they "moved" at the bottom). Footer-then-tabs fixes that while keeping the
+// router's swap intact.
+const footWithTabs = (tabsHtml) => `${FOOTER_LINKS}${tabsHtml}</div></body></html>`;
 
 // The scoreboard basketball mark — used in the masthead.
 const BALL = `<svg class="ball" viewBox="0 0 40 40" fill="none" aria-hidden="true"><circle cx="20" cy="20" r="18" fill="#22615A"/><path d="M20 2v36M2 20h36M7 7c7 5 7 21 0 26M33 7c-7 5-7 21 0 26" stroke="#F8F5EF" stroke-width="1.5" opacity=".85"/></svg>`;
@@ -1427,7 +1435,8 @@ export function intakePage({ submitted = false, error = '', alreadyApproved = fa
         <label for="waiver_ok">I've completed (or will complete) the church waiver linked below. I understand I can't play without it.</label>
       </div>
 
-      <div style="height:16px"></div>
+      <p class="tally-note" style="margin:14px 0 0">By submitting, you agree to our <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a>, <a href="/terms" target="_blank" rel="noopener">Terms of Use</a>, and <a href="/conduct" target="_blank" rel="noopener">Code of Conduct</a>.</p>
+      <div style="height:14px"></div>
       <button class="btn" type="submit">Submit application</button>
     </form>
 
@@ -1576,7 +1585,7 @@ const COURT_SVG = `<svg class="court" viewBox="0 0 200 200" fill="none" aria-hid
 
 export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 PM', startLabel = '7 PM', tipoff = 0, cap, waitlistCap, going, waiting, full, runFull, isOpen, canSeeCount, regularSlotsFull,
                              myState, myWaitPos, myOffer = null, offerWindowHours = 3, iAmTeam, iAmRegular, iOptedOut, iAutoRenew,
-                             viewerIsAdmin, canOperate, canSeeRoster, announcement = null, announcementLog = [], inPlayers, offeredPlayers = [], waitPlayers, host = null, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+                             viewerIsAdmin, canOperate, canSeeRoster, suspended = false, suspendReason = '', myConfirmed = false, msg = '', announcement = null, announcementLog = [], inPlayers, offeredPlayers = [], waitPlayers, host = null, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
 
   // Not cleared to play yet (admins always get through — they run the check-in)
   if (!viewerIsAdmin && status !== 'approved') {
@@ -1601,7 +1610,10 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
   // ----- my own action button (nine branches, unchanged POSTs) -----
   const canPlay = status === 'approved';
   let action = '';
-  if (!canPlay) {
+  if (suspended) {
+    // Suspended → no join CTA at all; a notice below explains why (server also blocks the POST).
+    action = `<button class="btn" type="button" disabled>Check-in paused</button>`;
+  } else if (!canPlay) {
     action = '';
   } else if (myState === 'offered' && myOffer) {
     // A floor spot is being HELD for them — the one action is to claim it.
@@ -1632,6 +1644,18 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
   } else {
     action = `<form method="POST" action="/checkin/join"><button class="btn primary" type="submit" data-tour="join">I'm in</button></form>`;
   }
+
+  // Run-day confirm/release: a floor player either confirms they're coming or frees the
+  // spot via the normal Sit-out. Independent of `action` so it rides alongside it.
+  const confirmCta = (myState === 'in' && !suspended)
+    ? (myConfirmed
+        ? `<div class="notice good" style="margin-top:10px">✓ Confirmed for tonight. Can't make it? Sit out to free your spot for the waitlist.</div>`
+        : `<form method="POST" action="/checkin/confirm" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming tonight</button></form>`)
+    : '';
+  // Host: ping every unconfirmed floor player to confirm or release (run-day nudge).
+  const confirmPing = canOperate
+    ? `<form method="POST" action="/checkin/confirmping" style="margin-top:8px"><button class="btn ghost sm" type="submit">📣 Ping floor to confirm / release</button></form>`
+    : '';
 
   // ----- my own state line -----
   // Claim banner (offered players): a spot opened and is HELD for them — prominent
@@ -1786,7 +1810,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
   // the check-in fetch-swap interceptor only catches `.controls form`, not these.
   const wgRemoveForm = (p) => `<form method="POST" action="/checkin/remove" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn leave sm" type="submit" title="Remove">Remove</button></form>`;
   const wgBumpForm = (p) => `<form method="POST" action="/checkin/promote" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn sm" type="submit" title="Move into the run">Bump in</button></form>`;
-  const wgRow = (p, n) => `<div class="lr"><span class="ln">${n}</span><span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''}</span>${roleBadge(p)}${canOperate ? wgRemoveForm(p) : ''}</div>`;
+  const wgRow = (p, n) => `<div class="lr"><span class="ln">${n}</span><span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''}${p.confirmed_at ? ' <span class="tag reg" title="Confirmed for tonight">✓</span>' : ''}</span>${roleBadge(p)}${canOperate ? wgRemoveForm(p) : ''}</div>`;
   // Held offer row — the spot is taken (counts toward the floor) but the person hasn't
   // confirmed yet, so it's shown as "claiming" rather than as a settled floor player.
   const wgOfferRow = (p) => `<div class="lr"><span class="ln">·</span><span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''} <span class="tag">⏳ Claiming</span></span>${canOperate ? wgRemoveForm(p) : ''}</div>`;
@@ -1842,15 +1866,18 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
     </div>
     ${hero}
     ${annBanner}
+    ${msg ? `<div class="notice good" style="margin-top:12px">${esc(msg)}</div>` : ''}
+    ${suspended ? `<div class="notice bad" style="margin-top:12px"><b>⊘ Your check-in is paused.</b>${suspendReason ? ' ' + esc(suspendReason) : ''} Reach out to the host if you think this is a mistake.</div>` : ''}
     ${mine}
     ${(action || runToggle) ? `<div class="controls">${action}${runToggle}</div>` : ''}
+    ${confirmCta}
+    ${confirmPing}
     ${infoSection}
     ${wgSheet}
 
     ${qrBlock}
     <div style="height:28px"></div>
     ${locationBlock}
-    <p class="tally-note" style="text-align:center;margin-top:22px">💡 Tip: tap your browser's <b>Share</b> → <b>Add to Home Screen</b> to open the run in one tap. It launches <b>fullscreen like an app</b> (no browser bars) and keeps you signed in.</p>
     <div class="foot" style="margin-top:12px"><a href="/logout">Sign out</a></div>
     <script>
       // Who's-going overlay. Open is instant; close plays a slide-down (unless
@@ -1953,7 +1980,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
       if(!window.__claimBound){ window.__claimBound=true; setInterval(paintClaim,30000); }
     </script>
     ${firstRunTour}
-  ` + tabNav('checkin', { dm: dmUnread, group: groupUnread, groupMention }) + FOOT;
+  ` + footWithTabs(tabNav('checkin', { dm: dmUnread, group: groupUnread, groupMention }));
 }
 
 // ---------- CLAIM RESULT (waitlist offer landing page) ----------
@@ -2033,7 +2060,7 @@ export function chatPage({ me, chat, runDate = '', hours = '7–10 PM', dmUnread
         if(sh&&!still){sh.classList.add('closing');setTimeout(function(){w.classList.remove('open');sh.classList.remove('closing');document.body.style.overflow='';},200);}
         else{w.classList.remove('open');document.body.style.overflow='';}};
     </script>
-  ` + tabNav('chat', { dm: dmUnread, group: groupUnread, groupMention }) + FOOT;
+  ` + footWithTabs(tabNav('chat', { dm: dmUnread, group: groupUnread, groupMention }));
 }
 
 // ---------- PROFILE (view another player) ----------
@@ -2074,7 +2101,7 @@ export function profilePage({ p, stats, isSelf = false, canContact = false, runD
     </div>
     ${contact}
     ${prow}
-  ` + tabNav(isSelf ? 'profile' : '', { dm: dmUnread, group: groupUnread, groupMention }) + FOOT;
+  ` + footWithTabs(tabNav(isSelf ? 'profile' : '', { dm: dmUnread, group: groupUnread, groupMention }));
 }
 
 // Host DM inbox rows — reused on the host's profile tab (host DMs live in Profile
@@ -2281,7 +2308,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
         }
       })();
     </script>
-  ` + tabNav('profile', { dm: dmUnread, group: groupUnread, groupMention }) + FOOT;
+  ` + footWithTabs(tabNav('profile', { dm: dmUnread, group: groupUnread, groupMention }));
 }
 
 // ---------- MESSAGES: day / clock helpers (SQL UTC → server-local) ----------
@@ -2849,6 +2876,7 @@ ${mentionAutocompleteJS()}
 
 // ---------- ADMIN / COUNCIL ----------
 export function adminPage({ applicants, runLabel, runDate = '', hours = '7–10 PM', checkedInCount, cap,
+                           waitlistCap = 5, preregCap = 10, msg = '',
                            viewerIsAdmin = true, viewerIsTeam = false, viewerIsHost = false, viewerEmail = '', log = [],
                            filter = 'all', counts = {}, teamMembers = [], ann = null }) {
   const pill = (s) => `<span class="pill ${s}">${s}</span>`;
@@ -2953,6 +2981,16 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '7–10 
       ? 'Approval is decided by the <b>team</b>: 3 approvals gets an applicant in, 3 rejects blocks them. You have oversight and manage people, but you don\'t vote. Team members are auto-approved and skip the vote.'
       : 'It takes <b>3 approvals</b> to get an applicant in, or <b>3 rejects</b> to block them. Cast your vote below.'}</p>
     <div class="notice">This ${wdayFull(runDate)} (${esc(runLabel)}): <b>${checkedInCount}/${cap}</b> checked in.</div>
+    ${msg ? `<div class="notice good">${esc(msg)}</div>` : ''}
+    ${viewerIsAdmin ? `<details class="announce-compose" style="margin-top:12px"><summary>⚙️ Run settings — capacity</summary>
+      <form method="POST" action="/admin/settings" class="editrow" style="margin-top:10px">
+        <label>Floor cap <span style="text-transform:none;font-weight:400;color:var(--muted)">(players in the run)</span><input name="run_cap" type="number" min="1" max="100" inputmode="numeric" value="${cap}"></label>
+        <label>Waitlist cap<input name="waitlist_cap" type="number" min="0" max="100" inputmode="numeric" value="${waitlistCap}"></label>
+        <label>Pre-register cap <span style="text-transform:none;font-weight:400;color:var(--muted)">(team + core spots held while closed)</span><input name="prereg_cap" type="number" min="0" max="100" inputmode="numeric" value="${preregCap}"></label>
+        <p class="tally-note" style="margin:2px 0 0">Takes effect on the next check-in — no restart. Applies to the current + future runs.</p>
+        <div class="editacts"><button class="btn sm" type="submit">Save settings</button></div>
+      </form>
+    </details>` : ''}
     ${councilRoster}
     ${filterTabs}
     ${rows || `<div class="card">${emptyMsg}</div>`}
@@ -3002,11 +3040,46 @@ export function logoutPage() {
   ` + FOOT;
 }
 
+// Minimal, safe Markdown → HTML for the static legal docs (legal/*.md). Handles the exact
+// subset those files use: #/##/### headings, **bold**, *italic*, `- ` and `1. ` lists,
+// `---` rules, and paragraphs. Text is HTML-escaped FIRST (defense-in-depth even though the
+// source is our own trusted files), THEN inline **/* is applied to the escaped text. Scoped
+// to these docs on purpose — not a general Markdown engine.
+export function mdToHtml(md) {
+  const escT = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const inline = (s) => escT(s).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  const out = [];
+  let para = [], listType = null, listItems = [];
+  const flushPara = () => { if (para.length) { out.push('<p>' + inline(para.join(' ')) + '</p>'); para = []; } };
+  const flushList = () => { if (listItems.length) { out.push(`<${listType}>` + listItems.map(li => '<li>' + inline(li) + '</li>').join('') + `</${listType}>`); listItems = []; listType = null; } };
+  for (const raw of md.replace(/\r\n/g, '\n').split('\n')) {
+    const line = raw.trimEnd();
+    let m;
+    if (/^#{1,3}\s/.test(line)) { flushPara(); flushList(); const lvl = line.match(/^#+/)[0].length; out.push(`<h${lvl}>` + inline(line.replace(/^#+\s/, '')) + `</h${lvl}>`); }
+    else if (/^---+\s*$/.test(line)) { flushPara(); flushList(); out.push('<hr>'); }
+    else if ((m = line.match(/^\s*[-*]\s+(.*)/))) { flushPara(); if (listType !== 'ul') { flushList(); listType = 'ul'; } listItems.push(m[1]); }
+    else if ((m = line.match(/^\s*\d+\.\s+(.*)/))) { flushPara(); if (listType !== 'ol') { flushList(); listType = 'ol'; } listItems.push(m[1]); }
+    else if (line === '') { flushPara(); flushList(); }
+    else { flushList(); para.push(line); }
+  }
+  flushPara(); flushList();
+  return out.join('\n');
+}
+
+// Legal / policy page in the app shell (privacy, terms, conduct). Public, no install wall.
+export function legalPage(title, html) {
+  return HEAD(`${title} — Adv Runs`, '', { wall: false }) + header(`<b>${esc(title.toUpperCase())}</b>`) + `
+    <div class="rule"></div>
+    <div class="legal">${html}</div>
+    <div class="foot" style="margin-top:24px"><a href="/">Apply</a> · <a href="/login">Sign in</a></div>
+  ` + FOOT;
+}
+
 // ---------- PEOPLE MANAGEMENT (admin-only) ----------
 export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = '', invites = [], newInviteLink = '', msg = '', ann = null }) {
   const pill = (s) => `<span class="pill ${s}">${s}</span>`;
   const rows = people.map(a => `<details class="arow"${q ? ' open' : ''}>
-    <summary><span class="an">${esc(a.full_name)}${a.is_team ? ' <span class="tag team">◆</span>' : ''}${a.is_regular ? ' <span class="tag reg">★</span>' : ''}</span> ${pill(a.status)}</summary>
+    <summary><span class="an">${esc(a.full_name)}${a.is_team ? ' <span class="tag team">◆</span>' : ''}${a.is_regular ? ' <span class="tag reg">★</span>' : ''}${a.suspended ? ' <span class="tag susp">⊘ Suspended</span>' : ''}</span> ${pill(a.status)}</summary>
     <form method="POST" action="/admin/people/edit" class="editrow" style="margin-top:12px">
       <input type="hidden" name="id" value="${a.id}">
       <label>Name<input name="full_name" value="${esc(a.full_name)}"></label>
@@ -3016,6 +3089,17 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
         <button class="btn sm" type="submit">Save</button>
       </div>
     </form>
+    ${a.suspended
+      ? `<form method="POST" action="/admin/people/suspend" style="margin:6px 0 0">
+           <input type="hidden" name="id" value="${a.id}"><input type="hidden" name="on" value="0">
+           ${a.suspend_reason ? `<p class="tally-note" style="margin:0 0 6px">Reason: ${esc(a.suspend_reason)}</p>` : ''}
+           <button class="btn ghost sm" type="submit">Unsuspend — restore check-in &amp; chat</button>
+         </form>`
+      : `<form method="POST" action="/admin/people/suspend" class="editrow" style="margin:6px 0 0">
+           <input type="hidden" name="id" value="${a.id}"><input type="hidden" name="on" value="1">
+           <label>Suspend reason <span style="text-transform:none;font-weight:400;color:var(--muted)">(optional — shown to them)</span><input name="reason" placeholder="e.g. no-show 3 weeks running"></label>
+           <div class="editacts"><button class="btn ghost sm" type="submit">Suspend — block check-in &amp; chat</button></div>
+         </form>`}
     <form method="POST" action="/admin/people/delete" data-confirmdel data-name="${esc(a.full_name)}" style="margin:6px 0 0">
       <input type="hidden" name="id" value="${a.id}">
       <button class="btn leave sm" type="submit">Delete person</button>

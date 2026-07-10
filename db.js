@@ -129,6 +129,12 @@ if (!ckCols.includes('claim_token')) {
   db.exec('ALTER TABLE checkins ADD COLUMN claim_token TEXT');
 }
 db.exec('CREATE INDEX IF NOT EXISTS idx_checkins_claim ON checkins(claim_token)');
+// Run-day confirm/release (2026-07): a host-triggered push asks floor players to confirm
+// they're coming or release their spot. confirmed_at = when they confirmed (NULL = not yet).
+// Cleared with the weekly checkins purge, so it's per-run by construction.
+if (!ckCols.includes('confirmed_at')) {
+  db.exec('ALTER TABLE checkins ADD COLUMN confirmed_at TEXT');
+}
 // auto_renew: team members default to a guaranteed weekly spot; can turn it off
 if (!appCols.includes('auto_renew')) {
   db.exec('ALTER TABLE applicants ADD COLUMN auto_renew INTEGER NOT NULL DEFAULT 1');
@@ -253,6 +259,15 @@ if (!appCols.includes('is_host')) {
 // waitlist spot-offer they're actively waiting on) is always sent regardless.
 if (!appCols.includes('email_optout')) {
   db.exec('ALTER TABLE applicants ADD COLUMN email_optout INTEGER NOT NULL DEFAULT 0');
+}
+// Suspension (2026-07): an admin can suspend a person — they keep their account + history
+// but can't check in or post in Run Chat until unsuspended. suspended = 1/0, suspend_reason
+// is the (optional) message shown to them. Additive, guarded.
+if (!appCols.includes('suspended')) {
+  db.exec('ALTER TABLE applicants ADD COLUMN suspended INTEGER NOT NULL DEFAULT 0');
+}
+if (!appCols.includes('suspend_reason')) {
+  db.exec('ALTER TABLE applicants ADD COLUMN suspend_reason TEXT');
 }
 // Profile photo (2026-07): stored filename (NOT a path) in public/avatars/, keyed by
 // applicant id (<id>-<shortrandom>.jpg) so it survives email changes. Nullable — NULL
