@@ -3039,6 +3039,26 @@ export function logoutPage() {
   ` + FOOT;
 }
 
+// One-time-link confirm page. Rendered on the GET of a magic-sign-in / claim link so a
+// bare GET (email security scanners like Outlook SafeLinks auto-visit links) DOESN'T
+// consume the single-use token — only the POST does. Real browsers auto-submit the form
+// on load, so for a human it's still effectively one tap; a scanner (no JS execution)
+// just sees the page and the token stays valid for the actual person.
+export function confirmActionPage({ title, heading, sub, action, fields = {}, button = 'Continue' }) {
+  const hidden = Object.entries(fields)
+    .map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(String(v == null ? '' : v))}">`).join('');
+  return HEAD(`${title} — Adv Runs`, '', { wall: false }) + header(`<b>${esc(title.toUpperCase())}</b>`) + `
+    <div class="rule"></div>
+    <span class="eyebrow">One tap</span>
+    <h1>${esc(heading)}</h1>
+    <p class="lead">${esc(sub)}</p>
+    <form method="POST" action="${esc(action)}" id="confirmform">${hidden}
+      <button class="btn" type="submit">${esc(button)}</button>
+    </form>
+    <script>setTimeout(function(){try{document.getElementById('confirmform').submit();}catch(e){}},60);</script>
+  ` + FOOT;
+}
+
 // Minimal, safe Markdown → HTML for the static legal docs (legal/*.md). Handles the exact
 // subset those files use: #/##/### headings, **bold**, *italic*, `- ` and `1. ` lists,
 // `---` rules, and paragraphs. Text is HTML-escaped FIRST (defense-in-depth even though the

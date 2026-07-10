@@ -21,7 +21,7 @@ import {
 import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap,
-  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage,
+  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -962,8 +962,23 @@ app.post('/login', async (req, res) => {
   }
 });
 
+// GET renders a confirm page that auto-submits — it does NOT consume the token, so an
+// email security scanner's bare GET (Outlook SafeLinks etc.) can't burn the sign-in link
+// + code before the person taps it. The POST does the actual single-use consume + sign-in.
 app.get('/auth', (req, res) => {
   const { token, next } = req.query;
+  const row = db.prepare('SELECT * FROM login_tokens WHERE token = ?').get(token || '');
+  if (!row || row.used || row.expires_at < Date.now()) {
+    return res.send(loginPage({ next: next || '',
+      error: 'That link is expired or already used — enter your email to get a fresh one. Use the same email you applied with.' }));
+  }
+  return res.send(confirmActionPage({
+    title: 'Signing in', heading: 'Tap to sign in', sub: 'One tap finishes signing you in to The Bridge Adv Runs.',
+    action: '/auth', fields: { token, next: next || '' }, button: 'Sign in →',
+  }));
+});
+app.post('/auth', (req, res) => {
+  const { token, next } = req.body;
   const row = db.prepare('SELECT * FROM login_tokens WHERE token = ?').get(token || '');
   if (!row || row.used || row.expires_at < Date.now()) {
     return res.send(loginPage({ next: next || '',
@@ -2201,12 +2216,23 @@ app.post('/checkin/join', requireLogin, (req, res) => {
 // the proof of address, same trust model as a magic link). SYNCHRONOUS lookup→check→
 // convert with no await between, so two concurrent taps can't double-claim — the
 // first clears the token, the second finds nothing and gets the friendly expired page.
+// GET renders a confirm page (does NOT claim) so a mail-scanner's bare GET can't auto-claim
+// the offered spot on the player's behalf. POST does the atomic claim (still race-safe — the
+// synchronous read→check→clear can't double-claim). Expiry is owned by loadRun's reoffer.
 app.get('/checkin/claim/:token', (req, res) => {
   const token = req.params.token || '';
   const row = db.prepare('SELECT * FROM checkins WHERE claim_token = ?').get(token);
-  // Invalid / already-claimed (token cleared) / expired → friendly "passed on" page.
-  // Don't mutate expired here — loadRun's expireAndReoffer owns the drop+reoffer so
-  // there's a single expiry path.
+  if (!row || row.offered_at == null || row.offered_at < Date.now() - OFFER_WINDOW_MS) {
+    return res.send(claimResultPage({ ok: false }));
+  }
+  return res.send(confirmActionPage({
+    title: 'Claim your spot', heading: 'A spot opened up', sub: `You've got a floor spot for ${runLabelFor(row.run_date)} — one tap locks it in.`,
+    action: '/checkin/claim/' + token, fields: {}, button: 'Claim my spot →',
+  }));
+});
+app.post('/checkin/claim/:token', (req, res) => {
+  const token = req.params.token || '';
+  const row = db.prepare('SELECT * FROM checkins WHERE claim_token = ?').get(token);
   if (!row || row.offered_at == null || row.offered_at < Date.now() - OFFER_WINDOW_MS) {
     return res.send(claimResultPage({ ok: false }));
   }
