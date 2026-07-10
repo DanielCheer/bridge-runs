@@ -1585,7 +1585,7 @@ const COURT_SVG = `<svg class="court" viewBox="0 0 200 200" fill="none" aria-hid
 
 export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 PM', startLabel = '7 PM', tipoff = 0, cap, waitlistCap, going, waiting, full, runFull, isOpen, canSeeCount, regularSlotsFull,
                              myState, myWaitPos, myOffer = null, offerWindowHours = 3, iAmTeam, iAmRegular, iOptedOut, iAutoRenew,
-                             viewerIsAdmin, canOperate, canSeeRoster, suspended = false, suspendReason = '', myConfirmed = false, msg = '', announcement = null, announcementLog = [], inPlayers, offeredPlayers = [], waitPlayers, host = null, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+                             viewerIsAdmin, canOperate, canSeeRoster, suspended = false, suspendReason = '', myConfirmed = false, msg = '', bannerVer = '4', announcement = null, announcementLog = [], inPlayers, offeredPlayers = [], waitPlayers, host = null, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
 
   // Not cleared to play yet (admins always get through — they run the check-in)
   if (!viewerIsAdmin && status !== 'approved') {
@@ -1858,11 +1858,12 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
       })();
     </script>
     <div class="gymbanner">
-      <img src="/gym.jpg?v=4" alt="The Bridge gym" width="1160" height="387" fetchpriority="high">
+      <img src="/gym.jpg?v=${esc(String(bannerVer))}" alt="The Bridge gym" width="1160" height="387" fetchpriority="high">
       <div class="gymcap">
         <div class="l">Next run<b>${wdayFull(runDate)} · ${esc(runLabel)} · ${esc(startLabel)}</b></div>
         <div class="r"><span>Tip-off in</span><b class="tick" data-tip="${tipoff}">${esc(fmtCountdown(tipoff))}</b></div>
       </div>
+      ${canOperate ? `<a class="bannedit" href="/admin/banner" aria-label="Change banner photo">🖼 Change</a>` : ''}
     </div>
     ${hero}
     ${annBanner}
@@ -3072,6 +3073,79 @@ export function legalPage(title, html) {
     <div class="rule"></div>
     <div class="legal">${html}</div>
     <div class="foot" style="margin-top:24px"><a href="/">Apply</a> · <a href="/login">Sign in</a></div>
+  ` + FOOT;
+}
+
+// ---------- CHECK-IN BANNER TOOL (operators) ----------
+// Pick a photo → pan/zoom it inside a fixed 3:1 window → save. The window IS the banner
+// crop; the client computes the source-pixel rect and posts it with the file (server crops
+// to 2320×774). Native multipart POST — the submit handler just fills the hidden crop inputs.
+const bannerCropScript = () => `<script>
+(function(){
+  var file=document.getElementById('bfile'), stage=document.getElementById('bstage'),
+      frame=document.getElementById('bframe'), img=document.getElementById('bimg'),
+      zoom=document.getElementById('bzoom'), form=document.getElementById('bform');
+  if(!file||!frame)return;
+  var nw=0,nh=0,cover=1,z=1,ox=0,oy=0,fw=0,fh=0;
+  function apply(){ fw=frame.clientWidth; fh=frame.clientHeight;
+    var scale=cover*z, dw=nw*scale, dh=nh*scale;
+    ox=Math.min(0,Math.max(fw-dw,ox)); oy=Math.min(0,Math.max(fh-dh,oy));
+    img.style.width=dw+'px'; img.style.height=dh+'px'; img.style.transform='translate('+ox+'px,'+oy+'px)'; }
+  function fit(){ fw=frame.clientWidth; fh=frame.clientHeight; cover=Math.max(fw/nw,fh/nh); z=1; if(zoom)zoom.value=1;
+    var scale=cover*z; ox=(fw-nw*scale)/2; oy=(fh-nh*scale)/2; apply(); }
+  file.addEventListener('change',function(){ var f=file.files&&file.files[0]; if(!f)return;
+    var url=URL.createObjectURL(f);
+    img.onload=function(){ nw=img.naturalWidth; nh=img.naturalHeight; if(stage)stage.hidden=false; fit(); };
+    img.src=url; });
+  var drag=false,px=0,py=0;
+  frame.addEventListener('pointerdown',function(e){ if(!nh)return; drag=true; px=e.clientX; py=e.clientY; try{frame.setPointerCapture(e.pointerId);}catch(_){} });
+  frame.addEventListener('pointermove',function(e){ if(!drag)return; ox+=e.clientX-px; oy+=e.clientY-py; px=e.clientX; py=e.clientY; apply(); });
+  function end(e){ drag=false; try{frame.releasePointerCapture(e.pointerId);}catch(_){} }
+  frame.addEventListener('pointerup',end); frame.addEventListener('pointercancel',end);
+  if(zoom)zoom.addEventListener('input',function(){ if(!nh)return; var old=cover*z, cx=(-ox+fw/2)/old, cy=(-oy+fh/2)/old;
+    z=Number(zoom.value)||1; var ns=cover*z; ox=fw/2-cx*ns; oy=fh/2-cy*ns; apply(); });
+  window.addEventListener('resize',function(){ if(nh)apply(); });
+  form.addEventListener('submit',function(e){
+    if(!nh){ e.preventDefault(); alert('Pick a photo first.'); return; }
+    var scale=cover*z;
+    document.getElementById('bcx').value=Math.max(0,Math.round(-ox/scale));
+    document.getElementById('bcy').value=Math.max(0,Math.round(-oy/scale));
+    document.getElementById('bcw').value=Math.round(fw/scale);
+    document.getElementById('bch').value=Math.round(fh/scale);
+  });
+})();
+</script>`;
+
+export function bannerPage({ err = '', bannerVer = '0' } = {}) {
+  const errMsg = err === 'big' ? 'That image is too large (max 14 MB).'
+    : err === 'type' ? 'That file isn’t a supported image (JPG, PNG, or WebP).'
+    : err === 'crop' ? 'Couldn’t read the crop area — try again.'
+    : err ? 'Something went wrong processing the image. Try again.' : '';
+  return HEAD('Change banner — Adv Runs', '', { wall: false }) + header('<b>BANNER</b>admin', 'FRI') + `
+    <div class="rule"></div>
+    <span class="eyebrow">Check-in hero photo</span>
+    <h1>Change the banner</h1>
+    <p class="lead">Pick a photo, then <b>drag to position</b> and use the <b>slider to zoom</b>. The framed area is exactly what shows on the check-in page — a wide 3:1 banner.</p>
+    ${errMsg ? `<div class="notice bad">${errMsg}</div>` : ''}
+
+    <div class="subhead">Current</div>
+    <div class="curframe"><img src="/gym.jpg?v=${esc(String(bannerVer))}" alt="Current banner"></div>
+
+    <form method="POST" action="/admin/banner" enctype="multipart/form-data" id="bform" class="card rail" style="margin-top:14px">
+      <input type="hidden" name="cx" id="bcx"><input type="hidden" name="cy" id="bcy">
+      <input type="hidden" name="cw" id="bcw"><input type="hidden" name="ch" id="bch">
+      <label class="btn ghost" for="bfile" style="cursor:pointer">📷 Choose a photo</label>
+      <input type="file" id="bfile" name="photo" accept="image/*" hidden>
+      <div id="bstage" hidden style="margin-top:14px">
+        <div id="bframe" class="cropframe"><img id="bimg" alt="" draggable="false"></div>
+        <label style="margin-top:12px">Zoom</label>
+        <input type="range" id="bzoom" min="1" max="4" step="0.01" value="1" style="width:100%">
+        <div style="height:14px"></div>
+        <button class="btn" type="submit" id="bsave">Save banner</button>
+      </div>
+    </form>
+    ${bannerCropScript()}
+    <div class="foot" style="margin-top:24px"><a href="/checkin">Back to check-in</a></div>
   ` + FOOT;
 }
 

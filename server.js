@@ -21,7 +21,7 @@ import {
 import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap,
-  STICKERS, avatarUrlFor, mdToHtml, legalPage,
+  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -571,6 +571,18 @@ function writeChatVideo(buf, msgId, ext) {
   const fname = `${msgId}-${crypto.randomBytes(6).toString('hex')}.${ext}`;
   fs.writeFileSync(path.join(CHAT_MEDIA_DIR, fname), buf);
   return `/chat-media/${fname}`;
+}
+
+// ---- Check-in banner (host-uploaded, cropped in-app) ----------------------
+// The 3:1 hero photo on the check-in page. A host uploads a photo and frames it in the
+// browser (pan/zoom in a 3:1 window); the client sends the source-pixel crop rect and we
+// sharp-crop to the final 2320×774. BANNER_PATH is env-overridable (tests point elsewhere).
+const BANNER_PATH = process.env.BANNER_PATH || path.join(__dirname, 'public', 'gym.jpg');
+const uploadBanner = multer({ storage: multer.memoryStorage(), limits: { fileSize: 14 * 1024 * 1024, files: 1 } }).single('photo');
+// Cache-bust token = the banner file's mtime, so an upload busts the <img> the moment it's
+// saved (no restart, no manual version bump). Falls back to a constant if the file is absent.
+function bannerVersion() {
+  try { return String(Math.floor(fs.statSync(BANNER_PATH).mtimeMs)); } catch { return '0'; }
 }
 
 // Delete a stored chat photo by its public path. Only /chat-media/<safe-name> paths are
@@ -1498,7 +1510,7 @@ app.get('/checkin', requireLogin, (req, res) => {
     iAmTeam, iAmRegular, iOptedOut, iAutoRenew,
     viewerIsAdmin, canOperate, canSeeRoster,
     suspended: !!(a && a.suspended), suspendReason: (a && a.suspend_reason) || '',
-    myConfirmed, msg: req.query.msg || '',
+    myConfirmed, msg: req.query.msg || '', bannerVer: bannerVersion(),
     announcement: latestAnnouncement(),
     // roster goes to anyone who can see it; controls only to operators
     inPlayers: canSeeRoster ? inPlayers : [],
@@ -2394,6 +2406,42 @@ app.post('/admin/settings', requireAdmin, (req, res) => {
   reloadRunSettings();
   audit(req.userEmail, 'admin', 'settings:caps', `cap=${CAP} wl=${WAITLIST_CAP} prereg=${PREREG_CAP}`);
   res.redirect('/admin?msg=' + encodeURIComponent('Run settings saved'));
+});
+
+// Check-in banner tool (operators). GET renders the pick + pan/zoom cropper; POST takes the
+// photo + the source-pixel crop rect the browser computed and writes the final 2320×774 JPEG.
+app.get('/admin/banner', requireApprover, (req, res) => {
+  res.send(bannerPage({ err: req.query.err || '', bannerVer: bannerVersion() }));
+});
+app.post('/admin/banner', requireApprover, (req, res) => {
+  uploadBanner(req, res, async (err) => {
+    if (err) return res.redirect('/admin/banner?err=' + (err.code === 'LIMIT_FILE_SIZE' ? 'big' : 'bad'));
+    const file = req.file;
+    if (!file || !file.buffer || !file.buffer.length) return res.redirect('/admin/banner?err=empty');
+    if (!sniffImage(file.buffer)) return res.redirect('/admin/banner?err=type'); // magic-byte gate
+    try {
+      // The browser cropper works in EXIF-ORIENTED pixels (what it displays), so compute the
+      // oriented dimensions to clamp against, then rotate() before extract so coords line up.
+      const m = await sharp(file.buffer).metadata();
+      const oriented = (m.orientation || 1) >= 5;
+      const W = oriented ? m.height : m.width, H = oriented ? m.width : m.height;
+      let left = Math.round(Number(req.body.cx)), top = Math.round(Number(req.body.cy));
+      let width = Math.round(Number(req.body.cw)), height = Math.round(Number(req.body.ch));
+      if (!(W > 0 && H > 0 && width > 0 && height > 0)) return res.redirect('/admin/banner?err=crop');
+      left = Math.max(0, Math.min(left, W - 1)); top = Math.max(0, Math.min(top, H - 1));
+      width = Math.max(1, Math.min(width, W - left)); height = Math.max(1, Math.min(height, H - top));
+      const out = await sharp(file.buffer, { failOn: 'error' }).rotate()
+        .extract({ left, top, width, height })
+        .resize(2320, 774, { fit: 'fill' })
+        .jpeg({ quality: 84, mozjpeg: true }).toBuffer();
+      fs.writeFileSync(BANNER_PATH, out);
+      audit(req.userEmail, req.actorRole, 'banner:update', `${width}x${height}`);
+      return res.redirect('/checkin');
+    } catch (e) {
+      console.error(`[banner] crop failed for ${req.userEmail}: ${e.message}`);
+      return res.redirect('/admin/banner?err=bad');
+    }
+  });
 });
 
 // An approver casts (or changes) their vote. Unanimous approve → approved;
