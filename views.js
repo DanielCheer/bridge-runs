@@ -212,7 +212,10 @@ window.__pollStop=function(){window.__pollPage=null;window.__pollOnChange=null;}
   // chat messages / check-ins could have landed since the pointerdown that warmed it)
   function warm(href){ if(!href||!window.fetch)return;
     var e=cache[href]; if(e&&Date.now()-e.t<WARM_TTL)return; // fresh prewarm already in flight
-    try{ cache[href]={t:Date.now(),p:fetch(href,{credentials:'same-origin'}).then(function(r){return r.text().then(function(t){return {ok:r.ok,url:r.url,redirected:r.redirected,text:t};});})}; }catch(e){} }
+    // X-Prewarm tells read-side-effect GETs (/chat) NOT to clear unread on a mere pointerdown
+    // — the actual landing fires a /chat/seen beacon instead. Otherwise a touch that turns into
+    // a scroll would wipe the unread badge for messages you never saw.
+    try{ cache[href]={t:Date.now(),p:fetch(href,{credentials:'same-origin',headers:{'X-Prewarm':'1'}}).then(function(r){return r.text().then(function(t){return {ok:r.ok,url:r.url,redirected:r.redirected,text:t};});})}; }catch(e){} }
   function hard(href){ try{window.location.href=href;}catch(e){} }
   function paint(res,href,push,type){
     // Plain instant swap — NO View Transition. iOS Safari leaves stuck ::view-transition
@@ -236,6 +239,9 @@ window.__pollStop=function(){window.__pollPage=null;window.__pollOnChange=null;}
       if(!res||typeof res.text!=='string'){hard(href);return;}
       if(res.redirected&&res.url){var u;try{u=new URL(res.url);}catch(e){u=null;} if(u&&u.pathname!==abs.pathname){hard(res.url);return;}}
       paint(res,href,push,type);
+      // Actually LANDED on chat → now mark it read (the prewarm skipped it). Beacon =
+      // fire-and-forget; the badge clears on the next poll tick.
+      if(abs.pathname==='/chat'&&navigator.sendBeacon){try{navigator.sendBeacon('/chat/seen');}catch(e){}}
     }).catch(function(){hard(href);});
   }
   document.addEventListener('pointerdown',function(e){

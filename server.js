@@ -1964,7 +1964,9 @@ app.get('/chat', requireLogin, (req, res) => {
   const chatData = loadGroupChat(me);
   const isMod = viewerIsAdmin || !!(a && a.is_host);
   const canPin = isMod || !!(a && a.is_team);   // team + admin/host can pin
-  markGroupRead(me);
+  // A router PREWARM (pointerdown) must NOT clear unread — only a real landing does, via the
+  // /chat/seen beacon. A normal full-page load (no prewarm header) still marks read here.
+  if (req.headers['x-prewarm'] !== '1') markGroupRead(me);
   res.send(chatPage({
     me,
     chat: { me, ...chatData, isMod, canPin, err: req.query.err || '' },
@@ -1975,6 +1977,16 @@ app.get('/chat', requireLogin, (req, res) => {
     groupMention: 0,  // mentions cleared on open too
     ann: annPanel(me),
   }));
+});
+
+// Mark Run Chat read — fired as a beacon by the client router when it actually LANDS on
+// /chat (a router prewarm skips the mark-read so a mere pointerdown/scroll can't clear the
+// unread badge). No body; requireLogin + player gate, then move the read high-water mark.
+app.post('/chat/seen', requireLogin, (req, res) => {
+  const gate = requirePlayer(req, res);
+  if (!gate) return;
+  markGroupRead(req.userEmail);
+  res.status(204).end();
 });
 
 // Scroll-back: return an HTML fragment of the 200 messages older than ?before=<id>
