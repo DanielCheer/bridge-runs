@@ -172,14 +172,15 @@ function sendPush(emails, { title, body, url, tag }) {
 // The viewer's panel list: recent announcements newest-first, EXCLUDING any this viewer
 // has personally dismissed (swipe-to-clear). The dismiss is per-user — the row stays in
 // `announcements` and in everyone else's panel; only this viewer's copy is hidden.
-function announcementsForPanel(email, limit = 20) {
-  return db.prepare(`
+const stmtAnnPanel = db.prepare(`
     SELECT a.id, a.body, a.author, a.at,
            COALESCE(ap.full_name, a.author) AS authorName
     FROM announcements a
     LEFT JOIN applicants ap ON ap.email = a.author
     WHERE a.id NOT IN (SELECT announcement_id FROM announcement_dismissals WHERE email = ?)
-    ORDER BY a.id DESC LIMIT ?`).all(String(email || '').toLowerCase(), limit);
+    ORDER BY a.id DESC LIMIT ?`); // hoisted — runs on every authed page render (node:sqlite has no stmt cache)
+function announcementsForPanel(email, limit = 20) {
+  return stmtAnnPanel.all(String(email || '').toLowerCase(), limit);
 }
 const stmtAnnLastSeen = db.prepare('SELECT last_seen_id FROM announcement_reads WHERE email = ?');
 // Count of announcements newer than the viewer's last-seen id that they have NOT
@@ -237,7 +238,14 @@ function recomputeStatus(id) {
   else if (approves >= VOTE_THRESHOLD) status = 'approved';
   if (status !== app.status) {
     db.prepare('UPDATE applicants SET status = ? WHERE id = ?').run(status, id);
-    if (status === 'rejected') db.prepare('DELETE FROM checkins WHERE email = ?').run(app.email);
+    if (status === 'rejected') {
+      // Dropping a rejected player off the floor frees a slot — offer it onward (capture
+      // the offeree BEFORE the delete) instead of silently auto-promoting the waitlist.
+      const runDate = nextRunDate();
+      const offeree = offereeForFloorLeave(runDate, app.email);
+      db.prepare('DELETE FROM checkins WHERE email = ?').run(app.email);
+      if (offeree) createOffer(runDate, offeree, null);
+    }
   }
   return status;
 }
@@ -287,7 +295,7 @@ app.use((req, res, next) => {
 // when AVATARS_DIR is a temp dir). Created on boot so the first upload never ENOENTs.
 const AVATARS_DIR = process.env.AVATARS_DIR || path.join(__dirname, 'public', 'avatars');
 fs.mkdirSync(AVATARS_DIR, { recursive: true });
-app.use('/avatars', express.static(AVATARS_DIR, { maxAge: '7d', immutable: false }));
+app.use('/avatars', express.static(AVATARS_DIR, { maxAge: '365d', immutable: true })); // content-addressed name + ?v= bust → safe to pin
 // Chat photo storage. Same override pattern as avatars: CHAT_MEDIA_DIR points it
 // elsewhere in test/other envs and is mounted at /chat-media BEFORE the public static
 // so an override wins, yet a missing file falls through. Created on boot so the first
@@ -295,7 +303,7 @@ app.use('/avatars', express.static(AVATARS_DIR, { maxAge: '7d', immutable: false
 // public mount below (no per-file DB — validated by name against STICKERS on send).
 const CHAT_MEDIA_DIR = process.env.CHAT_MEDIA_DIR || path.join(__dirname, 'public', 'chat-media');
 fs.mkdirSync(CHAT_MEDIA_DIR, { recursive: true });
-app.use('/chat-media', express.static(CHAT_MEDIA_DIR, { maxAge: '7d', immutable: false }));
+app.use('/chat-media', express.static(CHAT_MEDIA_DIR, { maxAge: '365d', immutable: true })); // <msgid>-<hex> names never rewritten → safe to pin
 // The service worker must never be pinned by HTTP cache (it controls the whole app),
 // so serve it no-cache from the same public dir, ahead of the 7-day static mount.
 app.get('/sw.js', (req, res) => {
@@ -782,12 +790,13 @@ function notifyMentions(fromEmail, body, mentions) {
 // "You were mentioned" count: UNREAD group messages (newer than this viewer's read
 // high-water mark, not their own) whose stored mentions include their applicant id.
 // Reuses the group_reads high-water mark that groupUnread already scopes against.
-function groupMentionUnread(email, applicantId) {
-  if (!email || !applicantId) return 0;
-  const rows = db.prepare(`
+const stmtGroupMentions = db.prepare(`
     SELECT mentions FROM group_messages
     WHERE from_email != ? AND mentions IS NOT NULL AND mentions != ''
-      AND created_at > COALESCE((SELECT last_read_at FROM group_reads WHERE email = ?), '')`).all(email, email);
+      AND created_at > COALESCE((SELECT last_read_at FROM group_reads WHERE email = ?), '')`); // hoisted — runs on every /poll tick
+function groupMentionUnread(email, applicantId) {
+  if (!email || !applicantId) return 0;
+  const rows = stmtGroupMentions.all(email, email);
   const idStr = String(applicantId);
   let n = 0;
   for (const r of rows) if (String(r.mentions).split(',').includes(idStr)) n++;
@@ -1257,6 +1266,7 @@ const stmtArchiveAttendance = db.prepare(`
 // Hot-path lookups rendered on the check-in page (and reused by the join guard) —
 // prepared once at module scope (node:sqlite has no statement cache).
 const stmtOptedOut = db.prepare('SELECT 1 FROM regular_optout WHERE run_date = ? AND email = ?');
+const stmtMyConfirmed = db.prepare('SELECT confirmed_at FROM checkins WHERE run_date = ? AND email = ?'); // hoisted — hottest page
 const stmtPreregCount = db.prepare(`SELECT COUNT(*) r FROM checkins c
     JOIN applicants ap ON ap.email = c.email
     WHERE c.run_date = ? AND (ap.is_regular = 1 OR ap.is_team = 1)`);
@@ -1491,7 +1501,7 @@ app.get('/checkin', requireLogin, (req, res) => {
   // pre-registration cap reached (team + regulars) — only relevant while closed
   const preregCount = stmtPreregCount.get(runDate).r;
   const regularSlotsFull = !isOpen && iAmRegular && !iAmTeam && preregCount >= PREREG_CAP && myState === 'out';
-  const myConfirmed = myState === 'in' && !!(db.prepare('SELECT confirmed_at FROM checkins WHERE run_date = ? AND email = ?').get(runDate, email)?.confirmed_at);
+  const myConfirmed = myState === 'in' && !!(stmtMyConfirmed.get(runDate, email)?.confirmed_at);
 
   res.send(checkinPage({
     email, status,
@@ -1758,6 +1768,7 @@ app.post('/messages/react', requireLogin, (req, res) => {
   const gate = requirePlayer(req, res);
   if (!gate) return;
   if (!gate.a) return res.redirect('/status');
+  if (mutedOut(gate, res, { back: '/messages' })) return; // suspended = muted
   const me = req.userEmail;
   const messageId = Number(req.body.message_id) || 0;
   const msg = db.prepare('SELECT id, from_email, to_email FROM messages WHERE id = ?').get(messageId);
@@ -1804,7 +1815,7 @@ app.get('/messages/:id', requireLogin, (req, res) => {
       ORDER BY id DESC LIMIT 500
     ) ORDER BY id ASC`).all(me, p.email, p.email, me);
   const reactions = new Map();  // message_id -> [{emoji,count,mine}]
-  const parents = new Map();    // parent id -> {from_email, body, photo_path}
+  const parents = new Map();    // parent id -> {from_email, body, image}
   if (msgs.length) {
     const ids = msgs.map(m => m.id);
     const ph = ids.map(() => '?').join(',');
@@ -1819,7 +1830,7 @@ app.get('/messages/:id', requireLogin, (req, res) => {
     const replyIds = [...new Set(msgs.map(m => m.reply_to).filter(Boolean))];
     if (replyIds.length) {
       const ph3 = replyIds.map(() => '?').join(',');
-      for (const pr of db.prepare(`SELECT id, from_email, body, photo_path FROM messages WHERE id IN (${ph3})`).all(...replyIds))
+      for (const pr of db.prepare(`SELECT id, from_email, body, image FROM messages WHERE id IN (${ph3})`).all(...replyIds))
         parents.set(pr.id, pr);
     }
   }
@@ -1863,14 +1874,16 @@ app.post('/messages/:id', requireLogin, (req, res) => {
     if (file && file.buffer && file.buffer.length) {
       if (rateLimited('msg-media', me, 15, 10 * 60 * 1000)) return res.redirect(dest + '?err=slow');
       if (!sniffImage(file.buffer)) return res.redirect(dest + '?err=type'); // magic-byte gate
+      let msgId = 0;
       try {
         const jpeg = await processChatImage(file.buffer);                    // process BEFORE insert
         const info = db.prepare('INSERT INTO messages (from_email, to_email, body, reply_to) VALUES (?,?,?,?)')
           .run(me, p.email, body, replyTo || null);
-        const id = info.lastInsertRowid;
-        const imgPath = writeChatImage(jpeg, id);
-        db.prepare('UPDATE messages SET image = ? WHERE id = ?').run(imgPath, id);
+        msgId = info.lastInsertRowid;
+        const imgPath = writeChatImage(jpeg, msgId);
+        db.prepare('UPDATE messages SET image = ? WHERE id = ?').run(imgPath, msgId);
       } catch (e) {
+        if (msgId) db.prepare('DELETE FROM messages WHERE id = ?').run(msgId); // no half-sent (caption-only) row
         console.error(`[dm] image process failed for ${me}: ${e.message}`);
         return res.redirect(dest + '?err=bad');
       }
@@ -1982,15 +1995,17 @@ app.post('/chat', requireLogin, (req, res) => {
     if (file && file.buffer && file.buffer.length) {
       if (rateLimited('chat-media', me, 15, 10 * 60 * 1000)) return res.redirect('/chat?err=slow');
       if (!sniffImage(file.buffer)) return res.redirect('/chat?err=type'); // magic-byte gate
+      let msgId = 0;
       try {
         const jpeg = await processChatImage(file.buffer);                  // process BEFORE insert
         const info = db.prepare('INSERT INTO group_messages (from_email, body, reply_to, mentions) VALUES (?,?,?,?)')
           .run(me, body, replyTo || null, mentions);
-        const id = info.lastInsertRowid;
-        const imgPath = writeChatImage(jpeg, id);
-        db.prepare('UPDATE group_messages SET image = ? WHERE id = ?').run(imgPath, id);
+        msgId = info.lastInsertRowid;
+        const imgPath = writeChatImage(jpeg, msgId);
+        db.prepare('UPDATE group_messages SET image = ? WHERE id = ?').run(imgPath, msgId);
         notifyMentions(me, body, mentions);
       } catch (e) {
+        if (msgId) db.prepare('DELETE FROM group_messages WHERE id = ?').run(msgId); // no half-sent (caption-only) row
         console.error(`[chat] image process failed for ${me}: ${e.message}`);
         return res.redirect('/chat?err=bad');
       }
@@ -2011,6 +2026,7 @@ app.post('/chat', requireLogin, (req, res) => {
 app.post('/chat/react', requireLogin, (req, res) => {
   const gate = requirePlayer(req, res);
   if (!gate) return;
+  if (mutedOut(gate, res, { back: '/chat' })) return; // suspended = muted
   const me = req.userEmail;
   const messageId = Number(req.body.message_id) || 0;
   if (!db.prepare('SELECT 1 FROM group_messages WHERE id = ?').get(messageId)) return res.redirect('/chat');
@@ -2051,6 +2067,7 @@ app.post('/chat/delete', requireLogin, (req, res) => {
 app.post('/chat/pin', requireLogin, (req, res) => {
   const gate = requirePlayer(req, res);
   if (!gate) return;
+  if (mutedOut(gate, res, { back: '/chat' })) return; // suspended = muted
   const a = gate.a;
   const canPin = gate.viewerIsAdmin || !!(a && (a.is_host || a.is_team));
   if (!canPin) return res.redirect('/chat');
@@ -2086,8 +2103,14 @@ app.post('/chat/voice', requireLogin, (req, res) => {
     const info = db.prepare('INSERT INTO group_messages (from_email, body, reply_to) VALUES (?,?,?)')
       .run(me, '', replyTo || null);
     const id = info.lastInsertRowid;
-    const apath = writeChatAudio(file.buffer, id, ext);
-    db.prepare('UPDATE group_messages SET audio = ?, audio_dur = ? WHERE id = ?').run(apath, dur, id);
+    try {
+      const apath = writeChatAudio(file.buffer, id, ext);
+      db.prepare('UPDATE group_messages SET audio = ?, audio_dur = ? WHERE id = ?').run(apath, dur, id);
+    } catch (e) {
+      db.prepare('DELETE FROM group_messages WHERE id = ?').run(id); // no ghost row on disk failure
+      console.error(`[chat] voice write failed for ${me}: ${e.message}`);
+      return res.status(500).json({ err: 'bad' });
+    }
     res.json({ ok: 1 });
   });
 });
@@ -2116,8 +2139,14 @@ app.post('/chat/video', requireLogin, (req, res) => {
     const info = db.prepare('INSERT INTO group_messages (from_email, body, reply_to) VALUES (?,?,?)')
       .run(me, '', replyTo || null);
     const id = info.lastInsertRowid;
-    const vpath = writeChatVideo(file.buffer, id, ext);
-    db.prepare('UPDATE group_messages SET video = ?, video_dur = ? WHERE id = ?').run(vpath, dur, id);
+    try {
+      const vpath = writeChatVideo(file.buffer, id, ext);
+      db.prepare('UPDATE group_messages SET video = ?, video_dur = ? WHERE id = ?').run(vpath, dur, id);
+    } catch (e) {
+      db.prepare('DELETE FROM group_messages WHERE id = ?').run(id); // no ghost row on disk failure
+      console.error(`[chat] video write failed for ${me}: ${e.message}`);
+      return res.status(500).json({ err: 'bad' });
+    }
     res.json({ ok: 1 });
   });
 });
@@ -2172,7 +2201,7 @@ app.get('/checkin/claim/:token', (req, res) => {
   db.prepare('UPDATE checkins SET offered_at = NULL, claim_token = NULL WHERE id = ?').run(row.id);
   audit(row.email, 'player', 'offer:claim', row.email);
   setSession(res, row.email);
-  return res.send(claimResultPage({ ok: true, runLabel: runLabelFor(row.run_date), runDate: row.run_date }));
+  return res.send(claimResultPage({ ok: true, runLabel: runLabelFor(row.run_date), runDate: row.run_date, startLabel: runStartLabel(row.run_date) }));
 });
 
 app.post('/checkin/leave', requireLogin, (req, res) => {
@@ -2256,7 +2285,7 @@ function autoJoinTeam(runDate) {
   // is bumped to waitlist rather than a team member. Team runs the run.
   const team = db.prepare(
     `SELECT email, full_name FROM applicants
-     WHERE is_team = 1 AND status = 'approved' AND auto_renew = 1`).all();
+     WHERE is_team = 1 AND status = 'approved' AND auto_renew = 1 AND COALESCE(suspended,0) = 0`).all();
   const optedOut = db.prepare('SELECT 1 FROM regular_optout WHERE run_date = ? AND email = ?');
   const insert = db.prepare('INSERT OR IGNORE INTO checkins (run_date,email,name,sort_order) VALUES (?,?,?,?)');
   let { m } = db.prepare('SELECT MIN(sort_order) m FROM checkins WHERE run_date = ?').get(runDate);
@@ -2313,8 +2342,12 @@ app.post('/checkin/confirmping', requireApprover, (req, res) => {
 // A floor player confirms they're coming (run-day ping response). Idempotent.
 app.post('/checkin/confirm', requireLogin, (req, res) => {
   const runDate = nextRunDate();
-  db.prepare("UPDATE checkins SET confirmed_at = datetime('now') WHERE run_date = ? AND email = ? AND confirmed_at IS NULL")
-    .run(runDate, req.userEmail);
+  // Only real floor players confirm — a waitlister shouldn't pre-mark ✓ and slide on later.
+  const part = partitionRun(runDate);
+  if (part.floorReal.some(p => p.email === req.userEmail)) {
+    db.prepare("UPDATE checkins SET confirmed_at = datetime('now') WHERE run_date = ? AND email = ? AND confirmed_at IS NULL")
+      .run(runDate, req.userEmail);
+  }
   res.redirect('/checkin');
 });
 
@@ -2331,6 +2364,8 @@ app.post('/checkin/optout', requireLogin, (req, res) => {
 });
 app.post('/checkin/optin', requireLogin, (req, res) => {
   const runDate = nextRunDate();
+  const me = applicantByEmail(req.userEmail);
+  if (me && me.suspended) return res.redirect('/checkin'); // suspended → can't re-seat (matches /checkin/join)
   db.prepare('DELETE FROM regular_optout WHERE run_date = ? AND email = ?').run(runDate, req.userEmail);
   // WIRING (autoJoinTeam is now rollover-gated in ensureWeek, not per-view): a team
   // member with auto-renew opting back in — even while CLOSED — must be re-seated
@@ -2670,7 +2705,11 @@ app.get('/admin/people/export.csv', requireAdmin, (req, res) => {
     `SELECT full_name, email, phone, status, is_team, is_regular, is_host, position,
             waiver_ok, email_optout, created_at
      FROM applicants ORDER BY full_name COLLATE NOCASE ASC`).all();
-  const cell = (v) => { const s = v == null ? '' : String(v); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const cell = (v) => {
+    let s = v == null ? '' : String(v);
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;                 // neutralize spreadsheet formula injection (a name like =HYPERLINK(...))
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
   const roleOf = (a) => a.is_host ? 'Host' : a.is_team ? 'Team' : a.is_regular ? 'Core' : '';
   const lines = [['Name', 'Email', 'Phone', 'Status', 'Role', 'Position', 'Waiver', 'Email opt-out', 'Applied'].join(',')];
   for (const a of rows) lines.push([
@@ -2746,6 +2785,11 @@ app.post('/admin/people/edit', requireAdmin, (req, res) => {
   const phone = (req.body.phone || '').trim();
   const cur = db.prepare('SELECT email FROM applicants WHERE id = ?').get(id);
   if (!cur) return res.redirect('/admin/people');
+  // Validate before writing — a blank name/phone or an invalid email would otherwise be
+  // saved AND (if email changed) rekey every per-user row onto '' via rekeyEmail. Mirrors
+  // the self-service /profile validation.
+  if (!full_name || !phone || !email.includes('@'))
+    return res.redirect('/admin/people?msg=' + encodeURIComponent('Name, phone, and a valid email are required.'));
   // if email changed, make sure it doesn't collide
   if (email !== cur.email) {
     const clash = db.prepare('SELECT 1 FROM applicants WHERE email = ? AND id != ?').get(email, id);
@@ -2790,9 +2834,13 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
   const { id } = req.body;
   const a = db.prepare('SELECT email, full_name, avatar FROM applicants WHERE id = ?').get(id);
   if (a) {
+    // If they held a floor spot for the current run, offer it onward (capture before delete).
+    const runDate = nextRunDate();
+    const offeree = offereeForFloorLeave(runDate, a.email);
     db.prepare('DELETE FROM applicants WHERE id = ?').run(id);
     if (a.avatar) safeUnlinkAvatar(a.avatar); // delete their photo file on hard-delete
     db.prepare('DELETE FROM checkins WHERE email = ?').run(a.email);
+    if (offeree) createOffer(runDate, offeree, req);
     db.prepare('DELETE FROM votes WHERE applicant_id = ?').run(id);
     // hard-delete is the ONLY path that removes attendance history
     db.prepare('DELETE FROM attendance WHERE email = ?').run(a.email);

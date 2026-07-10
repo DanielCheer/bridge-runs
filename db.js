@@ -424,6 +424,10 @@ function rekeyEmail(oldEmail, newEmail) {
     db.prepare('UPDATE announcement_reads    SET email=?       WHERE email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE announcement_dismissals SET email=?     WHERE email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE push_subscriptions    SET email=?       WHERE email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE announcements         SET author=?      WHERE author=?').run(newEmail, oldEmail); // "posted by" resolves to their name
+    // Old-address sign-in tokens are INVALIDATED, not carried — they were emailed to an
+    // address the person may no longer control, so a lingering valid link/code is a risk.
+    db.prepare('UPDATE login_tokens SET used=1 WHERE email=? AND used=0').run(oldEmail);
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');

@@ -640,6 +640,7 @@ const SEND_ERRS = {
   big: 'That photo’s too large (max 10 MB). Pick a smaller one.',
   type: 'That file isn’t a supported image (JPEG, PNG, or WebP).',
   bad: 'Couldn’t send that photo — try again.',
+  suspended: 'Your account is paused — you can read but not post right now. Reach out to the host.',
 };
 const sendErrNotice = (err) => err && SEND_ERRS[err]
   ? `<div class="notice warn ai">${esc(SEND_ERRS[err])}</div>` : '';
@@ -1987,13 +1988,13 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
 // ---------- CLAIM RESULT (waitlist offer landing page) ----------
 // Shown after tapping a spot-offer claim link (from the email or the in-app banner).
 // ok=true → they're in for Friday; ok=false → the offer expired / was already claimed.
-export function claimResultPage({ ok = false, runLabel = '', runDate = '' } = {}) {
+export function claimResultPage({ ok = false, runLabel = '', runDate = '', startLabel = '7 PM' } = {}) {
   if (ok) {
     return HEAD("You're in — Adv Runs", '', { wall: false }) + header('', wdayShort(runDate)) + `
       <div class="rule"></div>
       <span class="eyebrow">Spot claimed</span>
       <h1>You're in for ${wdayFull(runDate)} ✓</h1>
-      <p class="lead">Your spot's locked in${runLabel ? ` for <b>${esc(runLabel)}</b>` : ''}. See you on the floor — 7:00 PM, enter at the back.</p>
+      <p class="lead">Your spot's locked in${runLabel ? ` for <b>${esc(runLabel)}</b>` : ''}. See you on the floor — ${esc(startLabel)}, enter at the back.</p>
       <a class="btn" href="/checkin">Go to check-in →</a>
     ` + FOOT;
   }
@@ -2938,7 +2939,7 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '7–10 
     <summary><span class="an">${esc(a.full_name)}${a.is_host ? ' <span class="tag host">★ Host</span>' : ''}${a.is_team ? ' <span class="tag team">◆ Team</span>' : ''}${a.is_regular ? ' <span class="tag reg">★ Core</span>' : ''}</span> ${pill(a.status)}</summary>
     <div class="ae" style="margin-top:12px">${esc(a.email)} · ${esc(a.phone)}</div>
     <div class="ad"><b>${esc(a.experience)}</b>${a.where_played ? ' — ' + esc(a.where_played) : ''}<br>
-      Waiver: ${a.waiver_ok ? '✓ confirmed' : '✗ not confirmed'} · applied ${esc(a.created_at)}</div>
+      Waiver: ${a.waiver_ok ? '✓ confirmed' : '✗ not confirmed'} · applied ${esc(fmtWhen(a.created_at))}</div>
     ${decisionBlock}
   </details>`;
   }).join('');

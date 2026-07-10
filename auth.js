@@ -1,6 +1,12 @@
 // auth.js — signed-cookie sessions + route guards.
 import crypto from 'crypto';
 
+// Fail loud if the session secret is missing: a public/known secret lets anyone forge an
+// admin cookie. Better a hard boot failure than a silent takeover risk. The only escape
+// hatch is an explicit dev opt-in (ALLOW_INSECURE_SESSION=1) for throwaway local runs.
+if (!process.env.SESSION_SECRET && process.env.ALLOW_INSECURE_SESSION !== '1') {
+  throw new Error('SESSION_SECRET is required (set it in .env). Set ALLOW_INSECURE_SESSION=1 only for throwaway local dev.');
+}
 const SECRET = process.env.SESSION_SECRET || 'CHANGE_ME_dev_secret_do_not_ship';
 const COOKIE = 'bridge_session';
 
