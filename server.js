@@ -1148,8 +1148,10 @@ app.post('/invite/:token', async (req, res) => {
         console.error(`[invite] sign-in link send FAILED for ${email}: ${err.message}`));
     });
   } else {
-    const result = await sendMagicLink(email, link, code);
-    if (result.dev) { devLink = link; devCode = code; }
+    try {
+      const result = await sendMagicLink(email, link, code);
+      if (result.dev) { devLink = link; devCode = code; }
+    } catch (e) { console.error(`[invite] dev-mail send failed for ${email}: ${e.message}`); }
   }
   return res.send(invitePage({ checkEmail: true, email, devLink, devCode }));
 });
@@ -2323,6 +2325,9 @@ app.post('/checkin/guest', requireApprover, (req, res) => {
   const runDate = nextRunDate();
   const name = (req.body.name || '').trim().slice(0, 60);
   if (name) {
+    // Double-tap guard: a native form re-post within seconds must not add a 2nd identical guest.
+    const dup = db.prepare("SELECT 1 FROM checkins WHERE run_date=? AND name=? AND created_at > datetime('now','-5 seconds')").get(runDate, name + ' (guest)');
+    if (dup) return res.redirect('/checkin');
     const { n } = db.prepare('SELECT COUNT(*) n FROM checkins WHERE run_date=?').get(runDate);
     if (n < TOTAL_CAP) {
       const email = `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}@guest.local`;
@@ -2761,14 +2766,16 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
 // Share page — a big scannable QR + tap-able link for the application form,
 // to show/hand out at the Monday rec runs. QR is generated live from PUBLIC_URL
 // so it never points at a stale address.
-app.get('/admin/share', requireAdmin, async (req, res) => {
-  const base = process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
-  const applyUrl = base + '/';
-  const [applyQr, loginQr] = await Promise.all([
-    QRCode.toString(applyUrl, { type: 'svg', margin: 1, color: { dark: '#183B38', light: '#ffffff' } }),
-    QRCode.toString(base + '/login', { type: 'svg', margin: 1, color: { dark: '#183B38', light: '#ffffff' } }),
-  ]);
-  res.send(sharePage({ applyUrl, applyQr, signInUrl: base + '/login', loginQr, ann: annPanel(req.userEmail) }));
+app.get('/admin/share', requireAdmin, async (req, res, next) => {
+  try {
+    const base = process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
+    const applyUrl = base + '/';
+    const [applyQr, loginQr] = await Promise.all([
+      QRCode.toString(applyUrl, { type: 'svg', margin: 1, color: { dark: '#183B38', light: '#ffffff' } }),
+      QRCode.toString(base + '/login', { type: 'svg', margin: 1, color: { dark: '#183B38', light: '#ffffff' } }),
+    ]);
+    res.send(sharePage({ applyUrl, applyQr, signInUrl: base + '/login', loginQr, ann: annPanel(req.userEmail) }));
+  } catch (e) { next(e); } // QR failure must not take the process down (Express 4 won't catch async throws)
 });
 
 // ---------- PEOPLE MANAGEMENT (admin-only) ----------
@@ -3034,6 +3041,19 @@ setInterval(() => {
     autoRunState();
   } catch (e) { console.error(`[interval] rollover/expiry FAILED: ${e.message}`); }
 }, 60000).unref();
+
+// Terminal error handler — a sync throw (or a forwarded async reject via next(e)) in any route
+// lands here with a 500 instead of a hung socket. Must be the LAST app.use (4-arg signature).
+app.use((err, req, res, next) => {
+  console.error(`[route-error] ${req.method} ${req.originalUrl}: ${(err && err.stack) || err}`);
+  if (res.headersSent) return next(err);
+  res.status(500).send('Something went wrong on our end. Please try again in a moment.');
+});
+// Last resort: a stray unhandled promise rejection must NOT exit the process (Node's default),
+// which would drop check-in for everyone mid-run. Log it and keep serving.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', (reason && reason.stack) || reason);
+});
 
 app.listen(PORT, () => {
   console.log(`\nThe Bridge Adv Runs → http://localhost:${PORT}`);

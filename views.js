@@ -1809,7 +1809,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
   const addGuest = canOperate
     ? `<details class="hguest">
         <summary>+ Guest</summary>
-        <form method="POST" action="/checkin/guest">
+        <form method="POST" action="/checkin/guest" onsubmit="var b=this.querySelector('button');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Adding…';">
           <input name="name" required maxlength="60" placeholder="Guest name — last-minute add">
           <div style="height:8px"></div>
           <button class="btn sm" type="submit">Add guest to the run</button>
@@ -1985,7 +1985,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
       // re-acquires here; iOS auto-releases on background, hence the visibility hook.
       window.__wlSync=function(){
         if(!('wakeLock' in navigator))return;
-        var want=location.pathname.indexOf('/checkin')===0&&document.visibilityState==='visible';
+        var want=${canOperate ? 'true' : 'false'}&&location.pathname.indexOf('/checkin')===0&&document.visibilityState==='visible';
         if(want&&!window.__wl){navigator.wakeLock.request('screen').then(function(s){window.__wl=s;s.addEventListener('release',function(){window.__wl=null;});}).catch(function(){});}
         else if(!want&&window.__wl){try{window.__wl.release();}catch(e){} window.__wl=null;}
       };
