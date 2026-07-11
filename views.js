@@ -2112,8 +2112,9 @@ export function profilePage({ p, stats, isSelf = false, canContact = false, runD
     ? `<div class="contact"><div class="ck">Contact</div><div class="cv">${esc(p.full_name)}<br><a href="tel:${esc(p.phone)}">${esc(p.phone)}</a><br><a href="mailto:${esc(p.email)}">${esc(p.email)}</a></div></div>`
     : '';
   const prowBtns = [];
-  // Phase 2: host contact moves in-app (shown to everyone, not just operators).
-  if (p.is_host && !isSelf) prowBtns.push(`<a class="btn primary" href="/messages/${p.id}">Message the host</a>`);
+  // Message any approved player in-app (player-to-player DMs). Host keeps its own wording.
+  if (!isSelf && p.status === 'approved' && !/@guest\.local$/.test(p.email))
+    prowBtns.push(`<a class="btn primary" href="/messages/${p.id}">Message${p.is_host ? ' the host' : ' ' + esc((p.full_name || '').split(' ')[0])}</a>`);
   if (canContact) prowBtns.push(`<a class="btn ghost" href="tel:${esc(p.phone)}">Call</a>`);
   if (canContact && !p.is_host) prowBtns.push(`<a class="btn ghost" href="sms:${esc(p.phone)}">Text</a>`);
   if (isSelf) prowBtns.push(`<a class="btn ghost" href="/profile">Edit profile</a>`);
@@ -2230,16 +2231,14 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
         : `<p class="tally-note" style="margin:0 0 8px">Something come up? Cancel this week's run — players get a "run cancelled" notification and check-in is blocked. (Only this week; next week is unaffected.)</p>
            <form method="POST" action="/admin/run/cancel" style="margin:0" onsubmit="return confirm('Cancel this week\\'s run? Everyone will be notified it\\'s off.');"><input type="hidden" name="on" value="1"><button class="btn leave sm" type="submit">🚫 Cancel this week's run</button></form>`}
     </details>` : '';
-  // Host-only: the DM inbox (players who messaged the host) lives on the host's own
-  // profile tab now — there is no Messages tab. Players never see an inbox here.
-  const inbox = iAmHost
-    ? `<div id="dminbox">
+  // Every player's DM inbox lives on their own profile tab (there is no Messages tab).
+  // Player-to-player DMs: start one from any player's profile (Message button).
+  const inbox = `<div id="dminbox">
        <div class="subhead" style="margin-top:16px">Messages${dmUnread > 0 ? ` <span class="mdot" style="display:inline-block;vertical-align:middle;margin-left:4px">${dmUnread > 9 ? '9+' : dmUnread}</span>` : ''}</div>
        ${threads.length
         ? `<div class="mlist">${inboxRows(a.email, threads)}</div>`
-        : `<div class="mempty"><div class="mei">💬</div><b>No messages yet</b><p>When a player messages you, their thread shows up here.</p></div>`}
-       </div>`
-    : '';
+        : `<div class="mempty"><div class="mei">💬</div><b>No messages yet</b><p>Open a player's profile and tap Message to start a chat.</p></div>`}
+       </div>`;
   // Operator-only: the announcement history (moved here off the check-in page).
   const annHistory = (canOperate && announcementLog.length)
     ? `<details class="announce-compose" style="margin-top:12px"><summary>Announcement history (${announcementLog.length})</summary>

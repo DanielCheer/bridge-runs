@@ -850,7 +850,8 @@ function canMessage(senderEmail, senderA, recip) {
   if (recip.email === senderEmail) return false;            // no messaging yourself
   if (/@guest\.local$/.test(recip.email)) return false;     // guest placeholders aren't accounts
   if (senderA && senderA.is_host) return true;              // host → anyone approved
-  return !!recip.is_host;                                    // player → host only
+  // Player-to-player DMs: any approved player may message any other approved player.
+  return !!(senderA && (senderA.status === 'approved' || senderA.is_team));
 }
 
 // Reactions: the 6 standard tapbacks OR a single validated free emoji. Rejects any
@@ -1699,7 +1700,7 @@ app.get('/profile', requireLogin, (req, res) => {
     : (req.query.photoerr ? 'err:' + String(req.query.photoerr) : '');
   res.send(profileTabPage({ a, stats: attendanceStats(a.email), saved: req.query.saved === '1', error: '',
     dmUnread: unreadCount(a.email), groupUnread: groupUnread(a.email), groupMention: groupMentionUnread(a.email, a.id), canOperate, announcementLog: canOperate ? announcementHistory() : [],
-    iAmHost, threads: iAmHost ? loadInbox(a.email) : [], runDay, rdMsg, photoMsg, ann: annPanel(a.email) }));
+    iAmHost, threads: loadInbox(a.email), runDay, rdMsg, photoMsg, ann: annPanel(a.email) }));
 });
 
 // ---------- PROFILE PHOTO (upload / remove) ----------
@@ -1776,7 +1777,7 @@ app.post('/profile', requireLogin, (req, res) => {
   const iAmHost = !!a.is_host, canOperate = isAdmin(req.userEmail) || !!a.is_team;
   const errProps = {
     a, stats, dmUnread: unreadCount(a.email), groupUnread: groupUnread(a.email), groupMention: groupMentionUnread(a.email, a.id),
-    canOperate, iAmHost, announcementLog: canOperate ? announcementHistory() : [], threads: iAmHost ? loadInbox(a.email) : [], ann: annPanel(a.email),
+    canOperate, iAmHost, announcementLog: canOperate ? announcementHistory() : [], threads: loadInbox(a.email), ann: annPanel(a.email),
   };
   if (!full_name || !phone || !email.includes('@'))
     return res.send(profileTabPage({ ...errProps, error: 'Name, phone, and a valid email are required.' }));
