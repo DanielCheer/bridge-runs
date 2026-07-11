@@ -1277,6 +1277,12 @@ function setRunCancelled(runDate, cancelled) {
               ON CONFLICT(run_date) DO UPDATE SET cancelled = excluded.cancelled, is_open = CASE WHEN excluded.cancelled = 1 THEN 0 ELSE is_open END`)
     .run(runDate, cancelled ? 1 : 0);
 }
+// Roster LOCK: at run-day 2 PM the queue locks. Existing players can still drop and the
+// waitlist still fills freed spots (offers/claims), but no NEW self-sign-ups — only a
+// host/team +1. Time-derived (no state flag) so it auto-resets for next week's run.
+function runIsLocked(runDate) {
+  return Date.now() >= new Date(runDate + 'T14:00:00').getTime();
+}
 
 // Prepared once at startup (hot path), not per request.
 const stmtRun = db.prepare(`
@@ -1562,6 +1568,7 @@ app.get('/checkin', requireLogin, (req, res) => {
     suspended: !!(a && a.suspended), suspendReason: (a && a.suspend_reason) || '',
     myConfirmed, msg: req.query.msg || '', bannerVer: bannerVersion(),
     cancelled: runIsCancelled(runDate),
+    locked: runIsLocked(runDate),
     announcement: latestAnnouncement(),
     // roster goes to anyone who can see it; controls only to operators
     inPlayers: canSeeRoster ? inPlayers : [],
@@ -2219,6 +2226,7 @@ app.post('/checkin/join', requireLogin, (req, res) => {
   if (a.suspended) return res.redirect('/checkin'); // suspended → can't check in (page shows why)
   const runDate = nextRunDate();
   if (runIsCancelled(runDate)) return res.redirect('/checkin'); // run cancelled → no check-in (page shows why)
+  if (runIsLocked(runDate)) return res.redirect('/checkin'); // locked at 2 PM → no new self-joins (drops/waitlist still churn; host adds a +1)
   // Pre-access: regulars and team can join while the run is still closed.
   const hasPreAccess = !!(a.is_regular || a.is_team);
   const runOpen = runIsOpen(runDate);
@@ -2419,25 +2427,8 @@ app.post('/admin/run/cancel', requireLogin, (req, res) => {
   res.redirect('/profile?rdset=1');
 });
 
-// Run-day CONFIRM/RELEASE ping (host). Pushes every real floor player who hasn't yet
-// confirmed: "confirm you're coming or release your spot". They confirm via /checkin/confirm
-// or release via the normal Sit-out (which offers the freed slot onward). Guarded to at most
-// once / 30 min per run so it can't spam. Guests (no inbox) are skipped.
-app.post('/checkin/confirmping', requireApprover, (req, res) => {
-  const runDate = nextRunDate();
-  if (rateLimited('confirmping', 'run:' + runDate, 1, 30 * 60 * 1000)) return res.redirect('/checkin?msg=' + encodeURIComponent('Already pinged in the last 30 min — hold off a bit.'));
-  const part = partitionRun(runDate);
-  const targets = part.floorReal.filter(p => !p.guest && !p.confirmed_at).map(p => p.email);
-  if (targets.length) {
-    sendPush(targets, {
-      title: 'Confirm your spot for tonight',
-      body: `You're on the floor for ${runLabelFor(runDate)}. Tap to confirm you're coming — or release your spot for the waitlist.`,
-      url: '/checkin', tag: 'confirm',
-    });
-  }
-  audit(req.userEmail, req.actorRole, 'confirm:ping', String(targets.length));
-  res.redirect('/checkin?msg=' + encodeURIComponent(`Confirm ping sent to ${targets.length} player${targets.length === 1 ? '' : 's'}.`));
-});
+// The run-day confirm/release ping is now AUTOMATIC at the 2 PM lock (see autoRunState) —
+// the old manual /checkin/confirmping route + host button were removed.
 
 // A floor player confirms they're coming (run-day ping response). Idempotent.
 app.post('/checkin/confirm', requireLogin, (req, res) => {
@@ -2991,7 +2982,7 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
 function runStateSchedule() {
   const rd = nextRunDate();
   const runD = new Date(rd + 'T12:00:00');
-  const closeAt = new Date(rd + 'T17:00:00').getTime();          // run day 5 PM
+  const closeAt = new Date(rd + 'T14:00:00').getTime();          // run day 2 PM — queue locks + auto-ping
   const back = ((runD.getDay() - 3) + 7) % 7;                    // days from run day back to its Wednesday
   const wed = new Date(runD); wed.setDate(wed.getDate() - back);
   const openAt = new Date(ymdLocal(wed) + 'T17:00:00').getTime(); // Wednesday 5 PM
@@ -3000,11 +2991,23 @@ function runStateSchedule() {
 function autoRunState() {
   const { rd, openAt, closeAt } = runStateSchedule();
   const now = Date.now();
-  // Auto-CLOSE at run-day 5 PM (once). Respects a host who already closed.
+  // Auto-CLOSE + auto-PING at run-day 2 PM (once). Respects a host who already closed.
+  // The queue locks here (runIsLocked); the floor is pinged to confirm/release.
   if (now >= closeAt) {
     if (getSetting('autoclose_done') !== rd) {
       setSetting('autoclose_done', rd);
-      if (runIsOpen(rd)) { setRunOpen(rd, false); audit('system', 'system', 'run:autoclose', rd); console.log(`[autoclose] closed check-in for ${rd}`); }
+      if (runIsOpen(rd)) { setRunOpen(rd, false); audit('system', 'system', 'run:autoclose', rd); console.log(`[autoclose] locked check-in for ${rd}`); }
+      // Auto-ping every unconfirmed floor player to confirm or release (replaces the old manual button).
+      if (!runIsCancelled(rd)) {
+        const targets = partitionRun(rd).floorReal.filter(p => !p.guest && !p.confirmed_at).map(p => p.email);
+        if (targets.length) setImmediate(() => sendPush(targets, {
+          title: 'Confirm your spot for tonight',
+          body: `You're on the floor for ${runLabelFor(rd)}. Tap to confirm you're coming — or Sit out to release your spot to the waitlist.`,
+          url: '/checkin', tag: 'confirm',
+        }));
+        audit('system', 'system', 'confirm:autoping', String(targets.length));
+        console.log(`[autoping] pinged ${targets.length} unconfirmed floor player(s) for ${rd}`);
+      }
     }
     return;
   }

@@ -1602,7 +1602,7 @@ const COURT_SVG = `<svg class="court" viewBox="0 0 200 200" fill="none" aria-hid
 
 export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 PM', startLabel = '7 PM', tipoff = 0, cap, waitlistCap, going, waiting, full, runFull, isOpen, canSeeCount, regularSlotsFull,
                              myState, myWaitPos, myOffer = null, offerWindowHours = 3, iAmTeam, iAmRegular, iOptedOut, iAutoRenew,
-                             viewerIsAdmin, canOperate, canSeeRoster, suspended = false, suspendReason = '', myConfirmed = false, msg = '', bannerVer = '4', cancelled = false, announcement = null, announcementLog = [], inPlayers, offeredPlayers = [], waitPlayers, host = null, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+                             viewerIsAdmin, canOperate, canSeeRoster, suspended = false, suspendReason = '', myConfirmed = false, msg = '', bannerVer = '4', cancelled = false, locked = false, announcement = null, announcementLog = [], inPlayers, offeredPlayers = [], waitPlayers, host = null, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
 
   // Not cleared to play yet (admins always get through — they run the check-in)
   if (!viewerIsAdmin && status !== 'approved') {
@@ -1638,7 +1638,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
   } else if (myState === 'offered' && myOffer) {
     // A floor spot is being HELD for them — the one action is to claim it.
     action = `<a class="btn primary" href="/checkin/claim/${esc(myOffer.token)}">Claim my spot</a>`;
-  } else if (iAmTeam && iAutoRenew && iOptedOut && myState === 'out') {
+  } else if (iAmTeam && iAutoRenew && iOptedOut && myState === 'out' && !locked) {
     action = `<form method="POST" action="/checkin/optin"><button class="btn primary" type="submit" data-tour="join">I'm in</button></form>`;
   } else if (iAmTeam && iAutoRenew && (myState === 'in' || (!isOpen && !iOptedOut))) {
     // team auto-joins on open; give them a self-clear
@@ -1647,6 +1647,10 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
     action = `<form method="POST" action="/checkin/leave"><button class="btn ghost" type="submit">Sit out</button></form>`;
   } else if (myState === 'waitlist') {
     action = `<form method="POST" action="/checkin/leave"><button class="btn ghost" type="submit">Leave waitlist (#${myWaitPos})</button></form>`;
+  } else if (locked) {
+    // Locked at 2 PM — roster is set. Players already in can still Sit out (handled above,
+    // which frees the spot to the waitlist). No new self-sign-ups; a host can add a +1.
+    action = `<button class="btn" type="button" disabled>Check-in locked</button>`;
   } else if (!isOpen && iAmRegular && regularSlotsFull) {
     action = `<button class="btn" type="button" disabled>Early spots full — opens to all soon</button>`;
   } else if (!isOpen && iAmRegular) {
@@ -1672,10 +1676,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
         ? `<div class="notice good" style="margin-top:10px">✓ Confirmed. Can't make it? Sit out to free your spot for the waitlist.</div>`
         : `<form method="POST" action="/checkin/confirm" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming</button></form>`)
     : '';
-  // Host: ping every unconfirmed floor player to confirm or release (run-day nudge).
-  const confirmPing = canOperate
-    ? `<form method="POST" action="/checkin/confirmping" style="margin-top:8px"><button class="btn ghost sm" type="submit">📣 Ping floor to confirm / release</button></form>`
-    : '';
+  // (The run-day confirm/release ping is now automatic at the 2 PM lock — no host button.)
 
   // ----- my own state line -----
   // Claim banner (offered players): a spot opened and is HELD for them — prominent
@@ -1724,6 +1725,9 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
     ? (cancelled
         // Run cancelled → can't open it (un-cancel from Profile → Run day first).
         ? `<button class="btn" type="button" disabled>Open check-in</button>`
+        : locked
+        // Locked at 2 PM → roster is set; add players via +1 (opening wouldn't unlock joins).
+        ? `<button class="btn" type="button" disabled>Locked · 2 PM</button>`
         : isOpen
         ? `<form method="POST" action="/checkin/close" style="margin:0"><button class="btn leave" type="submit">Close check-in</button></form>`
         : `<form method="POST" action="/checkin/open" style="margin:0"><button class="btn primary" type="submit">Open check-in</button></form>`)
@@ -1817,12 +1821,12 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
       <div class="wood"></div>
       ${COURT_SVG}
       <div class="htop">
-        <span class="spill${(cancelled || !isOpen) ? ' closed' : ''}">● Run ${cancelled ? 'Cancelled' : (isOpen ? 'Open' : 'Closed')}</span>
+        <span class="spill${(cancelled || locked || !isOpen) ? ' closed' : ''}">● Run ${cancelled ? 'Cancelled' : locked ? 'Locked' : (isOpen ? 'Open' : 'Closed')}</span>
         ${chatBtn}
       </div>
       ${scoreBlock}
       ${canSeeCount ? `<div class="hbar"><div>${going}<span>Checked in</span></div><div>${waiting}<span>Waitlist</span></div>${addGuest}</div>` : ''}
-      <div class="hsub"><span class="hdate">${isOpen ? 'registration live' : (iAmRegular || iAmTeam ? '' : 'queue opens wed')}</span></div>
+      <div class="hsub"><span class="hdate">${cancelled ? 'cancelled' : locked ? 'roster locked' : isOpen ? 'registration live' : (iAmRegular || iAmTeam ? '' : 'queue opens wed')}</span></div>
       ${heroFooter}
     </div>`;
 
@@ -1896,7 +1900,6 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
     ${mine}
     ${(action || runToggle) ? `<div class="controls">${action}${runToggle}</div>` : ''}
     ${confirmCta}
-    ${confirmPing}
     ${infoSection}
     ${wgSheet}
 
