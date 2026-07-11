@@ -1482,34 +1482,9 @@ const stmtPurgeSpentOverrides = db.prepare('DELETE FROM run_overrides WHERE run_
 // Why it cannot double-archive: attendance archiving is INSERT OR IGNORE on
 // UNIQUE(run_date,email), and the whole body is gated to fire once per cur transition.
 let lastRunDate = null;
-// After a rollover archives a run's floor, push the whole room when a player's lifetime
-// run count crosses a milestone. Only players archived THIS rollover are considered (via
-// archivingDates), so an exact-threshold total means they just crossed it. Guests excluded.
-const MILESTONES = new Set([5, 10, 25, 50, 100, 150, 200]);
-function celebrateMilestones(archivingDates) {
-  if (!archivingDates || !archivingDates.length) return;
-  const ph = archivingDates.map(() => '?').join(',');
-  const emails = db.prepare(`SELECT DISTINCT email FROM attendance WHERE run_date IN (${ph}) AND email NOT LIKE '%@guest.local'`).all(...archivingDates).map(r => r.email);
-  for (const email of emails) {
-    const total = db.prepare('SELECT COUNT(*) n FROM attendance WHERE email = ?').get(email).n;
-    if (!MILESTONES.has(total)) continue;
-    const a = applicantByEmail(email);
-    const name = a ? a.full_name : 'A player';
-    audit('system', 'system', 'milestone', `${email}:${total}`);
-    setImmediate(() => sendPush(approvedEmails(), {
-      title: '🎉 Milestone!',
-      body: `${name} just played their ${total}th Bridge run. Show some love 🏀`,
-      url: '/checkin', tag: 'milestone',
-    }));
-  }
-}
 function ensureWeek(runDate = nextRunDate()) {
   if (runDate === lastRunDate) return; // no-op until the soonest run date advances (rollover)
-  // Capture which run(s) are about to roll off BEFORE archive+purge — needed to spot
-  // milestone crossings for exactly the players archived this rollover.
-  const archivingDates = db.prepare('SELECT DISTINCT run_date FROM checkins WHERE run_date < ?').all(runDate).map(r => r.run_date);
   stmtArchiveAttendance.run(runDate, CAP);  // archive the final floor of every run before cur
-  celebrateMilestones(archivingDates);      // 🎉 push the room when someone hits a run milestone
   stmtPurgeCheckins.run(runDate);           // then purge those now-past runs' checkins…
   stmtPurgeOptouts.run(runDate);            // …opt-outs…
   stmtPurgeRunState.run(runDate);           // …and stale open/closed state
