@@ -28,7 +28,7 @@ We only collect what we need to run the check-in and community features:
 - **Profile photo** — optional, if you choose to add one.
 - **Chat messages and any photos you share** — in the shared group chat and in 1:1 messages to the host.
 - **Check-in and attendance records** — which runs you signed up for, whether you got a floor spot or were on the waitlist, and your attendance history.
-- **Role and approval information** — your role (host, team, core, regular) and records related to the approval/voting flow for new players.
+- **Role and approval information** — your role within the community and records related to the approval flow for new players.
 - **Basic technical/security information** — the app may keep sign-in activity needed to keep your account secure and the app running.
 
 We do **not** collect payment information, and we don't run advertising or sell data.
