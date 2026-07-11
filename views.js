@@ -1721,7 +1721,10 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
 
   // ----- Operator run toggle (open/close) — rendered in the controls row -----
   const runToggle = canOperate
-    ? (isOpen
+    ? (cancelled
+        // Run cancelled → can't open it (un-cancel from Profile → Run day first).
+        ? `<button class="btn" type="button" disabled>Open check-in</button>`
+        : isOpen
         ? `<form method="POST" action="/checkin/close" style="margin:0"><button class="btn leave" type="submit">Close check-in</button></form>`
         : `<form method="POST" action="/checkin/open" style="margin:0"><button class="btn primary" type="submit">Open check-in</button></form>`)
     : '';

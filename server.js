@@ -2406,6 +2406,7 @@ app.post('/admin/run/cancel', requireLogin, (req, res) => {
   const cancel = req.body.on === '1';
   if (cancel === runIsCancelled(runDate)) return res.redirect('/profile'); // no state change → no push spam
   setRunCancelled(runDate, cancel);
+  if (cancel) db.prepare('DELETE FROM checkins WHERE run_date = ?').run(runDate); // clear the floor — a cancelled run has nobody on it
   audit(email, admin ? 'admin' : 'host', cancel ? 'run:cancel' : 'run:uncancel', runDate);
   if (cancel) {
     // Game-day notification: push only (no email storm) — the check-in banner carries it in-app.
@@ -2692,6 +2693,11 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
   const dateMoved = raw !== base;
   const storeTime = timeCustom ? start : null;   // NULL cols = "use defaults"
   const storeEnd = timeCustom ? end : null;
+
+  // Setting/re-confirming the run day REVIVES a cancelled run (re-scheduling = you're
+  // committing to run again) — done BEFORE the no-op guard so re-submitting the SAME date
+  // still un-cancels. The check-in page reflects it immediately.
+  if (runIsCancelled(raw)) { setRunCancelled(raw, false); audit(email, actorRole, 'run:uncancel-via-rundate', raw); }
 
   // No-op guard: if the stored state already matches this request, skip the write +
   // announcement (re-submitting the same day/time must not spam everyone).
