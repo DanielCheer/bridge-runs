@@ -1887,8 +1887,11 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
     <div class="gymbanner">
       <img src="/gym.jpg?v=${esc(String(bannerVer))}" alt="The Bridge gym" width="1160" height="580" fetchpriority="high">
       <div class="gymcap">
-        <div class="l">Next run<b>${wdayFull(runDate)} · ${esc(runLabel)} · ${esc(startLabel)}</b></div>
-        <div class="r"><span>Tip-off in</span><b class="tick" data-tip="${tipoff}">${esc(fmtCountdown(tipoff))}</b></div>
+        ${cancelled
+          // Cancelled → don't advertise a next run or a tip-off countdown (contradictory).
+          ? `<div class="l">This week<b>🚫 Run cancelled</b></div>`
+          : `<div class="l">Next run<b>${wdayFull(runDate)} · ${esc(runLabel)} · ${esc(startLabel)}</b></div>
+        <div class="r"><span>Tip-off in</span><b class="tick" data-tip="${tipoff}">${esc(fmtCountdown(tipoff))}</b></div>`}
       </div>
       ${canOperate ? `<a class="bannedit" href="/admin/banner" aria-label="Change banner photo">🖼 Change</a>` : ''}
     </div>
