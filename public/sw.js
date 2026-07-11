@@ -80,7 +80,15 @@ self.addEventListener('push', (e) => {
     renotify: !!d.tag,
     data: { url: d.url || '/checkin' },
   };
-  e.waitUntil(self.registration.showNotification(title, opts));
+  e.waitUntil((async () => {
+    await self.registration.showNotification(title, opts);
+    // Set the home-screen app-icon badge to the recipient's total unread — carried in the
+    // payload so the icon updates even while the app is closed (the in-app poll only runs
+    // when it's open). Progressive: silently no-ops where setAppBadge is unsupported.
+    if (typeof d.badge === 'number' && self.navigator && navigator.setAppBadge) {
+      try { d.badge > 0 ? await navigator.setAppBadge(d.badge) : (navigator.clearAppBadge && await navigator.clearAppBadge()); } catch (_) {}
+    }
+  })());
 });
 
 self.addEventListener('notificationclick', (e) => {

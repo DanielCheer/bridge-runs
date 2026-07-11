@@ -21,7 +21,7 @@ import {
 import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap,
-  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage,
+  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -657,7 +657,7 @@ function attendanceStats(email) {
     if (cur > streak) streak = cur;
     prevUtc = utc;
   }
-  return { total, season, streak, first };
+  return { total, season, streak, first, dates };
 }
 
 // --- messaging (Phase 2) helpers -----------------------------------------
@@ -795,6 +795,23 @@ function notifyMentions(fromEmail, body, mentions) {
   const sender = applicantByEmail(fromEmail);
   const name = sender ? sender.full_name : 'Someone';
   setImmediate(() => sendPush(emails, { title: `${name} mentioned you`, body: (body || '').slice(0, 140), url: '/chat', tag: 'mention' }));
+}
+
+// DM push: buzz the recipient's phone — otherwise a host DM reaches nobody until they
+// happen to open the app. Coalesced to at most 1 push / 2 min per sender→recipient pair
+// so a rapid back-and-forth doesn't spam. Carries `badge` = the recipient's total unread
+// (DM + Run Chat) so the service worker can set the home-screen icon badge while closed.
+function notifyDM(sender, toEmail, preview) {
+  if (!sender || !toEmail) return;
+  if (rateLimited('dmpush', sender.email + '>' + toEmail, 1, 2 * 60 * 1000)) return;
+  const badge = unreadCount(toEmail) + groupUnread(toEmail);
+  setImmediate(() => sendPush([toEmail], {
+    title: sender.full_name || 'New message',
+    body: (preview || '').slice(0, 140),
+    url: '/messages/' + sender.id,
+    tag: 'dm-' + sender.id,
+    badge,
+  }));
 }
 
 // "You were mentioned" count: UNREAD group messages (newer than this viewer's read
@@ -1465,9 +1482,34 @@ const stmtPurgeSpentOverrides = db.prepare('DELETE FROM run_overrides WHERE run_
 // Why it cannot double-archive: attendance archiving is INSERT OR IGNORE on
 // UNIQUE(run_date,email), and the whole body is gated to fire once per cur transition.
 let lastRunDate = null;
+// After a rollover archives a run's floor, push the whole room when a player's lifetime
+// run count crosses a milestone. Only players archived THIS rollover are considered (via
+// archivingDates), so an exact-threshold total means they just crossed it. Guests excluded.
+const MILESTONES = new Set([5, 10, 25, 50, 100, 150, 200]);
+function celebrateMilestones(archivingDates) {
+  if (!archivingDates || !archivingDates.length) return;
+  const ph = archivingDates.map(() => '?').join(',');
+  const emails = db.prepare(`SELECT DISTINCT email FROM attendance WHERE run_date IN (${ph}) AND email NOT LIKE '%@guest.local'`).all(...archivingDates).map(r => r.email);
+  for (const email of emails) {
+    const total = db.prepare('SELECT COUNT(*) n FROM attendance WHERE email = ?').get(email).n;
+    if (!MILESTONES.has(total)) continue;
+    const a = applicantByEmail(email);
+    const name = a ? a.full_name : 'A player';
+    audit('system', 'system', 'milestone', `${email}:${total}`);
+    setImmediate(() => sendPush(approvedEmails(), {
+      title: '🎉 Milestone!',
+      body: `${name} just played their ${total}th Bridge run. Show some love 🏀`,
+      url: '/checkin', tag: 'milestone',
+    }));
+  }
+}
 function ensureWeek(runDate = nextRunDate()) {
   if (runDate === lastRunDate) return; // no-op until the soonest run date advances (rollover)
+  // Capture which run(s) are about to roll off BEFORE archive+purge — needed to spot
+  // milestone crossings for exactly the players archived this rollover.
+  const archivingDates = db.prepare('SELECT DISTINCT run_date FROM checkins WHERE run_date < ?').all(runDate).map(r => r.run_date);
   stmtArchiveAttendance.run(runDate, CAP);  // archive the final floor of every run before cur
+  celebrateMilestones(archivingDates);      // 🎉 push the room when someone hits a run milestone
   stmtPurgeCheckins.run(runDate);           // then purge those now-past runs' checkins…
   stmtPurgeOptouts.run(runDate);            // …opt-outs…
   stmtPurgeRunState.run(runDate);           // …and stale open/closed state
@@ -1926,6 +1968,7 @@ app.post('/messages/:id', requireLogin, (req, res) => {
       if (rateLimited('msg-media', me, 20, 10 * 60 * 1000)) return res.redirect(dest + '?err=slow');
       db.prepare('INSERT INTO messages (from_email, to_email, body, reply_to, image) VALUES (?,?,?,?,?)')
         .run(me, p.email, '', replyTo || null, sticker);
+      notifyDM(a, p.email, 'Sticker 🏀');
       return res.redirect(dest);
     }
     // Photo send (optional caption): sniff → process → insert → write → set image.
@@ -1945,6 +1988,7 @@ app.post('/messages/:id', requireLogin, (req, res) => {
         console.error(`[dm] image process failed for ${me}: ${e.message}`);
         return res.redirect(dest + '?err=bad');
       }
+      notifyDM(a, p.email, body ? '📷 ' + body : '📷 Photo');
       return res.redirect(dest);
     }
     // Text-only (unchanged): bounce a rate-limit notice rather than silently dropping.
@@ -1952,6 +1996,7 @@ app.post('/messages/:id', requireLogin, (req, res) => {
     if (rateLimited('msg-send', me, 20, 10 * 60 * 1000)) return res.redirect(dest + '?err=slow');
     db.prepare('INSERT INTO messages (from_email, to_email, body, reply_to) VALUES (?,?,?,?)')
       .run(me, p.email, body, replyTo || null);
+    notifyDM(a, p.email, body);
     res.redirect(dest);
   });
 });
@@ -3041,6 +3086,40 @@ setInterval(() => {
     autoRunState();
   } catch (e) { console.error(`[interval] rollover/expiry FAILED: ${e.message}`); }
 }, 60000).unref();
+
+// This week's run as a calendar file (.ics). Floating local time; reflects the host's
+// per-week day/time override. Cancelled → STATUS:CANCELLED so an already-added event clears.
+app.get('/run.ics', requireLogin, (req, res) => {
+  const rd = nextRunDate();
+  const { start, end } = runTimesFor(rd);
+  const dt = (hhmm) => rd.replace(/-/g, '') + 'T' + String(hhmm).replace(':', '') + '00';
+  const ics = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//The Bridge Adv Runs//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
+    'BEGIN:VEVENT', `UID:bridge-run-${rd}@bridge`, `DTSTAMP:${ymdLocal().replace(/-/g, '')}T000000`,
+    `DTSTART:${dt(start)}`, `DTEND:${dt(end)}`,
+    'SUMMARY:Bridge Adv Runs — Basketball', 'LOCATION:The Bridge · Markham',
+    runIsCancelled(rd) ? 'STATUS:CANCELLED' : 'STATUS:CONFIRMED',
+    'END:VEVENT', 'END:VCALENDAR',
+  ].join('\r\n');
+  res.set('Content-Type', 'text/calendar; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="bridge-run-${rd}.ics"`);
+  res.send(ics);
+});
+
+// Season board — most runs this calendar year. Top list + the viewer's own rank; gentle
+// by design (never spotlights the bottom). Approved players + admins only.
+app.get('/season', requireLogin, (req, res) => {
+  const a = applicantByEmail(req.userEmail);
+  if (!a || (a.status !== 'approved' && !isAdmin(req.userEmail))) return res.redirect('/status');
+  const rows = db.prepare(`SELECT email, COUNT(*) n FROM attendance
+    WHERE run_date >= strftime('%Y-01-01','now') AND email NOT LIKE '%@guest.local'
+    GROUP BY email ORDER BY n DESC, email ASC`).all();
+  const named = rows.map((r, i) => {
+    const ap = applicantByEmail(r.email);
+    return { rank: i + 1, name: ap ? ap.full_name : r.email, n: r.n, me: r.email.toLowerCase() === req.userEmail.toLowerCase() };
+  });
+  res.send(seasonPage({ rows: named, email: a.email, dmUnread: unreadCount(a.email), groupUnread: groupUnread(a.email), groupMention: groupMentionUnread(a.email, a.id), ann: annPanel(a.email) }));
+});
 
 // Terminal error handler — a sync throw (or a forwarded async reject via next(e)) in any route
 // lands here with a 500 instead of a hung socket. Must be the LAST app.use (4-arg signature).

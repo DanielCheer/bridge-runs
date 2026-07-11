@@ -1903,6 +1903,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
     ${mine}
     ${(action || runToggle) ? `<div class="controls">${action}${runToggle}</div>` : ''}
     ${confirmCta}
+    ${cancelled ? '' : `<div style="margin-top:12px"><a href="/run.ics" style="font-size:13px;color:var(--muted)">📅 Add this run to your calendar</a></div>`}
     ${infoSection}
     ${wgSheet}
 
@@ -2137,6 +2138,29 @@ export function profilePage({ p, stats, isSelf = false, canContact = false, runD
   ` + footWithTabs(tabNav(isSelf ? 'profile' : '', { dm: dmUnread, group: groupUnread, groupMention }));
 }
 
+// Season board — most runs this calendar year. Top 8 + the viewer's own row (if outside
+// the top). Gentle by design: it celebrates the top and shows you yours, never ranks the
+// bottom. Self-contained inline styles so it needs no new CSS.
+export function seasonPage({ rows, email, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+  const meRow = rows.find(r => r.me);
+  const medal = (r) => r === 1 ? '🥇' : r === 2 ? '🥈' : r === 3 ? '🥉' : String(r);
+  const rowHtml = (r) => `<div style="display:flex;align-items:center;gap:12px;padding:11px 14px;border:1px solid var(--line);border-radius:12px;margin-top:8px;background:${r.me ? 'var(--teal-tint,#e6efec)' : 'var(--card)'}">
+      <span style="font-weight:800;font-size:17px;min-width:32px;text-align:center;font-variant-numeric:tabular-nums">${medal(r.rank)}</span>
+      <span style="flex:1;font-weight:600">${esc(r.name)}${r.me ? ' · <b>you</b>' : ''}</span>
+      <span style="font-weight:800;font-variant-numeric:tabular-nums">${r.n}<span style="font-weight:400;color:var(--muted)"> runs</span></span>
+    </div>`;
+  const list = rows.length
+    ? rows.slice(0, 8).map(rowHtml).join('') + (meRow && meRow.rank > 8 ? `<div style="text-align:center;color:var(--muted);margin:6px 0 0">···</div>${rowHtml(meRow)}` : '')
+    : `<div class="foot" style="margin-top:14px">No runs logged yet this season — get out there 🏀</div>`;
+  return HEAD('Season Board — Adv Runs', 'has-tabs') + header(`<b>SEASON</b>${esc(email)}`, 'FRI', ann) + `
+    <div class="rule"></div>
+    <div class="phead"><h1>Season Board</h1></div>
+    <p class="psub" style="margin:-4px 0 6px;color:var(--muted)">Most runs this calendar year 🏀</p>
+    ${list}
+    <div class="foot" style="margin-top:18px"><a href="/profile">← Back to profile</a></div>
+  ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention }));
+}
+
 // Host DM inbox rows — reused on the host's profile tab (host DMs live in Profile
 // now). Each row links to its thread; unread pip per thread. `me` = the host.
 function inboxRows(me, threads) {
@@ -2279,6 +2303,13 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
         <div class="g">${stats.total}<em> gp</em></div>
         <div class="d">Games attended · Member since ${esc(memberSince)}<br>${stats.season} this season · ${stats.streak}-run streak${a.is_host ? ' · ★ Host' : ''}</div>
       </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+        <a class="btn ghost sm" href="/season">🏆 Season board</a>
+      </div>
+      ${(stats.dates && stats.dates.length) ? `<details style="margin-top:10px">
+        <summary style="cursor:pointer;font-size:13px;color:var(--muted)">Run history · ${stats.dates.length}</summary>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:9px">${stats.dates.slice().reverse().map(d => `<span style="font-size:12px;padding:3px 9px;border:1px solid var(--line);border-radius:999px;color:var(--muted)">${esc(new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }))}</span>`).join('')}</div>
+      </details>` : ''}
     </form>
     <div id="pushctl" class="card" style="margin-top:12px;padding:14px" hidden>
       <b style="font-size:14px">Game-day notifications</b>
