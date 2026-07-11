@@ -1416,8 +1416,8 @@ export function intakePage({ submitted = false, error = '', alreadyApproved = fa
     <div class="rule"></div>
     <span class="eyebrow">Faith · Ball · Community</span>
     <h1>Faith. Ball. Community.</h1>
-    <p class="lead">Hey — I'm Daniel, and I host the Advanced basketball runs at The Bridge. I first came here through the rec runs myself, and that's what led me to start exploring my faith. I started this run to build a community of Christ-like people who bond over basketball — and to open that same door for others. We play competitive ball and sometimes pause for a devotional; you don't have to share our faith to play, but it's part of who we are.</p>
-    <p class="lead" style="margin-top:10px">The Adv Run is the competitive Friday run, and it's invite-based. Fill this out, then come to the <b>Monday recreational run</b> — that's the tryout. The organizers watch you play there and decide from there.</p>
+    <p class="lead">Hey — I'm Daniel, and I host the Advanced basketball runs at The Bridge. I first came here through the recreational Monday runs myself, and that's what led me to start exploring my faith. I started this run to build a community of Christ-like people who bond over basketball — and to open that same door for others. We play competitive ball and sometimes pause for a devotional; you don't have to share our faith to play, but it's part of who we are.</p>
+    <p class="lead" style="margin-top:10px">The Advanced Run is the competitive Friday run, and it's invite-based. Fill this out, then come to the <b>Monday recreational run</b> — that's the tryout. The organizers watch you play there and decide from there.</p>
 
     <div class="notice" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
       <span>Already applied or approved?</span>
