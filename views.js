@@ -1273,8 +1273,8 @@ const firstRunTour = `
       {sel:'.announce-compose summary',op:1,ttl:"Announce to everyone",txt:"Post an update that pushes to the whole run’s phones."},
       {sel:'.arpill',op:1,ttl:"Your guaranteed spot",txt:"As team you’re auto-added each week. Toggle this to sit out a week — it never affects your standing."},
       {ttl:"Turn on notifications",txt:"Get a ping for spot offers, announcements and @mentions — never miss out.",notif:1},
-      {path:'/admin',op:1,sel:'[data-tour="council"]',ttl:"Vote players in",txt:"This is the Council. New applicants show up here — you and the team Approve or Reject each. It takes 3 approvals to let someone in."},
-      {path:'/admin/people',adm:1,sel:'[data-tour="people"]',ttl:"Manage people",txt:"Search anyone, suspend or remove them, change roles, invite, or export — all from the People tab."}
+      {path:'/admin',op:1,sel:'[data-tour="council"]',ttl:"Vote players in",txt:"New applicants show up here — tap Approve or Reject on each. 3 approvals lets someone in; 3 rejects turns them away."},
+      {path:'/admin/people',adm:1,sel:'[data-tour="people"]',ttl:"Manage people",txt:"Two quick links up top: Share the sign-up QR to invite players, and Export everyone to a CSV. Below, search anyone to suspend, remove, or change their role."}
     ];
     var STEPS=[], i=0, running=0, hole=document.getElementById('tourhole'), tip=document.getElementById('tourtip'),
         ttl=document.getElementById('tourttl'), txt=document.getElementById('tourtxt'),
@@ -3052,7 +3052,7 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '7–10 
   const voteBtn = (id, vote, label, cls, active) =>
     `<form method="POST" action="/admin/vote"><input type="hidden" name="id" value="${id}"><input type="hidden" name="vote" value="${vote}"><button class="btn ${cls} sm${active ? ' voted' : ''}" type="submit">${active ? '✓ ' : ''}${label}</button></form>`;
 
-  const rows = applicants.map(a => {
+  const rows = applicants.map((a, __i) => {
     const isSelf = a.email === viewerEmail;
     // Role toggles — ADMIN ONLY. Making team auto-approves; regular needs approved.
     const roleBtn = (role, flag, onLabel, offLabel, show) => (!viewerIsAdmin || !show) ? '' : (flag
@@ -3094,7 +3094,7 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '7–10 
       const resetBtn = viewerIsAdmin
         ? `<form method="POST" action="/admin/reset"><input type="hidden" name="id" value="${a.id}"><button class="btn ghost sm" type="submit">Reset votes</button></form>` : '';
       decisionBlock = `${tally}${whoVoted}${waiting}
-        <div class="acts">${voteButtons}${resetBtn}${teamBtn}${regBtn}${hostBtn}</div>`;
+        <div class="acts"${__i === 0 ? ' data-tour="council"' : ''}>${voteButtons}${resetBtn}${teamBtn}${regBtn}${hostBtn}</div>`;
     }
 
     return `<details class="arow"${a.status === 'pending' ? ' open' : ''}>
@@ -3140,7 +3140,7 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '7–10 
     ${opsNav('admin', { isAdmin: viewerIsAdmin, isTeam: viewerIsTeam })}${firstRunTour}
     <div class="rule"></div>
     <span class="eyebrow">${applicants.length} ${filter === 'all' ? 'applicant' : filter}${applicants.length===1?'':'s'}</span>
-    <h1 data-tour="council">Council review</h1>
+    <h1>Council review</h1>
     <p class="lead">${viewerIsAdmin
       ? 'Approval is decided by the <b>team</b>: 3 approvals gets an applicant in, 3 rejects blocks them. You have oversight and manage people, but you don\'t vote. Team members are auto-approved and skip the vote.'
       : 'It takes <b>3 approvals</b> to get an applicant in, or <b>3 rejects</b> to block them. Cast your vote below.'}</p>
@@ -3369,15 +3369,17 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
     ${opsNav('people', { isAdmin: true })}${firstRunTour}
     <div class="rule"></div>
     <span class="eyebrow">${people.length} ${q ? 'match' + (people.length===1?'':'es') : 'people'}</span>
-    <h1 data-tour="people">People</h1>
+    <h1>People</h1>
     ${msg ? `<div class="notice good">${esc(msg)}</div>` : ''}
 
     <form method="GET" action="/admin/people" style="margin:8px 0 4px">
       <input name="q" value="${esc(q)}" placeholder="Search name, email, or phone…">
     </form>
 
-    <a class="btn ghost" href="/admin/share" style="margin:8px 0 0">📱 Share sign-up QR &amp; links</a>
-    <a class="btn ghost" href="/admin/people/export.csv" style="margin:8px 0 0" download>⬇︎ Export people (CSV)</a>
+    <div data-tour="people" style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 0">
+      <a class="btn ghost" href="/admin/share" style="margin:0">📱 Share sign-up QR &amp; links</a>
+      <a class="btn ghost" href="/admin/people/export.csv" style="margin:0" download>⬇︎ Export people (CSV)</a>
+    </div>
 
     <div class="subhead">Add a player</div>
     <form method="POST" action="/admin/people/invite" class="card rail">
