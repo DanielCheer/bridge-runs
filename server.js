@@ -673,8 +673,8 @@ function unreadCount(email) { return email ? stmtUnread.get(email).n : 0; }
 // sorts after ''. One COUNT per page load, served by idx_group_messages_from.
 const stmtGroupUnread = db.prepare(`
   SELECT COUNT(*) n FROM group_messages
-  WHERE from_email != ?
-    AND created_at > COALESCE((SELECT last_read_at FROM group_reads WHERE email = ?), '')`);
+  WHERE id > COALESCE((SELECT last_read_id FROM group_reads WHERE email = ?), 0)
+    AND from_email != ?`);
 function groupUnread(email) { return email ? stmtGroupUnread.get(email, email).n : 0; }
 
 // Badge split: the Messages tab shows DM unread (unreadCount), the Roster tab
@@ -821,8 +821,8 @@ function notifyDM(sender, toEmail, preview) {
 // Reuses the group_reads high-water mark that groupUnread already scopes against.
 const stmtGroupMentions = db.prepare(`
     SELECT mentions FROM group_messages
-    WHERE from_email != ? AND mentions IS NOT NULL AND mentions != ''
-      AND created_at > COALESCE((SELECT last_read_at FROM group_reads WHERE email = ?), '')`); // hoisted — runs on every /poll tick
+    WHERE id > COALESCE((SELECT last_read_id FROM group_reads WHERE email = ?), 0)
+      AND from_email != ? AND mentions IS NOT NULL AND mentions != ''`); // hoisted — runs on every /poll tick; PK range, not a scan
 function groupMentionUnread(email, applicantId) {
   if (!email || !applicantId) return 0;
   const rows = stmtGroupMentions.all(email, email);
@@ -837,8 +837,9 @@ function applicantIdOf(email) {
   return a ? a.id : 0;
 }
 // Bump this viewer's Run Chat read high-water mark to now (clears their group-unread).
-const stmtMarkGroupRead = db.prepare(`INSERT INTO group_reads (email, last_read_at) VALUES (?, datetime('now'))
-              ON CONFLICT(email) DO UPDATE SET last_read_at = datetime('now')`);
+const stmtMarkGroupRead = db.prepare(`INSERT INTO group_reads (email, last_read_id, last_read_at)
+              VALUES (?, (SELECT COALESCE(MAX(id),0) FROM group_messages), datetime('now'))
+              ON CONFLICT(email) DO UPDATE SET last_read_id = excluded.last_read_id, last_read_at = excluded.last_read_at`);
 function markGroupRead(me) {
   stmtMarkGroupRead.run(me);
 }
@@ -1343,7 +1344,10 @@ const stmtHostCard = db.prepare("SELECT * FROM applicants WHERE is_host = 1 AND 
 // /poll fingerprint statements (P0-1) — read-only, hoisted. The poll route diffs a
 // tiny fingerprint to decide when a page should re-fetch-and-patch (no full reload),
 // and returns the live DM/group unread counts the client patches into tab badges.
-const stmtPollChat = db.prepare('SELECT MAX(id) mx, COUNT(*) c FROM group_messages');
+const stmtPollChat = db.prepare('SELECT COALESCE(MAX(id),0) mx FROM group_messages'); // MAX on the PK is O(1); COUNT(*) was a full scan every poll tick
+// A monotonic "chat structure changed" counter — bumped on delete/pin/unpin so those
+// propagate to other clients' feeds without a COUNT(*) scan (deletes/pins don't move MAX(id)).
+function bumpChatSeq() { setSetting('chat_seq', String((Number(getSetting('chat_seq')) || 0) + 1)); }
 const stmtPollChatReact = db.prepare('SELECT COUNT(*) c, MAX(created_at) mx FROM group_reactions');
 const stmtPollDM = db.prepare('SELECT MAX(id) mx, COUNT(*) c FROM messages WHERE from_email = ? OR to_email = ?');
 
@@ -1627,7 +1631,7 @@ app.get('/poll', requireLogin, (req, res) => {
     f = `${runDate}:${runIsOpen(runDate) ? 1 : 0}:${heldReleased(runDate) ? 1 : 0}:${order}:${ann ? ann.id : 0}`;
   } else if (page === 'chat') {
     const g = stmtPollChat.get(), rx = stmtPollChatReact.get();
-    f = `${g.mx || 0}:${g.c || 0}:${rx.c || 0}:${rx.mx || ''}`;
+    f = `${g.mx || 0}:${getSetting('chat_seq') || 0}:${rx.c || 0}:${rx.mx || ''}`;
   } else if (page === 'profile') {
     const m = stmtPollDM.get(email, email);
     f = `${m.mx || 0}:${m.c || 0}`;
@@ -2151,6 +2155,7 @@ app.post('/chat/delete', requireLogin, (req, res) => {
   if (!isMod && msg.from_email !== me) return res.redirect('/chat');
   db.prepare('DELETE FROM group_reactions WHERE group_message_id = ?').run(messageId);
   db.prepare('DELETE FROM group_messages WHERE id = ?').run(messageId);
+  bumpChatSeq(); // propagate the delete to other clients' poll (MAX(id) may not move)
   // Drop any stored media file (best-effort; stickers/external paths are a no-op).
   safeUnlinkChatImage(msg.image); safeUnlinkChatImage(msg.audio); safeUnlinkChatImage(msg.video);
   res.redirect('/chat');
@@ -2169,6 +2174,7 @@ app.post('/chat/pin', requireLogin, (req, res) => {
   if (!msg) return res.redirect('/chat');
   if (msg.pinned_at) db.prepare('UPDATE group_messages SET pinned_at = NULL, pinned_by = NULL WHERE id = ?').run(messageId);
   else db.prepare("UPDATE group_messages SET pinned_at = datetime('now'), pinned_by = ? WHERE id = ?").run(req.userEmail, messageId);
+  bumpChatSeq(); // pin/unpin now propagates to other clients' feeds via the poll fingerprint (P2-10)
   res.redirect('/chat');
 });
 

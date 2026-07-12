@@ -217,6 +217,18 @@ const ltCols = db.prepare('PRAGMA table_info(login_tokens)').all().map(c => c.na
 if (!ltCols.includes('code'))     db.exec('ALTER TABLE login_tokens ADD COLUMN code TEXT');
 if (!ltCols.includes('attempts')) db.exec('ALTER TABLE login_tokens ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0');
 
+// Run Chat unread by ID (2026-07): replace the timestamp high-water mark (`last_read_at`,
+// which forced a full-table scan on every poll tick) with an integer `last_read_id`, so
+// unread = COUNT of group_messages with id > last_read_id (a bounded PK range, not a scan).
+// Backfill each reader's id from the last message at/under their old timestamp.
+const grCols = db.prepare('PRAGMA table_info(group_reads)').all().map(c => c.name);
+if (!grCols.includes('last_read_id')) {
+  db.exec('ALTER TABLE group_reads ADD COLUMN last_read_id INTEGER NOT NULL DEFAULT 0');
+  db.exec(`UPDATE group_reads SET last_read_id =
+    COALESCE((SELECT MAX(id) FROM group_messages WHERE created_at <= group_reads.last_read_at), 0)`);
+  console.log('[db] group_reads: backfilled last_read_id');
+}
+
 // --- Native/PWA (2026-07): key-value app settings (holds the generated VAPID push
 // keypair so it survives restarts + rides the db backup) + Web Push subscriptions. ---
 db.exec(`
