@@ -25,8 +25,18 @@ self.addEventListener('activate', (e) => {
 const OFFLINE_HTML = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>body{font-family:-apple-system,system-ui,sans-serif;background:#F8F5EF;color:#20211c;display:flex;min-height:100vh;
 margin:0;align-items:center;justify-content:center;text-align:center;padding:24px}div{max-width:280px}
-b{font-size:20px;display:block;margin-bottom:8px}p{color:#8a8474;line-height:1.5}</style></head>
-<body><div><b>You're offline</b><p>The Bridge Runs needs a connection. Check your Wi-Fi or data and try again.</p></div></body></html>`;
+b{font-size:20px;display:block;margin-bottom:8px}p{color:#8a8474;line-height:1.5}
+button{margin-top:16px;font:inherit;font-weight:600;background:#22615a;color:#fff;border:0;border-radius:999px;padding:11px 22px;cursor:pointer}</style></head>
+<body><div><b>You're offline</b><p>The Bridge Runs needs a connection. Check your Wi-Fi or data and try again.</p>
+<button onclick="location.reload()">Try again</button></div></body></html>`;
+
+// Race a navigation fetch against a timeout — a black-holed connection (network up but the
+// server/tunnel hung) must fall back to the offline card, not spin on a white screen forever.
+function navFetch(req, ms) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), ms);
+  return fetch(req, { signal: ac.signal }).finally(() => clearTimeout(t));
+}
 
 function isIcon(p) { return ICONS.indexOf(p) >= 0; }
 function freshFirst(p) { return p === '/styles.css' || p === '/manifest.webmanifest'; }
@@ -38,15 +48,16 @@ self.addEventListener('fetch', (e) => {
   try { url = new URL(req.url); } catch (_) { return; }
   if (url.origin !== location.origin) return;
 
-  // Navigations: network-first, fall back to the offline card.
+  // Navigations: network-first (with a timeout), fall back to the offline card.
   if (req.mode === 'navigate') {
-    e.respondWith(fetch(req).catch(() =>
+    e.respondWith(navFetch(req, 12000).catch(() =>
       new Response(OFFLINE_HTML, { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } })));
     return;
   }
-  // Immutable icons: cache-first (with a quiet background refresh).
+  // Immutable icons: cache-first (with a quiet background refresh). ignoreSearch so the
+  // precached '/icon-192.png' still matches the versioned '/icon-192.png?v=2' the pages request.
   if (isIcon(url.pathname)) {
-    e.respondWith(caches.match(req).then((cached) => {
+    e.respondWith(caches.match(req, { ignoreSearch: true }).then((cached) => {
       const net = fetch(req).then((r) => {
         if (r && r.ok) { const cp = r.clone(); caches.open(CACHE).then((c) => c.put(req, cp)); }
         return r;

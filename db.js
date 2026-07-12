@@ -338,7 +338,7 @@ db.exec(`
     image      TEXT,                            -- media path/URL: /chat-media/<id-hex>.jpg or /stickers/<name>.svg
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
-  CREATE INDEX IF NOT EXISTS idx_group_messages_feed ON group_messages(id);
+  DROP INDEX IF EXISTS idx_group_messages_feed;  -- redundant: group_messages.id IS the rowid PK
   CREATE INDEX IF NOT EXISTS idx_group_messages_from ON group_messages(from_email, created_at);
   CREATE TABLE IF NOT EXISTS group_reactions (
     group_message_id INTEGER NOT NULL,
@@ -403,6 +403,12 @@ if (!gmsgCols.includes('video_dur')) db.exec('ALTER TABLE group_messages ADD COL
   const { changes } = db.prepare('DELETE FROM login_tokens WHERE used = 1 OR expires_at < ?')
     .run(Date.now());
   if (changes) console.log(`[db] pruned ${changes} stale login token(s)`);
+}
+// Keep the audit log from growing without bound — retain the most recent 5000 rows.
+// (Reads are LIMIT 40 by PK, so this is purely disk hygiene.)
+{
+  const { changes } = db.prepare('DELETE FROM audit_log WHERE id < (SELECT MAX(id) - 5000 FROM audit_log)').run();
+  if (changes) console.log(`[db] pruned ${changes} old audit-log row(s)`);
 }
 
 // A player's email is their identity key across ~a dozen tables. When it changes

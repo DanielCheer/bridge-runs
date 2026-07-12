@@ -155,12 +155,13 @@ if (!VAPID_PUBLIC || !VAPID_PRIVATE) {
   console.log('[push] generated + persisted VAPID keypair');
 }
 webpush.setVapidDetails('mailto:' + (process.env.SMTP_FROM || process.env.SMTP_USER || 'admin@localhost'), VAPID_PUBLIC, VAPID_PRIVATE);
-function sendPush(emails, { title, body, url, tag }) {
+function sendPush(emails, { title, body, url, tag, badge }) {
+  try {
   const list = [...new Set((emails || []).map(e => String(e || '').toLowerCase()))].filter(Boolean);
   if (!list.length) return;
   const ph = list.map(() => '?').join(',');
   const subs = db.prepare(`SELECT * FROM push_subscriptions WHERE email IN (${ph})`).all(...list);
-  const payload = JSON.stringify({ title, body, url, tag });
+  const payload = JSON.stringify({ title, body, url, tag, badge });
   for (const s of subs) {
     webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload)
       .catch((err) => {
@@ -169,6 +170,7 @@ function sendPush(emails, { title, body, url, tag }) {
         else console.error(`[push] send failed (${err.statusCode || err.message})`);
       });
   }
+  } catch (e) { console.error(`[push] sendPush failed: ${e.message}`); } // runs in setImmediate — must never throw uncaught
 }
 
 // ---- Masthead notification bell: announcements panel + unread tracking ----
@@ -2387,6 +2389,9 @@ app.post('/checkin/promote', requireApprover, (req, res) => {
 });
 
 function autoJoinTeam(runDate) {
+  // Never seed a cancelled run (floor was cleared) or a locked one (past 2 PM — roster is
+  // set). Root-cause guard so no caller (optin/autorenew/open/rollover) can re-populate.
+  if (runIsCancelled(runDate) || runIsLocked(runDate)) return;
   // Team members are dropped onto the floor with TOP priority when the run
   // opens — if pre-access joiners already filled the cap, the newest of them
   // is bumped to waitlist rather than a team member. Team runs the run.
@@ -2483,6 +2488,7 @@ app.post('/checkin/optin', requireLogin, (req, res) => {
   const runDate = nextRunDate();
   const me = applicantByEmail(req.userEmail);
   if (me && me.suspended) return res.redirect('/checkin'); // suspended → can't re-seat (matches /checkin/join)
+  if (runIsCancelled(runDate) || runIsLocked(runDate)) return res.redirect('/checkin'); // cancelled/locked → no re-seat (matches /checkin/join)
   db.prepare('DELETE FROM regular_optout WHERE run_date = ? AND email = ?').run(runDate, req.userEmail);
   // WIRING (autoJoinTeam is now rollover-gated in ensureWeek, not per-view): a team
   // member with auto-renew opting back in — even while CLOSED — must be re-seated
@@ -2746,6 +2752,9 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
     try {
       const st = stmtRunIsOpen.get(oldRunDate);
       if (st) { setRunOpen(newRunDate, st.is_open); db.prepare('DELETE FROM run_state WHERE run_date = ?').run(oldRunDate); }
+      // Carry the once-per-run auto-open/close markers to the new date — otherwise moving a
+      // run the host already closed re-arms auto-open under the new (unmarked) date key.
+      for (const k of ['autoopen_done', 'autoclose_done']) if (getSetting(k) === oldRunDate) setSetting(k, newRunDate);
       db.prepare('UPDATE checkins SET run_date = ? WHERE run_date = ?').run(newRunDate, oldRunDate);
       db.prepare('UPDATE regular_optout SET run_date = ? WHERE run_date = ?').run(newRunDate, oldRunDate);
       db.exec('COMMIT');
@@ -3003,8 +3012,8 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
 // rollover and drop/cascade any expired holds. req=null → createOffer's link falls
 // back to PUBLIC_URL (kept set in .env), so offer emails carry the real Funnel URL.
 // Auto open/close the check-in queue, keyed to the ACTUAL run day so it stays correct
-// when the host moves the run. Opens at 5 PM the WEDNESDAY of the run's week, closes at
-// 5 PM ON the run day. Each fires ONCE per cycle (a per-run flag in app_settings), never
+// when the host moves the run. Opens at 5 PM the WEDNESDAY of the run's week, locks +
+// auto-pings at 2 PM ON the run day. Each fires ONCE per cycle (a per-run flag), never
 // fights a manual host toggle, and the OPEN ping goes ONLY to no-early-access regulars
 // (Core/Team/Host already have early access).
 function runStateSchedule() {
@@ -3087,13 +3096,11 @@ app.get('/run.ics', requireLogin, (req, res) => {
 app.get('/season', requireLogin, (req, res) => {
   const a = applicantByEmail(req.userEmail);
   if (!a || (a.status !== 'approved' && !isAdmin(req.userEmail))) return res.redirect('/status');
-  const rows = db.prepare(`SELECT email, COUNT(*) n FROM attendance
-    WHERE run_date >= strftime('%Y-01-01','now') AND email NOT LIKE '%@guest.local'
-    GROUP BY email ORDER BY n DESC, email ASC`).all();
-  const named = rows.map((r, i) => {
-    const ap = applicantByEmail(r.email);
-    return { rank: i + 1, name: ap ? ap.full_name : r.email, n: r.n, me: r.email.toLowerCase() === req.userEmail.toLowerCase() };
-  });
+  const rows = db.prepare(`SELECT at.email, COUNT(*) n, ap.full_name FROM attendance at
+    LEFT JOIN applicants ap ON ap.email = at.email
+    WHERE at.run_date >= strftime('%Y-01-01','now') AND at.email NOT LIKE '%@guest.local'
+    GROUP BY at.email ORDER BY n DESC, at.email ASC`).all();
+  const named = rows.map((r, i) => ({ rank: i + 1, name: r.full_name || r.email, n: r.n, me: r.email.toLowerCase() === req.userEmail.toLowerCase() }));
   res.send(seasonPage({ rows: named, email: a.email, dmUnread: unreadCount(a.email), groupUnread: groupUnread(a.email), groupMention: groupMentionUnread(a.email, a.id), ann: annPanel(a.email) }));
 });
 
@@ -3108,6 +3115,11 @@ app.use((err, req, res, next) => {
 // which would drop check-in for everyone mid-run. Log it and keep serving.
 process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection]', (reason && reason.stack) || reason);
+});
+// Symmetric backstop for a stray synchronous throw that escapes a callback (e.g. inside a
+// setImmediate push/email task) — log loudly and keep serving rather than exiting mid-run.
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', (err && err.stack) || err);
 });
 
 app.listen(PORT, () => {
