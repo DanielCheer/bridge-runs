@@ -1249,23 +1249,30 @@ const firstRunTour = `
   </div>
   <script>
   (function(){
+    var tour=document.getElementById('tour'); if(!tour||tour.__bound) return; tour.__bound=1; // bind per fresh #tour node (survives router swaps)
     var KEY='bridgeTourV1';
-    try{ if(localStorage.getItem(KEY)) return; }catch(e){}
-    var tour=document.getElementById('tour'); if(!tour||window.__tourStarted) return; window.__tourStarted=1;
     var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches;
-    var supported=!!(window.__pushSupported&&window.__pushSupported()&&window.__pushStandalone&&window.__pushStandalone());
+    function supported(){ return !!(window.__pushSupported&&window.__pushSupported()&&window.__pushStandalone&&window.__pushStandalone()); }
+    // Operator steps (Council / open-close / guest / announce / auto-renew) carry selectors
+    // that exist ONLY for team+admin — the filter below drops any step whose element isn't on
+    // the page, so operators get these extra spotlights automatically and players never do.
     var STEPS_ALL=[
-      {ttl:"Welcome to the run 👋",txt:"Here’s a 20-second tour of the app."},
+      {ttl:"Welcome to the run 👋",txt:"Here’s a quick tour of the app."},
       {sel:'[data-tour="join"]',ttl:"Grab your spot",txt:"Tap “I’m in” each week to claim a spot. Spots are limited — first come, first served."},
-      {sel:'.tabs a[href="/chat"]',ttl:"Run chat",txt:"Chat with the whole run — photos, plans and @mentions."},
+      {sel:'.tabs a[href="/chat"]',ttl:"Run chat",txt:"Chat with the whole run — photos, plans and @mentions. On the team? Press &amp; hold a message to Pin it."},
       {sel:'.tabs a[href="/profile"]',ttl:"Your profile",txt:"Your stats, photo and settings live here."},
       {sel:'.bellbtn',ttl:"Announcements",txt:"Updates from the host show up here."},
+      {sel:'.opsnav a[href="/admin"]',ttl:"Vote players in",txt:"You’re on the team — new applicants show up on the Council tab for you to Approve or Reject."},
+      {sel:'[data-tour="ops-run"]',ttl:"Run the check-in",txt:"Open or close check-in by hand (it auto-opens Wed and locks at 2 PM). Tap the scoreboard’s “Who’s going” to remove or bump players."},
+      {sel:'.hguest summary',ttl:"Add a guest",txt:"Drop in a last-minute walk-on by name — works even after the 2 PM lock."},
+      {sel:'.announce-compose summary',ttl:"Announce to everyone",txt:"Post an update that pushes to the whole run’s phones."},
+      {sel:'.arpill',ttl:"Your guaranteed spot",txt:"As team you’re auto-added each week. Toggle this to sit out a week — it never affects your standing."},
       {ttl:"Turn on notifications",txt:"Get a ping for spot offers, announcements and @mentions — never miss out.",notif:true}
     ];
-    var STEPS=[], i=0, hole=document.getElementById('tourhole'), tip=document.getElementById('tourtip'),
+    var STEPS=[], i=0, running=0, hole=document.getElementById('tourhole'), tip=document.getElementById('tourtip'),
         ttl=document.getElementById('tourttl'), txt=document.getElementById('tourtxt'),
         next=document.getElementById('tournext'), dots=document.getElementById('tourdots');
-    function done(){ try{localStorage.setItem(KEY,'1');}catch(e){} tour.hidden=true; document.body.style.overflow=''; }
+    function done(){ try{localStorage.setItem(KEY,'1');}catch(e){} tour.hidden=true; document.body.style.overflow=''; running=0; }
     function place(){
       var s=STEPS[i], el=s.sel?document.querySelector(s.sel):null;
       document.getElementById('tourcatch').style.background = el ? 'transparent' : 'rgba(18,20,14,.72)';
@@ -1299,12 +1306,20 @@ const firstRunTour = `
     document.getElementById('tourskip').addEventListener('click',done);
     document.getElementById('tourcatch').addEventListener('click',function(){ if(!STEPS[i].notif) advance(); });
     window.addEventListener('resize',function(){ if(!tour.hidden) place(); });
-    setTimeout(function(){
-      STEPS=STEPS_ALL.filter(function(s){ return !s.sel || document.querySelector(s.sel); });
-      if(!supported) STEPS=STEPS.filter(function(s){ return !s.notif; });
-      if(!STEPS.length){ try{localStorage.setItem(KEY,'1');}catch(e){} return; }
-      tour.hidden=false; document.body.style.overflow='hidden'; render();
-    }, (document.getElementById('splash')&&!reduce)?1700:350);
+    // Exposed so the team nudge can launch it on demand. force=true ignores the "seen" flag
+    // (replay) and skips the splash delay. Auto-runs once (force=false) on first load.
+    window.__startTour=function(force){
+      if(running) return;
+      if(!force){ try{ if(localStorage.getItem(KEY)) return; }catch(e){} }
+      running=1;
+      setTimeout(function(){
+        STEPS=STEPS_ALL.filter(function(s){ return !s.sel || document.querySelector(s.sel); });
+        if(!supported()) STEPS=STEPS.filter(function(s){ return !s.notif; });
+        if(!STEPS.length){ try{localStorage.setItem(KEY,'1');}catch(e){} running=0; return; }
+        i=0; tour.hidden=false; document.body.style.overflow='hidden'; render();
+      }, force?0:((document.getElementById('splash')&&!reduce)?1700:350));
+    };
+    window.__startTour(false);
   })();
   </script>`;
 
@@ -1732,8 +1747,8 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
         // Locked at 2 PM → roster is set; add players via +1 (opening wouldn't unlock joins).
         ? `<button class="btn" type="button" disabled>Locked · 2 PM</button>`
         : isOpen
-        ? `<form method="POST" action="/checkin/close" style="margin:0"><button class="btn leave" type="submit">Close check-in</button></form>`
-        : `<form method="POST" action="/checkin/open" style="margin:0"><button class="btn primary" type="submit">Open check-in</button></form>`)
+        ? `<form method="POST" action="/checkin/close" style="margin:0"><button class="btn leave" type="submit" data-tour="ops-run">Close check-in</button></form>`
+        : `<form method="POST" action="/checkin/open" style="margin:0"><button class="btn primary" type="submit" data-tour="ops-run">Open check-in</button></form>`)
     : '';
 
   // ----- announcement compose (operators only; folded into the teal hero) -----
@@ -1861,8 +1876,11 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
   return HEAD(`${wdayFull(runDate)} Check-in — Adv Runs`, 'has-tabs') + header(`<b>CHECK-IN</b>${esc(email)}`, wdayShort(runDate), ann, hours) + WELCOME_MODAL + `
     ${opsNav('checkin', { isAdmin: viewerIsAdmin, isTeam: iAmTeam })}
     ${canOperate ? `<div id="tgnudge" class="notice" style="margin-top:10px;display:flex;align-items:center;gap:10px;justify-content:space-between">
-      <span>🏀 <b>You’re on the team.</b> See everything you can do → <a href="/team-guide">Team guide</a></span>
-      <button type="button" aria-label="Dismiss" onclick="try{localStorage.setItem('tgSeen1','1');}catch(e){}var n=document.getElementById('tgnudge');if(n)n.style.display='none';" style="border:0;background:none;font-size:20px;line-height:1;color:var(--muted);cursor:pointer;padding:0 4px">&times;</button>
+      <span>🏀 <b>You’re on the team</b> — you’ve got extra controls.</span>
+      <span style="display:flex;gap:8px;align-items:center;flex-shrink:0">
+        <button type="button" class="btn sm" onclick="try{localStorage.setItem('tgSeen1','1');}catch(e){}var n=document.getElementById('tgnudge');if(n)n.style.display='none';if(window.__startTour)window.__startTour(true);">Take the tour</button>
+        <button type="button" aria-label="Dismiss" onclick="try{localStorage.setItem('tgSeen1','1');}catch(e){}var n=document.getElementById('tgnudge');if(n)n.style.display='none';" style="border:0;background:none;font-size:20px;line-height:1;color:var(--muted);cursor:pointer;padding:0 4px">&times;</button>
+      </span>
     </div>
     <script>(function(){try{if(localStorage.getItem('tgSeen1')){var n=document.getElementById('tgnudge');if(n)n.style.display='none';}}catch(e){}})();</script>` : ''}
     <div class="rule"></div>
@@ -2170,44 +2188,6 @@ export function seasonPage({ rows, email, dmUnread = 0, groupUnread = 0, groupMe
   ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention }));
 }
 
-// Team guide — the "you have more buttons now" walkthrough for team members (and admins).
-// A findable, revisitable reference (the operator controls live across pages + overlays, so a
-// spotlight tour can't reach them). Role-aware: the last card differs for admins vs team.
-export function teamGuidePage({ email, isAdmin = false, voteThreshold = 3, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
-  const card = (lab, title, body) => `<div class="card" style="margin-top:12px">
-      <div class="clab">${esc(lab)}</div><div class="ctitle">${esc(title)}</div>
-      <div style="margin-top:10px;color:var(--ink);font-size:14.5px;line-height:1.6">${body}</div>
-    </div>`;
-  const lastCard = isAdmin
-    ? card('Admin', 'Your admin tools', `As an admin you also get the tools a team member doesn't:
-        <ul style="margin:8px 0 0;padding-left:18px">
-          <li><b>People</b> tab — search everyone, <b>suspend</b> or remove, change roles (Team / Core / Host), export a CSV.</li>
-          <li><b>Run day</b> (Profile) — move or <b>cancel</b> this week's run, and edit the floor / waitlist caps.</li>
-          <li><b>Invites</b> + the QR <b>Share</b> page, and the <b>banner</b> photo crop tool.</li>
-        </ul>`)
-    : card('Admin only', 'What you’ll need an admin for', `A few things are reserved for the host and admins:
-        managing people (suspending, removing, changing roles), <b>moving or cancelling the run</b>, editing the caps,
-        sending invites, and the banner photo. Need one of those? Just <b>message the host</b>.`);
-  return HEAD('Team Guide — Adv Runs', 'has-tabs') + header(`<b>TEAM GUIDE</b>${esc(email)}`, 'FRI', ann) + `
-    <div class="rule"></div>
-    <div class="phead"><h1>Running the show</h1></div>
-    <p class="psub" style="margin:-4px 0 8px;color:var(--muted)">You’re on the team — here’s everything you can do that a regular player can’t. 🏀</p>
-    ${card('Council', 'Vote new players in', `Applicants who’ve come to a Monday rec run show up on the <b>Council</b> tab (the switcher at the top of the check-in &amp; profile pages). You and the other team members vote <b>Approve</b> or <b>Reject</b>. It takes <b>${voteThreshold} approvals</b> to let someone in, or <b>${voteThreshold} rejects</b> to turn them away — until then they stay pending. You can’t vote on yourself or other team members.`)}
-    ${card('Game day', 'Run the check-in', `On the check-in card you have the operator controls:
-        <ul style="margin:8px 0 0;padding-left:18px">
-          <li><b>Open / Close check-in</b> — it opens automatically on Wednesday and locks at 2 PM on game day, but you can open or close it by hand anytime.</li>
-          <li><b>+ Guest</b> — add a last-minute walk-on by name (for someone who shows up without the app).</li>
-          <li><b>Manage the floor</b> — tap <b>Who’s going</b> to see the full list; there you can <b>Remove</b> anyone or <b>Bump</b> a waitlister up onto the floor.</li>
-        </ul>
-        <div class="notice" style="margin-top:10px">After the <b>2 PM lock</b> the roster is set — nobody new can sign themselves up, so add any stragglers with <b>+ Guest</b>.</div>`)}
-    ${card('Announcements', 'Tell the whole run', `On the check-in card, <b>Send announcement</b> posts a message that pushes to everyone’s phone (and optionally emails them). It shows as a banner and in the 🔔 bell. Use it for the real stuff — “gym moved to court 2”, “no run this week”.`)}
-    ${card('Run Chat', 'Pin what matters', `Press and hold any Run Chat message and choose <b>Pin</b> — it sticks to the top of the chat so the address, jersey colors, or the plan don’t scroll away. Press &amp; hold + Unpin to remove it.`)}
-    ${card('Your spot', 'Your guaranteed weekly spot', `As team, you’re auto-added to the floor every week — no need to race to check in. The <b>AUTO-RENEW</b> pill on the check-in card toggles it: turn it off to sit out a week (your spot goes to the waitlist), turn it back on and you’re seated again. It never affects your team standing.`)}
-    ${lastCard}
-    <div class="foot" style="margin-top:18px"><a href="/checkin">← Back to check-in</a></div>
-  ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention }));
-}
-
 // Host DM inbox rows — reused on the host's profile tab (host DMs live in Profile
 // now). Each row links to its thread; unread pip per thread. `me` = the host.
 function inboxRows(me, threads) {
@@ -2365,7 +2345,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
     ${inbox}
     ${annHistory}
     ${annSheet}
-    <div class="foot signout">${canOperate ? '<a href="/team-guide">📋 Team guide</a> · ' : ''}<a href="/checkin" onclick="try{localStorage.removeItem('bridgeTourV1');}catch(e){}window.__tourStarted=0;">↻ Replay app tour</a> · <a href="/logout">Sign out</a></div>
+    <div class="foot signout"><a href="/checkin" onclick="try{localStorage.removeItem('bridgeTourV1');}catch(e){}">↻ Replay app tour${canOperate ? ' (incl. team controls)' : ''}</a> · <a href="/logout">Sign out</a></div>
     <script>
       (function(){
         // Surgical poll-and-patch (P0-1): patch the DM/group badges every tick; the
@@ -3008,7 +2988,8 @@ ${mentionAutocompleteJS()}
 export function adminPage({ applicants, runLabel, runDate = '', hours = '7–10 PM', checkedInCount, cap,
                            waitlistCap = 5, preregCap = 10, msg = '',
                            viewerIsAdmin = true, viewerIsTeam = false, viewerIsHost = false, viewerEmail = '', log = [],
-                           filter = 'all', counts = {}, teamMembers = [], ann = null }) {
+                           filter = 'all', counts = {}, teamMembers = [], ann = null,
+                           dmUnread = 0, groupUnread = 0, groupMention = 0 }) {
   const pill = (s) => `<span class="pill ${s}">${s}</span>`;
   // Map a voter email → their display name (voters are always team members, so the
   // council roster covers every one). Falls back to the raw email if somehow unseen.
@@ -3102,7 +3083,7 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '7–10 
       ).join('')}</div>
     </div>` : '';
 
-  return HEAD('Council — Adv Runs') + header(`<b>COUNCIL</b>${viewerIsAdmin ? 'admin' : 'team'}`, wdayShort(runDate), ann, hours) + `
+  return HEAD('Council — Adv Runs', 'has-tabs') + header(`<b>COUNCIL</b>${viewerIsAdmin ? 'admin' : 'team'}`, wdayShort(runDate), ann, hours) + `
     ${opsNav('admin', { isAdmin: viewerIsAdmin, isTeam: viewerIsTeam })}
     <div class="rule"></div>
     <span class="eyebrow">${applicants.length} ${filter === 'all' ? 'applicant' : filter}${applicants.length===1?'':'s'}</span>
@@ -3126,7 +3107,7 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '7–10 
     ${rows || `<div class="card">${emptyMsg}</div>`}
     ${logBlock}
     <div class="foot" style="margin-top:24px"><a href="/logout">Sign out</a></div>
-  ` + FOOT;
+  ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention }));
 }
 
 // ---------- STATUS PAGE (unapproved players) ----------
@@ -3299,7 +3280,7 @@ export function bannerPage({ err = '', bannerVer = '0' } = {}) {
 }
 
 // ---------- PEOPLE MANAGEMENT (admin-only) ----------
-export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = '', invites = [], newInviteLink = '', msg = '', ann = null }) {
+export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = '', invites = [], newInviteLink = '', msg = '', ann = null, dmUnread = 0, groupUnread = 0, groupMention = 0 }) {
   const pill = (s) => `<span class="pill ${s}">${s}</span>`;
   const rows = people.map(a => `<details class="arow"${q ? ' open' : ''}>
     <summary><span class="an">${esc(a.full_name)}${a.is_team ? ' <span class="tag team">◆</span>' : ''}${a.is_regular ? ' <span class="tag reg">★</span>' : ''}${a.suspended ? ' <span class="tag susp">⊘ Suspended</span>' : ''}</span> ${pill(a.status)}</summary>
@@ -3331,7 +3312,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
 
   const phoneList = approvedPhones.map(p => `${p.full_name}: ${p.phone}`).join('\n');
 
-  return HEAD('People — Adv Runs') + header('<b>PEOPLE</b>admin', 'FRI', ann) + `
+  return HEAD('People — Adv Runs', 'has-tabs') + header('<b>PEOPLE</b>admin', 'FRI', ann) + `
     ${opsNav('people', { isAdmin: true })}
     <div class="rule"></div>
     <span class="eyebrow">${people.length} ${q ? 'match' + (people.length===1?'':'es') : 'people'}</span>
@@ -3422,12 +3403,12 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
       }
     </script>
     ${shareScript()}
-  ` + FOOT;
+  ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention }));
 }
 
 // ---------- SHARE (QR + link for the application form) ----------
-export function sharePage({ applyUrl = '', applyQr = '', signInUrl = '', loginQr = '', ann = null }) {
-  return HEAD('Share — Adv Runs') + header('<b>SHARE</b>admin', 'FRI', ann) + `
+export function sharePage({ applyUrl = '', applyQr = '', signInUrl = '', loginQr = '', ann = null, dmUnread = 0, groupUnread = 0, groupMention = 0 }) {
+  return HEAD('Share — Adv Runs', 'has-tabs') + header('<b>SHARE</b>admin', 'FRI', ann) + `
     ${opsNav('people', { isAdmin: true })}
     <div class="rule"></div>
     <span class="eyebrow">Sign-up form</span>
@@ -3455,5 +3436,5 @@ export function sharePage({ applyUrl = '', applyQr = '', signInUrl = '', loginQr
 
     <div class="foot" style="margin-top:24px"><a href="/admin/people">Manage people</a> · <a href="/logout">Sign out</a></div>
     ${shareScript()}
-  ` + FOOT;
+  ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention }));
 }

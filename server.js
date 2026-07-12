@@ -21,7 +21,7 @@ import {
 import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap,
-  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, teamGuidePage,
+  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -2574,6 +2574,7 @@ app.get('/admin', requireApprover, (req, res) => {
     viewerIsHost: !!(db.prepare('SELECT is_host FROM applicants WHERE email = ?').get(String(req.userEmail).toLowerCase())?.is_host),
     viewerEmail: req.userEmail, log, msg: req.query.msg || '',
     filter, counts, teamMembers, ann: annPanel(req.userEmail),
+    dmUnread: unreadCount(req.userEmail), groupUnread: groupUnread(req.userEmail), groupMention: groupMentionUnread(req.userEmail, applicantIdOf(req.userEmail)),
   }));
 });
 
@@ -2827,7 +2828,7 @@ app.get('/admin/share', requireAdmin, async (req, res, next) => {
       QRCode.toString(applyUrl, { type: 'svg', margin: 1, color: { dark: '#183B38', light: '#ffffff' } }),
       QRCode.toString(base + '/login', { type: 'svg', margin: 1, color: { dark: '#183B38', light: '#ffffff' } }),
     ]);
-    res.send(sharePage({ applyUrl, applyQr, signInUrl: base + '/login', loginQr, ann: annPanel(req.userEmail) }));
+    res.send(sharePage({ applyUrl, applyQr, signInUrl: base + '/login', loginQr, ann: annPanel(req.userEmail), dmUnread: unreadCount(req.userEmail), groupUnread: groupUnread(req.userEmail), groupMention: groupMentionUnread(req.userEmail, applicantIdOf(req.userEmail)) }));
   } catch (e) { next(e); } // QR failure must not take the process down (Express 4 won't catch async throws)
 });
 
@@ -2850,7 +2851,7 @@ app.get('/admin/people', requireAdmin, (req, res) => {
   const invites = db.prepare('SELECT * FROM invites WHERE used = 0 ORDER BY created_at DESC').all()
     .map(iv => ({ ...iv, link: `${base}/invite/${iv.token}` }));
   const newInviteLink = req.query.invite ? `${base}/invite/${req.query.invite}` : '';
-  res.send(peoplePage({ people, q, approvedPhones, signInUrl, invites, newInviteLink, msg: req.query.msg || '', ann: annPanel(req.userEmail) }));
+  res.send(peoplePage({ people, q, approvedPhones, signInUrl, invites, newInviteLink, msg: req.query.msg || '', ann: annPanel(req.userEmail), dmUnread: unreadCount(req.userEmail), groupUnread: groupUnread(req.userEmail), groupMention: groupMentionUnread(req.userEmail, applicantIdOf(req.userEmail)) }));
 });
 
 // Roster CSV export (admin-only) — offline backup / spreadsheet analysis of the people
@@ -3112,17 +3113,6 @@ app.get('/run.ics', requireLogin, (req, res) => {
   res.set('Content-Type', 'text/calendar; charset=utf-8');
   res.set('Content-Disposition', `attachment; filename="bridge-run-${rd}.ics"`);
   res.send(ics);
-});
-
-// Team guide — operator walkthrough (council voting, run-day controls, announcements, pin,
-// auto-renew). Team + admin only; admins get an extra card for their admin-only tools.
-app.get('/team-guide', requireApprover, (req, res) => {
-  const a = applicantByEmail(req.userEmail);
-  res.send(teamGuidePage({
-    email: req.userEmail, isAdmin: isAdmin(req.userEmail), voteThreshold: VOTE_THRESHOLD,
-    dmUnread: unreadCount(req.userEmail), groupUnread: groupUnread(req.userEmail),
-    groupMention: groupMentionUnread(req.userEmail, a ? a.id : 0), ann: annPanel(req.userEmail),
-  }));
 });
 
 // Season board — most runs this calendar year. Top list + the viewer's own rank; gentle
