@@ -555,9 +555,9 @@ async function processChatImage(buf) {
 }
 // Write a processed jpeg under a SERVER-derived name keyed by the message id
 // (<msgid>-<hex>.jpg). Returns the public /chat-media path stored on the message.
-function writeChatImage(jpegBuf, msgId) {
+async function writeChatImage(jpegBuf, msgId) {
   const fname = `${msgId}-${crypto.randomBytes(6).toString('hex')}.jpg`;
-  fs.writeFileSync(path.join(CHAT_MEDIA_DIR, fname), jpegBuf);
+  await fs.promises.writeFile(path.join(CHAT_MEDIA_DIR, fname), jpegBuf); // async so the disk write doesn't block the event loop
   return `/chat-media/${fname}`;
 }
 
@@ -571,9 +571,9 @@ const uploadChatAudio = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 8 * 1024 * 1024, files: 1 },
 }).single('audio');
-function writeChatAudio(buf, msgId, ext) {
+async function writeChatAudio(buf, msgId, ext) {
   const fname = `${msgId}-${crypto.randomBytes(6).toString('hex')}.${ext}`;
-  fs.writeFileSync(path.join(CHAT_MEDIA_DIR, fname), buf);
+  await fs.promises.writeFile(path.join(CHAT_MEDIA_DIR, fname), buf); // async — a big upload write must not stall the loop
   return `/chat-media/${fname}`;
 }
 
@@ -587,9 +587,9 @@ const uploadChatVideo = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: CHAT_VIDEO_MAX_MB * 1024 * 1024, files: 1 },
 }).single('video');
-function writeChatVideo(buf, msgId, ext) {
+async function writeChatVideo(buf, msgId, ext) {
   const fname = `${msgId}-${crypto.randomBytes(6).toString('hex')}.${ext}`;
-  fs.writeFileSync(path.join(CHAT_MEDIA_DIR, fname), buf);
+  await fs.promises.writeFile(path.join(CHAT_MEDIA_DIR, fname), buf); // async — a 40MB video write must not block every other request
   return `/chat-media/${fname}`;
 }
 
@@ -1736,7 +1736,7 @@ app.post('/profile/photo', requireLogin, (req, res) => {
         .jpeg({ quality: 80, mozjpeg: true })            // …then re-encode (metadata stripped by default)
         .toBuffer();
       const fname = `${a.id}-${crypto.randomBytes(6).toString('hex')}.jpg`;
-      fs.writeFileSync(path.join(AVATARS_DIR, fname), out);
+      await fs.promises.writeFile(path.join(AVATARS_DIR, fname), out); // async write off the event loop
       const prev = a.avatar;
       db.prepare('UPDATE applicants SET avatar = ? WHERE id = ?').run(fname, a.id);
       if (prev && prev !== fname) safeUnlinkAvatar(prev); // drop the old file on replace
@@ -1963,7 +1963,7 @@ app.post('/messages/:id', requireLogin, (req, res) => {
         const info = db.prepare('INSERT INTO messages (from_email, to_email, body, reply_to) VALUES (?,?,?,?)')
           .run(me, p.email, body, replyTo || null);
         msgId = info.lastInsertRowid;
-        const imgPath = writeChatImage(jpeg, msgId);
+        const imgPath = await writeChatImage(jpeg, msgId);
         db.prepare('UPDATE messages SET image = ? WHERE id = ?').run(imgPath, msgId);
       } catch (e) {
         if (msgId) db.prepare('DELETE FROM messages WHERE id = ?').run(msgId); // no half-sent (caption-only) row
@@ -2098,7 +2098,7 @@ app.post('/chat', requireLogin, (req, res) => {
         const info = db.prepare('INSERT INTO group_messages (from_email, body, reply_to, mentions) VALUES (?,?,?,?)')
           .run(me, body, replyTo || null, mentions);
         msgId = info.lastInsertRowid;
-        const imgPath = writeChatImage(jpeg, msgId);
+        const imgPath = await writeChatImage(jpeg, msgId);
         db.prepare('UPDATE group_messages SET image = ? WHERE id = ?').run(imgPath, msgId);
         notifyMentions(me, body, mentions);
       } catch (e) {
@@ -2183,7 +2183,7 @@ app.post('/chat/pin', requireLogin, (req, res) => {
 // redirect; the client refreshes the thread on success. multer buffers → sniffAudio
 // magic-byte gate → store raw container → set audio/audio_dur on a new message.
 app.post('/chat/voice', requireLogin, (req, res) => {
-  uploadChatAudio(req, res, (err) => {
+  uploadChatAudio(req, res, async (err) => {
     const gate = requirePlayer(req, res);
     if (!gate) return;
     if (mutedOut(gate, res, { json: true })) return; // suspended = muted
@@ -2203,7 +2203,7 @@ app.post('/chat/voice', requireLogin, (req, res) => {
       .run(me, '', replyTo || null);
     const id = info.lastInsertRowid;
     try {
-      const apath = writeChatAudio(file.buffer, id, ext);
+      const apath = await writeChatAudio(file.buffer, id, ext);
       db.prepare('UPDATE group_messages SET audio = ?, audio_dur = ? WHERE id = ?').run(apath, dur, id);
     } catch (e) {
       db.prepare('DELETE FROM group_messages WHERE id = ?').run(id); // no ghost row on disk failure
@@ -2219,7 +2219,7 @@ app.post('/chat/voice', requireLogin, (req, res) => {
 // byte gate → store the raw container → set video/video_dur on a new message. Shares the
 // 'chat-media' rate-limit bucket with photos/voice.
 app.post('/chat/video', requireLogin, (req, res) => {
-  uploadChatVideo(req, res, (err) => {
+  uploadChatVideo(req, res, async (err) => {
     const gate = requirePlayer(req, res);
     if (!gate) return;
     if (mutedOut(gate, res, { json: true })) return; // suspended = muted
@@ -2239,7 +2239,7 @@ app.post('/chat/video', requireLogin, (req, res) => {
       .run(me, '', replyTo || null);
     const id = info.lastInsertRowid;
     try {
-      const vpath = writeChatVideo(file.buffer, id, ext);
+      const vpath = await writeChatVideo(file.buffer, id, ext);
       db.prepare('UPDATE group_messages SET video = ?, video_dur = ? WHERE id = ?').run(vpath, dur, id);
     } catch (e) {
       db.prepare('DELETE FROM group_messages WHERE id = ?').run(id); // no ghost row on disk failure
@@ -2598,7 +2598,7 @@ app.post('/admin/banner', requireApprover, (req, res) => {
         .extract({ left, top, width, height })
         .resize(2320, 1160, { fit: 'fill' }) // 2:1 banner — matches .gymbanner/.cropframe CSS
         .jpeg({ quality: 84, mozjpeg: true }).toBuffer();
-      fs.writeFileSync(BANNER_PATH, out);
+      await fs.promises.writeFile(BANNER_PATH, out); // async write off the event loop
       audit(req.userEmail, req.actorRole, 'banner:update', `${width}x${height}`);
       return res.redirect('/checkin');
     } catch (e) {
