@@ -2867,31 +2867,45 @@ ${mentionAutocompleteJS()}
         // Patch ONLY the #thread feed + member count from a fresh /chat fetch — the
         // composer node is never touched, so typing / reply-chip / focus survive a
         // refresh. Shared by fetch-send, the long-press menu, and the 10s poll.
-        window.__threadRefresh=function(gentle){
+        // The 10s poll is GENTLE: if you've scrolled up (reading history / an older page
+        // loaded), don't yank the feed to the latest. Explicit actions (send/react/delete)
+        // pass no gentle arg. The prefetched arg lets a send reuse its POST response body.
+        window.__threadRefresh=function(gentle, prefetched){
           if(!window.fetch||!window.DOMParser)return;
           var atBottom=(window.innerHeight+window.scrollY)>=(document.body.scrollHeight-40);
-          // The 10s poll is GENTLE: if you've scrolled up (reading history / an
-          // older page loaded), don't yank the feed back to the latest 200. Explicit
-          // actions (send / react / delete) pass no arg and always reconcile.
           if(gentle&&!atBottom)return;
-          fetch('/chat',{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}})
-            .then(function(r){return r.text();})
-            .then(function(html){var doc=new DOMParser().parseFromString(html,'text/html');
-              var nt=doc.getElementById('thread');
-              if(nt){
-                // Remember which messages were already on screen, then, after swapping in
-                // the fresh feed, tag only the NEW ones with .msg-in so they slide into
-                // place (iMessage-style) — idle polls with no new messages don't animate.
-                var seen={}, old=thread.querySelectorAll('.msg[data-mid]');
-                for(var i=0;i<old.length;i++) seen[old[i].getAttribute('data-mid')]=1;
-                thread.innerHTML=nt.innerHTML;
-                var now=thread.querySelectorAll('.msg[data-mid]');
-                for(var j=0;j<now.length;j++){ var id=now[j].getAttribute('data-mid'); if(!seen[id]) now[j].classList.add('msg-in'); }
+          function playing(n){var m=n.querySelectorAll('audio,video');for(var i=0;i<m.length;i++){if(!m[i].paused&&!m[i].ended)return true;}return false;}
+          function apply(html){
+            var doc=new DOMParser().parseFromString(html,'text/html');
+            var nt=doc.getElementById('thread');
+            if(nt){
+              // Incremental reconcile by data-mid: APPEND new messages, PATCH changed ones in
+              // place, REMOVE deletes within the fetched window — never a full innerHTML wipe
+              // (which cuts a voice/video playing mid-listen, drops loaded scroll-back history,
+              // and re-renders all 200 bubbles). Voice-player listeners are delegated on
+              // document, so appended/patched audio needs no re-binding.
+              var opt=thread.querySelectorAll('.msg:not([data-mid])');            // optimistic echoes — the server render now carries the real row
+              for(var i=0;i<opt.length;i++) if(opt[i].parentNode)opt[i].parentNode.removeChild(opt[i]);
+              var cur={}, cn=thread.querySelectorAll('.msg[data-mid]');
+              for(var i=0;i<cn.length;i++) cur[cn[i].getAttribute('data-mid')]=cn[i];
+              var fn=nt.querySelectorAll('.msg[data-mid]'), fids={}, fmin=Infinity;
+              for(var i=0;i<fn.length;i++){var id=+fn[i].getAttribute('data-mid');fids[id]=1;if(id<fmin)fmin=id;}
+              for(var mid in cur){ if(+mid>=fmin && !fids[+mid]){ if(cur[mid].parentNode)cur[mid].parentNode.removeChild(cur[mid]); delete cur[mid]; } }
+              var last=null;
+              for(var i=0;i<fn.length;i++){
+                var f=fn[i], id=f.getAttribute('data-mid'), ex=cur[id];
+                if(!ex){ var imp=document.importNode(f,true); imp.classList.add('msg-in');
+                  if(last&&last.parentNode) last.parentNode.insertBefore(imp,last.nextSibling); else thread.appendChild(imp);
+                  last=imp;
+                } else { if(!playing(ex) && ex.innerHTML!==f.innerHTML) ex.innerHTML=f.innerHTML; last=ex; }
               }
-              var nm=doc.querySelector('.chatsec-t span'),cm=document.querySelector('.chatsec-t span');
-              if(nm&&cm)cm.textContent=nm.textContent;
-              if(atBottom)toBottom();})
-            .catch(function(){});
+            }
+            var nm=doc.querySelector('.chatsec-t span'),cm=document.querySelector('.chatsec-t span');
+            if(nm&&cm)cm.textContent=nm.textContent;
+            if(atBottom)toBottom();
+          }
+          if(prefetched){ apply(prefetched); return; }
+          fetch('/chat',{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.text();}).then(apply).catch(function(){});
         };
         // Load-earlier pagination: the top button fetches the 200 messages before
         // the oldest one shown, prepends them, dedupes the seam day-divider, and
@@ -2930,7 +2944,7 @@ ${mentionAutocompleteJS()}
           var body=new URLSearchParams(new FormData(form));
           cbody.value=''; autoGrow(); if(window.clearReply)window.clearReply();
           fetch(form.action,{method:'POST',body:body,headers:{'X-Requested-With':'fetch'},credentials:'same-origin'})
-            .then(function(r){ if(r.redirected&&r.url&&r.url.indexOf('err=slow')>=0){window.location.href=r.url;return;} window.__threadRefresh(); })
+            .then(function(r){ if(r.redirected&&r.url&&r.url.indexOf('err=slow')>=0){window.location.href=r.url;return;} return r.text().then(function(html){ window.__threadRefresh(false,html); }); }) // reuse the POST response — no 2nd fetch
             .catch(function(){ window.location.href='/chat'; });
         }); }
         // Poll-and-patch the feed (P0-1): re-fetch + patch #thread only on change,
