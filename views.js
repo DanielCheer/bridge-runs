@@ -796,6 +796,10 @@ function voicePlayerScript() {
     document.addEventListener('pause',function(e){ if(isVA(e.target)){ var b=e.target.closest('.mb-voice'); if(b)b.classList.remove('playing'); } },true);
     document.addEventListener('ended',function(e){ if(isVA(e.target)){ var b=e.target.closest('.mb-voice'); if(b){ b.classList.remove('playing'); var f=b.querySelector('.vfill'); if(f)f.style.width='0%'; var d=b.querySelector('.vdur'); if(d)d.textContent=fmt(durOf(b,e.target)); } } },true);
     document.addEventListener('timeupdate',function(e){ if(!isVA(e.target)) return; var b=e.target.closest('.mb-voice'); if(!b)return; var dr=durOf(b,e.target); var f=b.querySelector('.vfill'); if(f&&dr>0)f.style.width=Math.min(100,(e.target.currentTime/dr)*100)+'%'; var d=b.querySelector('.vdur'); if(d)d.textContent=fmt(e.target.currentTime); },true);
+    // Cross-platform playback can fail silently (e.g. Android WebM/Opus on older iOS). Surface
+    // it instead of a dead player: an errored/unplayable clip shows a "can't play — save" note.
+    function mediaErr(t){ if(!t||!t.tagName||(t.tagName!=='AUDIO'&&t.tagName!=='VIDEO')||!t.closest('.msg'))return; var b=t.closest('.mbwrap')||t.parentNode; if(!b||b.__mErr)return; b.__mErr=1; var n=document.createElement('div'); n.className='media-err'; n.style.cssText='font-size:12px;color:var(--muted,#8a8474);margin-top:6px'; n.textContent='⚠️ Can’t play this on your device — press & hold to save.'; b.appendChild(n); }
+    document.addEventListener('error',function(e){ mediaErr(e.target); },true);
   })();
   </script>`;
 }
@@ -2679,9 +2683,10 @@ ${composerInitJS()}
         // (reply/react/delete now live in the press-and-hold menu — see longPressScript)
         // Patch ONLY #thread from a fresh fetch of THIS thread — composer untouched, so
         // typing / reply-chip / focus survive. Shared by fetch-send + the long-press menu.
-        window.__threadRefresh=function(){
+        window.__threadRefresh=function(gentle){
           if(!window.fetch||!window.DOMParser)return;
           var atBottom=(window.innerHeight+window.scrollY)>=(document.body.scrollHeight-40);
+          if(gentle&&!atBottom)return; // a poll tick must not yank a scrolled-up reader
           fetch(location.pathname,{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}})
             .then(function(r){return r.text();})
             .then(function(html){var doc=new DOMParser().parseFromString(html,'text/html');
@@ -2705,14 +2710,10 @@ ${composerInitJS()}
             .then(function(r){ if(r.redirected&&r.url&&r.url.indexOf('err=slow')>=0){window.location.href=r.url;return;} window.__threadRefresh(); })
             .catch(function(){ window.location.href=location.pathname; });
         }); }
-        // Legacy light refresh — DM threads stay on the 20s full reload (poll page
-        // conversion is a P1 follow-up); paused while composing, scroll saved.
-        setInterval(function(){
-          if(document.visibilityState!=='visible') return;
-          if(cbody&&(document.activeElement===cbody||cbody.value.trim())) return;
-          try{ var atBottom=(window.innerHeight+window.scrollY)>=(document.body.scrollHeight-40); sessionStorage.setItem('sc-'+tid,JSON.stringify({y:window.scrollY,bottom:atBottom})); }catch(e){}
-          window.__reload();
-        }, 20000);
+        // Live updates via the shared 10s poll (page=profile detects DM changes) — patches
+        // #thread in place instead of the old 20s full-page reload; gentle so a scrolled-up
+        // reader isn't yanked, and the composer/typing survive.
+        if(window.__poll)window.__poll('profile',function(){window.__threadRefresh(true);});
       })();
     </script>
     ${longPressScript()}
@@ -2885,7 +2886,7 @@ ${mentionAutocompleteJS()}
               // and re-renders all 200 bubbles). Voice-player listeners are delegated on
               // document, so appended/patched audio needs no re-binding.
               var opt=thread.querySelectorAll('.msg:not([data-mid])');            // optimistic echoes — the server render now carries the real row
-              for(var i=0;i<opt.length;i++) if(opt[i].parentNode)opt[i].parentNode.removeChild(opt[i]);
+              for(var i=0;i<opt.length;i++){ var bl=opt[i].querySelectorAll('img[src^="blob:"],video[src^="blob:"]'); for(var q=0;q<bl.length;q++){ try{URL.revokeObjectURL(bl[q].src);}catch(_){} } if(opt[i].parentNode)opt[i].parentNode.removeChild(opt[i]); }
               var cur={}, cn=thread.querySelectorAll('.msg[data-mid]');
               for(var i=0;i<cn.length;i++) cur[cn[i].getAttribute('data-mid')]=cn[i];
               var fn=nt.querySelectorAll('.msg[data-mid]'), fids={}, fmin=Infinity;
@@ -2907,6 +2908,10 @@ ${mentionAutocompleteJS()}
           if(prefetched){ apply(prefetched); return; }
           fetch('/chat',{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.text();}).then(apply).catch(function(){});
         };
+        // Keep the newest message in view as photos decode: a lazy image loading below the
+        // fold grows the page; if we're already near the bottom, re-anchor so you don't get
+        // stranded above the latest message (chat imgs have no reserved dimensions).
+        thread.addEventListener('load',function(e){ if(e.target&&e.target.tagName==='IMG'){ if((window.innerHeight+window.scrollY)>=(document.body.scrollHeight-140))toBottom(); } },true);
         // Load-earlier pagination: the top button fetches the 200 messages before
         // the oldest one shown, prepends them, dedupes the seam day-divider, and
         // pins the viewport to the same message (content grows above the fold).
