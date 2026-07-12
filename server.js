@@ -617,6 +617,23 @@ function safeUnlinkChatImage(imgPath) {
   try { fs.unlinkSync(path.join(CHAT_MEDIA_DIR, fname)); } catch { /* already gone — fine */ }
 }
 
+// Chat-media retention: keep photos/voice/video for 1 YEAR, then delete the files and null
+// the media columns (the message row + any caption stay, so reply-chains/history are intact;
+// a >1-year-old media-only bubble simply goes empty — nobody scrolls back that far in a run
+// chat). Sticker images (/stickers/…) are shared SVGs, never pruned. Runs at boot + daily.
+function pruneOldMedia() {
+  try {
+    let n = 0;
+    const g = db.prepare("SELECT id, image, audio, video FROM group_messages WHERE created_at < datetime('now','-1 year') AND (audio IS NOT NULL OR video IS NOT NULL OR image LIKE '/chat-media/%')").all();
+    const gclr = db.prepare("UPDATE group_messages SET audio = NULL, video = NULL, image = CASE WHEN image LIKE '/chat-media/%' THEN NULL ELSE image END WHERE id = ?");
+    for (const r of g) { safeUnlinkChatImage(r.image); safeUnlinkChatImage(r.audio); safeUnlinkChatImage(r.video); gclr.run(r.id); n++; }
+    const d = db.prepare("SELECT id, image FROM messages WHERE created_at < datetime('now','-1 year') AND image LIKE '/chat-media/%'").all();
+    const dclr = db.prepare('UPDATE messages SET image = NULL WHERE id = ?');
+    for (const r of d) { safeUnlinkChatImage(r.image); dclr.run(r.id); n++; }
+    if (n) console.log(`[media-prune] cleared ${n} chat-media file(s) older than 1 year`);
+  } catch (e) { console.error(`[media-prune] failed: ${e.message}`); }
+}
+
 // The valid sticker set (from views.js) → an image path, or null if unknown. A sticker
 // send carries only a name; this is the ONLY thing trusted to build the path (no upload,
 // no client-supplied path), so a bogus/traversal name can never become an image.
@@ -3133,4 +3150,5 @@ app.listen(PORT, () => {
   console.log(`Cap: ${CAP} · Email: ${emailConfigured ? 'SMTP configured' : 'DEV MODE (links print here)'}`);
   console.log(`Admin emails: ${process.env.ADMIN_EMAILS || '(none set — set ADMIN_EMAILS!)'}\n`);
   startBackups(); // snapshot the DB now + once a day
+  pruneOldMedia(); setInterval(pruneOldMedia, 24 * 60 * 60 * 1000).unref(); // media retention: 1 year, checked at boot + daily
 });

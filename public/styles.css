@@ -1,3 +1,10 @@
+/* Self-hosted fonts (latin subset, woff2) — served same-origin from /public/fonts so first
+   paint no longer blocks on a third-party Google Fonts CSS fetch, and they work offline.
+   Archivo + Inter are variable fonts (one file spans their weight range). */
+@font-face{font-family:'Anton';font-style:normal;font-weight:400;font-display:swap;src:url(/fonts/anton.woff2) format('woff2')}
+@font-face{font-family:'Archivo';font-style:normal;font-weight:500 800;font-display:swap;src:url(/fonts/archivo.woff2) format('woff2')}
+@font-face{font-family:'Inter';font-style:normal;font-weight:400 600;font-display:swap;src:url(/fonts/inter.woff2) format('woff2')}
+
 /* styles.css — The Bridge Adv Runs, v4 "Foil & Court"
    Ivory canvas, teal scoreboard hero, orange-foil accents. Anton display,
    Archivo UI headings, Inter body, system monospace for numerics. Mobile-first,
