@@ -244,6 +244,7 @@ window.__pollStop=function(){window.__pollPage=null;window.__pollOnChange=null;}
       if(abs.pathname==='/chat'&&navigator.sendBeacon){try{navigator.sendBeacon('/chat/seen');}catch(e){}}
     }).catch(function(){hard(href);});
   }
+  window.__go=go; // exposed so the team tour can drive a smooth router swap between pages
   document.addEventListener('pointerdown',function(e){
     var a=e.target&&e.target.closest&&e.target.closest('.tabs a[href],.opsnav a[href]');
     if(a)warm(a.getAttribute('href'));
@@ -1256,23 +1257,28 @@ const firstRunTour = `
     // Operator steps (Council / open-close / guest / announce / auto-renew) carry selectors
     // that exist ONLY for team+admin — the filter below drops any step whose element isn't on
     // the page, so operators get these extra spotlights automatically and players never do.
+    // Steps carry an optional path (the page they run on) so the tour can WALK INTO Council
+    // (/admin) and People (/admin/people) and spotlight controls there. op = team+admin only,
+    // adm = admin only — filtered by whether the matching ops-nav link exists (deterministic
+    // per user, so the step list + indices are identical on every page so resume aligns).
     var STEPS_ALL=[
       {ttl:"Welcome to the run 👋",txt:"Here’s a quick tour of the app."},
       {sel:'[data-tour="join"]',ttl:"Grab your spot",txt:"Tap “I’m in” each week to claim a spot. Spots are limited — first come, first served."},
       {sel:'.tabs a[href="/chat"]',ttl:"Run chat",txt:"Chat with the whole run — photos, plans and @mentions. On the team? Press &amp; hold a message to Pin it."},
       {sel:'.tabs a[href="/profile"]',ttl:"Your profile",txt:"Your stats, photo and settings live here."},
       {sel:'.bellbtn',ttl:"Announcements",txt:"Updates from the host show up here."},
-      {sel:'.opsnav a[href="/admin"]',ttl:"Vote players in",txt:"You’re on the team — new applicants show up on the Council tab for you to Approve or Reject."},
-      {sel:'[data-tour="ops-run"]',ttl:"Run the check-in",txt:"Open or close check-in by hand (it auto-opens Wed and locks at 2 PM). Tap the scoreboard’s “Who’s going” to remove or bump players."},
-      {sel:'.hguest summary',ttl:"Add a guest",txt:"Drop in a last-minute walk-on by name — works even after the 2 PM lock."},
-      {sel:'.announce-compose summary',ttl:"Announce to everyone",txt:"Post an update that pushes to the whole run’s phones."},
-      {sel:'.arpill',ttl:"Your guaranteed spot",txt:"As team you’re auto-added each week. Toggle this to sit out a week — it never affects your standing."},
-      {ttl:"Turn on notifications",txt:"Get a ping for spot offers, announcements and @mentions — never miss out.",notif:true}
+      {sel:'[data-tour="ops-run"]',op:1,ttl:"Run the check-in",txt:"Open or close check-in by hand (it auto-opens Wed and locks at 2 PM). Tap the scoreboard’s “Who’s going” to remove or bump players."},
+      {sel:'.hguest summary',op:1,ttl:"Add a guest",txt:"Drop in a last-minute walk-on by name — works even after the 2 PM lock."},
+      {sel:'.announce-compose summary',op:1,ttl:"Announce to everyone",txt:"Post an update that pushes to the whole run’s phones."},
+      {sel:'.arpill',op:1,ttl:"Your guaranteed spot",txt:"As team you’re auto-added each week. Toggle this to sit out a week — it never affects your standing."},
+      {ttl:"Turn on notifications",txt:"Get a ping for spot offers, announcements and @mentions — never miss out.",notif:1},
+      {path:'/admin',op:1,sel:'[data-tour="council"]',ttl:"Vote players in",txt:"This is the Council. New applicants show up here — you and the team Approve or Reject each. It takes 3 approvals to let someone in."},
+      {path:'/admin/people',adm:1,sel:'[data-tour="people"]',ttl:"Manage people",txt:"Search anyone, suspend or remove them, change roles, invite, or export — all from the People tab."}
     ];
     var STEPS=[], i=0, running=0, hole=document.getElementById('tourhole'), tip=document.getElementById('tourtip'),
         ttl=document.getElementById('tourttl'), txt=document.getElementById('tourtxt'),
         next=document.getElementById('tournext'), dots=document.getElementById('tourdots');
-    function done(){ try{localStorage.setItem(KEY,'1');}catch(e){} tour.hidden=true; document.body.style.overflow=''; running=0; }
+    function done(){ try{localStorage.setItem(KEY,'1');sessionStorage.removeItem('__tourResume');}catch(e){} tour.hidden=true; document.body.style.overflow=''; running=0; }
     function place(){
       var s=STEPS[i], el=s.sel?document.querySelector(s.sel):null;
       document.getElementById('tourcatch').style.background = el ? 'transparent' : 'rgba(18,20,14,.72)';
@@ -1296,28 +1302,44 @@ const firstRunTour = `
       var d=''; for(var k=0;k<STEPS.length;k++) d+='<i class="'+(k===i?'on':'')+'"></i>'; dots.innerHTML=d;
       next.textContent=s.notif?'Enable':(i===STEPS.length-1?'Done':'Next'); next.disabled=false; place();
     }
+    function goToStep(idx){
+      if(idx>=STEPS.length){ done(); return; }
+      var target=STEPS[idx].path||'/checkin';
+      if(target!==location.pathname){                 // step lives on another page → navigate, resume there
+        try{ sessionStorage.setItem('__tourResume', String(idx)); }catch(e){}
+        tour.hidden=true; document.body.style.overflow=''; running=0;
+        if(window.__go) window.__go(target,true); else window.location.href=target;
+        return;
+      }
+      i=idx; render();
+    }
     function advance(){
       var s=STEPS[i];
-      if(s.notif){ next.disabled=true; (window.__pushEnable?window.__pushEnable():Promise.resolve()).then(done,done); return; }
-      if(i>=STEPS.length-1){ done(); return; }
-      i++; render();
+      if(s.notif){ next.disabled=true; var nx=function(){goToStep(i+1);}; (window.__pushEnable?window.__pushEnable():Promise.resolve()).then(nx,nx); return; }
+      goToStep(i+1);
     }
     next.addEventListener('click',advance);
     document.getElementById('tourskip').addEventListener('click',done);
     document.getElementById('tourcatch').addEventListener('click',function(){ if(!STEPS[i].notif) advance(); });
     window.addEventListener('resize',function(){ if(!tour.hidden) place(); });
-    // Exposed so the team nudge can launch it on demand. force=true ignores the "seen" flag
-    // (replay) and skips the splash delay. Auto-runs once (force=false) on first load.
+    // force=true → replay (ignore seen-flag, no splash delay). Auto-runs once on the check-in
+    // home page; on other pages it runs ONLY when RESUMING a tour that navigated here.
     window.__startTour=function(force){
       if(running) return;
-      if(!force){ try{ if(localStorage.getItem(KEY)) return; }catch(e){} }
+      var resume=-1;
+      try{ var rs=sessionStorage.getItem('__tourResume'); if(rs!==null){ resume=parseInt(rs,10); sessionStorage.removeItem('__tourResume'); } }catch(e){}
+      if(resume<0 && !force){
+        if(location.pathname!=='/checkin') return;
+        try{ if(localStorage.getItem(KEY)) return; }catch(e){}
+      }
       running=1;
+      var isOp=!!document.querySelector('.opsnav a[href="/admin"]'), isAdm=!!document.querySelector('.opsnav a[href="/admin/people"]'), sup=supported();
       setTimeout(function(){
-        STEPS=STEPS_ALL.filter(function(s){ return !s.sel || document.querySelector(s.sel); });
-        if(!supported()) STEPS=STEPS.filter(function(s){ return !s.notif; });
-        if(!STEPS.length){ try{localStorage.setItem(KEY,'1');}catch(e){} running=0; return; }
-        i=0; tour.hidden=false; document.body.style.overflow='hidden'; render();
-      }, force?0:((document.getElementById('splash')&&!reduce)?1700:350));
+        STEPS=STEPS_ALL.filter(function(s){ if(s.op&&!isOp)return false; if(s.adm&&!isAdm)return false; if(s.notif&&!sup)return false; return true; });
+        if(!STEPS.length){ done(); return; }
+        i = resume>=0 ? Math.max(0,Math.min(resume,STEPS.length-1)) : 0;
+        tour.hidden=false; document.body.style.overflow='hidden'; render();
+      }, resume>=0?260:(force?0:((document.getElementById('splash')&&!reduce)?1700:350)));
     };
     window.__startTour(false);
   })();
@@ -3088,10 +3110,10 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '7–10 
     </div>` : '';
 
   return HEAD('Council — Adv Runs', 'has-tabs') + header(`<b>COUNCIL</b>${viewerIsAdmin ? 'admin' : 'team'}`, wdayShort(runDate), ann, hours) + `
-    ${opsNav('admin', { isAdmin: viewerIsAdmin, isTeam: viewerIsTeam })}
+    ${opsNav('admin', { isAdmin: viewerIsAdmin, isTeam: viewerIsTeam })}${firstRunTour}
     <div class="rule"></div>
     <span class="eyebrow">${applicants.length} ${filter === 'all' ? 'applicant' : filter}${applicants.length===1?'':'s'}</span>
-    <h1>Council review</h1>
+    <h1 data-tour="council">Council review</h1>
     <p class="lead">${viewerIsAdmin
       ? 'Approval is decided by the <b>team</b>: 3 approvals gets an applicant in, 3 rejects blocks them. You have oversight and manage people, but you don\'t vote. Team members are auto-approved and skip the vote.'
       : 'It takes <b>3 approvals</b> to get an applicant in, or <b>3 rejects</b> to block them. Cast your vote below.'}</p>
@@ -3317,10 +3339,10 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
   const phoneList = approvedPhones.map(p => `${p.full_name}: ${p.phone}`).join('\n');
 
   return HEAD('People — Adv Runs', 'has-tabs') + header('<b>PEOPLE</b>admin', 'FRI', ann) + `
-    ${opsNav('people', { isAdmin: true })}
+    ${opsNav('people', { isAdmin: true })}${firstRunTour}
     <div class="rule"></div>
     <span class="eyebrow">${people.length} ${q ? 'match' + (people.length===1?'':'es') : 'people'}</span>
-    <h1>People</h1>
+    <h1 data-tour="people">People</h1>
     ${msg ? `<div class="notice good">${esc(msg)}</div>` : ''}
 
     <form method="GET" action="/admin/people" style="margin:8px 0 4px">
