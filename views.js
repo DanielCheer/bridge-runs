@@ -1323,6 +1323,15 @@ const firstRunTour = `
     document.getElementById('tourskip').addEventListener('click',done);
     document.getElementById('tourcatch').addEventListener('click',function(){ if(!STEPS[i].notif) advance(); });
     window.addEventListener('resize',function(){ if(!tour.hidden) place(); });
+    // Swipe RIGHT → back a step, swipe LEFT → forward (goToStep handles the cross-page hops).
+    // Forward-swipe skips the notif step's push prompt (only the Enable button grants it).
+    var tsx=0,tsy=0;
+    tour.addEventListener('touchstart',function(e){ if(e.touches&&e.touches.length===1){tsx=e.touches[0].clientX;tsy=e.touches[0].clientY;} },{passive:true});
+    tour.addEventListener('touchend',function(e){
+      if(tour.hidden||!e.changedTouches||!e.changedTouches.length)return;
+      var dx=e.changedTouches[0].clientX-tsx, dy=e.changedTouches[0].clientY-tsy;
+      if(Math.abs(dx)>50 && Math.abs(dx)>Math.abs(dy)*1.4){ if(dx>0){ if(i>0)goToStep(i-1); } else goToStep(i+1); }
+    },{passive:true});
     // force=true → replay (ignore seen-flag, no splash delay). Auto-runs once on the check-in
     // home page; on other pages it runs ONLY when RESUMING a tour that navigated here.
     window.__startTour=function(force){
