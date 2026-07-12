@@ -21,7 +21,7 @@ import {
 import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap,
-  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage,
+  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, teamGuidePage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -3112,6 +3112,17 @@ app.get('/run.ics', requireLogin, (req, res) => {
   res.set('Content-Type', 'text/calendar; charset=utf-8');
   res.set('Content-Disposition', `attachment; filename="bridge-run-${rd}.ics"`);
   res.send(ics);
+});
+
+// Team guide — operator walkthrough (council voting, run-day controls, announcements, pin,
+// auto-renew). Team + admin only; admins get an extra card for their admin-only tools.
+app.get('/team-guide', requireApprover, (req, res) => {
+  const a = applicantByEmail(req.userEmail);
+  res.send(teamGuidePage({
+    email: req.userEmail, isAdmin: isAdmin(req.userEmail), voteThreshold: VOTE_THRESHOLD,
+    dmUnread: unreadCount(req.userEmail), groupUnread: groupUnread(req.userEmail),
+    groupMention: groupMentionUnread(req.userEmail, a ? a.id : 0), ann: annPanel(req.userEmail),
+  }));
 });
 
 // Season board — most runs this calendar year. Top list + the viewer's own rank; gentle

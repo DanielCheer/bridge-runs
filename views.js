@@ -1860,6 +1860,11 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
 
   return HEAD(`${wdayFull(runDate)} Check-in — Adv Runs`, 'has-tabs') + header(`<b>CHECK-IN</b>${esc(email)}`, wdayShort(runDate), ann, hours) + WELCOME_MODAL + `
     ${opsNav('checkin', { isAdmin: viewerIsAdmin, isTeam: iAmTeam })}
+    ${canOperate ? `<div id="tgnudge" class="notice" style="margin-top:10px;display:flex;align-items:center;gap:10px;justify-content:space-between">
+      <span>🏀 <b>You’re on the team.</b> See everything you can do → <a href="/team-guide">Team guide</a></span>
+      <button type="button" aria-label="Dismiss" onclick="try{localStorage.setItem('tgSeen1','1');}catch(e){}var n=document.getElementById('tgnudge');if(n)n.style.display='none';" style="border:0;background:none;font-size:20px;line-height:1;color:var(--muted);cursor:pointer;padding:0 4px">&times;</button>
+    </div>
+    <script>(function(){try{if(localStorage.getItem('tgSeen1')){var n=document.getElementById('tgnudge');if(n)n.style.display='none';}}catch(e){}})();</script>` : ''}
     <div class="rule"></div>
     <div id="notifprompt" class="notifprompt" hidden>
       <div class="np-b"><b>🔔 Turn on notifications</b><span>Spot offers, run updates &amp; @mentions — right on your phone.</span></div>
@@ -2165,6 +2170,44 @@ export function seasonPage({ rows, email, dmUnread = 0, groupUnread = 0, groupMe
   ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention }));
 }
 
+// Team guide — the "you have more buttons now" walkthrough for team members (and admins).
+// A findable, revisitable reference (the operator controls live across pages + overlays, so a
+// spotlight tour can't reach them). Role-aware: the last card differs for admins vs team.
+export function teamGuidePage({ email, isAdmin = false, voteThreshold = 3, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+  const card = (lab, title, body) => `<div class="card" style="margin-top:12px">
+      <div class="clab">${esc(lab)}</div><div class="ctitle">${esc(title)}</div>
+      <div style="margin-top:10px;color:var(--ink);font-size:14.5px;line-height:1.6">${body}</div>
+    </div>`;
+  const lastCard = isAdmin
+    ? card('Admin', 'Your admin tools', `As an admin you also get the tools a team member doesn't:
+        <ul style="margin:8px 0 0;padding-left:18px">
+          <li><b>People</b> tab — search everyone, <b>suspend</b> or remove, change roles (Team / Core / Host), export a CSV.</li>
+          <li><b>Run day</b> (Profile) — move or <b>cancel</b> this week's run, and edit the floor / waitlist caps.</li>
+          <li><b>Invites</b> + the QR <b>Share</b> page, and the <b>banner</b> photo crop tool.</li>
+        </ul>`)
+    : card('Admin only', 'What you’ll need an admin for', `A few things are reserved for the host and admins:
+        managing people (suspending, removing, changing roles), <b>moving or cancelling the run</b>, editing the caps,
+        sending invites, and the banner photo. Need one of those? Just <b>message the host</b>.`);
+  return HEAD('Team Guide — Adv Runs', 'has-tabs') + header(`<b>TEAM GUIDE</b>${esc(email)}`, 'FRI', ann) + `
+    <div class="rule"></div>
+    <div class="phead"><h1>Running the show</h1></div>
+    <p class="psub" style="margin:-4px 0 8px;color:var(--muted)">You’re on the team — here’s everything you can do that a regular player can’t. 🏀</p>
+    ${card('Council', 'Vote new players in', `Applicants who’ve come to a Monday rec run show up on the <b>Council</b> tab (the switcher at the top of the check-in &amp; profile pages). You and the other team members vote <b>Approve</b> or <b>Reject</b>. It takes <b>${voteThreshold} approvals</b> to let someone in, or <b>${voteThreshold} rejects</b> to turn them away — until then they stay pending. You can’t vote on yourself or other team members.`)}
+    ${card('Game day', 'Run the check-in', `On the check-in card you have the operator controls:
+        <ul style="margin:8px 0 0;padding-left:18px">
+          <li><b>Open / Close check-in</b> — it opens automatically on Wednesday and locks at 2 PM on game day, but you can open or close it by hand anytime.</li>
+          <li><b>+ Guest</b> — add a last-minute walk-on by name (for someone who shows up without the app).</li>
+          <li><b>Manage the floor</b> — tap <b>Who’s going</b> to see the full list; there you can <b>Remove</b> anyone or <b>Bump</b> a waitlister up onto the floor.</li>
+        </ul>
+        <div class="notice" style="margin-top:10px">After the <b>2 PM lock</b> the roster is set — nobody new can sign themselves up, so add any stragglers with <b>+ Guest</b>.</div>`)}
+    ${card('Announcements', 'Tell the whole run', `On the check-in card, <b>Send announcement</b> posts a message that pushes to everyone’s phone (and optionally emails them). It shows as a banner and in the 🔔 bell. Use it for the real stuff — “gym moved to court 2”, “no run this week”.`)}
+    ${card('Run Chat', 'Pin what matters', `Press and hold any Run Chat message and choose <b>Pin</b> — it sticks to the top of the chat so the address, jersey colors, or the plan don’t scroll away. Press &amp; hold + Unpin to remove it.`)}
+    ${card('Your spot', 'Your guaranteed weekly spot', `As team, you’re auto-added to the floor every week — no need to race to check in. The <b>AUTO-RENEW</b> pill on the check-in card toggles it: turn it off to sit out a week (your spot goes to the waitlist), turn it back on and you’re seated again. It never affects your team standing.`)}
+    ${lastCard}
+    <div class="foot" style="margin-top:18px"><a href="/checkin">← Back to check-in</a></div>
+  ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention }));
+}
+
 // Host DM inbox rows — reused on the host's profile tab (host DMs live in Profile
 // now). Each row links to its thread; unread pip per thread. `me` = the host.
 function inboxRows(me, threads) {
@@ -2322,7 +2365,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
     ${inbox}
     ${annHistory}
     ${annSheet}
-    <div class="foot signout"><a href="/checkin" onclick="try{localStorage.removeItem('bridgeTourV1');}catch(e){}window.__tourStarted=0;">↻ Replay app tour</a> · <a href="/logout">Sign out</a></div>
+    <div class="foot signout">${canOperate ? '<a href="/team-guide">📋 Team guide</a> · ' : ''}<a href="/checkin" onclick="try{localStorage.removeItem('bridgeTourV1');}catch(e){}window.__tourStarted=0;">↻ Replay app tour</a> · <a href="/logout">Sign out</a></div>
     <script>
       (function(){
         // Surgical poll-and-patch (P0-1): patch the DM/group badges every tick; the
