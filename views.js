@@ -1855,11 +1855,13 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
   // the check-in fetch-swap interceptor only catches `.controls form`, not these.
   const wgRemoveForm = (p) => `<form method="POST" action="/checkin/remove" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn leave sm" type="submit" title="Remove">Remove</button></form>`;
   const wgBumpForm = (p) => `<form method="POST" action="/checkin/promote" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn sm" type="submit" title="Move into the run">Bump in</button></form>`;
-  const wgRow = (p, n) => `<div class="lr"><span class="ln">${n}</span><span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''}${p.confirmed_at ? ' <span class="tag reg" title="Confirmed">✓</span>' : ''}</span>${roleBadge(p)}${canOperate ? wgRemoveForm(p) : ''}</div>`;
+  // Tapping a real player's avatar/name opens their profile; guests (no account) aren't linked.
+  const wgNameLink = (p, inner) => (p.applicant_id && !/@guest\.local$/.test(p.email)) ? `<a class="lrlink" href="/u/${p.applicant_id}">${inner}</a>` : inner;
+  const wgRow = (p, n) => `<div class="lr"><span class="ln">${n}</span>${wgNameLink(p, `<span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''}${p.confirmed_at ? ' <span class="tag reg" title="Confirmed">✓</span>' : ''}</span>`)}${roleBadge(p)}${canOperate ? wgRemoveForm(p) : ''}</div>`;
   // Held offer row — the spot is taken (counts toward the floor) but the person hasn't
   // confirmed yet, so it's shown as "claiming" rather than as a settled floor player.
-  const wgOfferRow = (p) => `<div class="lr"><span class="ln">·</span><span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''} <span class="tag">⏳ Claiming</span></span>${canOperate ? wgRemoveForm(p) : ''}</div>`;
-  const wgWaitRow = (p, i) => `<div class="lr"><span class="ln">W${i}</span><span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}</span>${canOperate ? wgBumpForm(p) + wgRemoveForm(p) : ''}</div>`;
+  const wgOfferRow = (p) => `<div class="lr"><span class="ln">·</span>${wgNameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''} <span class="tag">⏳ Claiming</span></span>`)}${canOperate ? wgRemoveForm(p) : ''}</div>`;
+  const wgWaitRow = (p, i) => `<div class="lr"><span class="ln">W${i}</span>${wgNameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}</span>`)}${canOperate ? wgBumpForm(p) + wgRemoveForm(p) : ''}</div>`;
   const wgSheet = canSeeRoster ? `
     <div id="wgwrap" class="wgwrap">
       <div class="wgscrim" onclick="wgClose()"></div>
@@ -1960,10 +1962,11 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
       // 302-redirects as before.
       if(!window.__ckControlsBound){ window.__ckControlsBound=true;
         document.addEventListener('submit',function(e){
-          var form=e.target.closest&&e.target.closest('.controls form, .arform');
+          var form=e.target.closest&&e.target.closest('.controls form, .arform, .hguest form, .wgsheet form');
           if(!form)return;
           if(!window.fetch||!window.DOMParser||!window.__swapWrap)return;
           e.preventDefault();
+          var reopenWg=!!(form.closest&&form.closest('.wgsheet')); // remove/bump from the open sheet → re-open it after the swap
           var btn=form.querySelector('button[type=submit],button:not([type])');
           if(btn){btn.classList.add('is-busy');btn.setAttribute('aria-busy','true');}
           var y=window.scrollY;
@@ -1979,6 +1982,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
               window.__ckBusy=false;
               if(!window.__swapWrap(html)){window.location.href='/checkin';return;}
               window.scrollTo(0,y);
+              if(reopenWg&&window.wgOpen)window.wgOpen(); // keep the who's-going sheet open after a remove/bump
               var n=document.querySelector('.count .n');
               if(n){n.classList.remove('pulse-now');void n.offsetWidth;n.classList.add('pulse-now');}
             })

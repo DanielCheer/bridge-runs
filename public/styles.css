@@ -241,6 +241,7 @@ a.score{cursor:pointer}
 .lr{display:flex;align-items:center;gap:11px;padding:8px;text-decoration:none;color:inherit;flex-wrap:wrap}
 .lr + .lr{border-top:1px solid rgba(34,35,29,.06)}
 .ln{width:22px;text-align:center;font-family:var(--anton);font-size:13px;color:var(--orange-deep);flex:none}
+.lrlink{display:contents;color:inherit;-webkit-tap-highlight-color:transparent} /* avatar+name → profile, no layout box */
 .lav{width:30px;height:30px;border-radius:50%;flex:none;overflow:hidden;display:grid;place-items:center;
   font-family:var(--head);font-weight:800;font-size:11px;color:#fff;background:linear-gradient(150deg,#2f7169,#1a453f)}
 .lav img{width:100%;height:100%;object-fit:cover}
