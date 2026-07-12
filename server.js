@@ -21,7 +21,7 @@ import {
 import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap,
-  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage,
+  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1663,6 +1663,16 @@ app.get('/poll', requireLogin, (req, res) => {
 app.get('/roster', requireLogin, (req, res) => res.redirect('/checkin'));
 
 // ---------- PROFILE (view another player) ----------
+// Compact profile card fragment for the who's-going quick-look popup (fetched by pvOpen).
+app.get('/u/:id/card', requireLogin, (req, res) => {
+  const gate = requirePlayer(req, res);
+  if (!gate) return;
+  const p = db.prepare('SELECT * FROM applicants WHERE id = ?').get(Number(req.params.id) || 0);
+  if (!p || (p.status !== 'approved' && !gate.viewerIsAdmin)) return res.status(404).send('');
+  const canContact = gate.viewerIsAdmin || !!(gate.a && gate.a.is_team);
+  res.send(profileCard({ p, stats: attendanceStats(p.email), canContact, isSelf: p.email === req.userEmail }));
+});
+
 app.get('/u/:id', requireLogin, (req, res) => {
   const gate = requirePlayer(req, res);
   if (!gate) return;

@@ -167,7 +167,7 @@ window.__swapWrap=function(html){
 // fire then (it would destroy the tour/sheet mid-use and could leave scroll locked).
 window.__overlayOpen=function(){
   var t=document.getElementById('tour'); if(t&&!t.hidden)return true;
-  var ids=['annwrap','wgwrap','memwrap'];
+  var ids=['annwrap','wgwrap','memwrap','pvwrap'];
   for(var i=0;i<ids.length;i++){var e=document.getElementById(ids[i]); if(e&&e.classList.contains('open'))return true;}
   return false;
 };
@@ -304,6 +304,7 @@ if(!window.__logoutBound){window.__logoutBound=1;
 if(!window.__ovEscBound){window.__ovEscBound=1;
   document.addEventListener('keydown',function(e){
     if(e.key!=='Escape')return;
+    var pv=document.getElementById('pvwrap'); if(pv&&pv.classList.contains('open')){if(window.pvClose)window.pvClose();return;} // profile popup is topmost
     var w=document.querySelector('.wgwrap.open'); if(!w)return;
     var id=w.id;
     if(id==='wgwrap'&&window.wgClose)window.wgClose();
@@ -1878,7 +1879,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
   const wgRemoveForm = (p) => `<form method="POST" action="/checkin/remove" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn leave sm" type="submit" title="Remove">Remove</button></form>`;
   const wgBumpForm = (p) => `<form method="POST" action="/checkin/promote" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn sm" type="submit" title="Move into the run">Bump in</button></form>`;
   // Tapping a real player's avatar/name opens their profile; guests (no account) aren't linked.
-  const wgNameLink = (p, inner) => (p.applicant_id && !/@guest\.local$/.test(p.email)) ? `<a class="lrlink" href="/u/${p.applicant_id}">${inner}</a>` : inner;
+  const wgNameLink = (p, inner) => (p.applicant_id && !/@guest\.local$/.test(p.email)) ? `<a class="lrlink" href="/u/${p.applicant_id}" onclick="if(window.pvOpen){pvOpen(${p.applicant_id});return false;}">${inner}</a>` : inner;
   const wgRow = (p, n) => `<div class="lr"><span class="ln">${n}</span>${wgNameLink(p, `<span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''}${p.confirmed_at ? ' <span class="tag reg" title="Confirmed">✓</span>' : ''}</span>`)}${roleBadge(p)}${canOperate ? wgRemoveForm(p) : ''}</div>`;
   // Held offer row — the spot is taken (counts toward the floor) but the person hasn't
   // confirmed yet, so it's shown as "claiming" rather than as a settled floor player.
@@ -1956,6 +1957,11 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
     ${cancelled ? '' : `<div style="margin-top:12px"><a href="/run.ics" style="font-size:13px;color:var(--muted)">📅 Add this run to your calendar</a></div>`}
     ${infoSection}
     ${wgSheet}
+    ${canSeeRoster ? `<div id="pvwrap" class="wgwrap pvwrap"><div class="wgscrim" onclick="pvClose()"></div>
+      <div class="wgsheet pvsheet" role="dialog" aria-modal="true" aria-label="Player profile">
+        <div class="wgsheet-h"><b>Profile</b><button class="wgx" type="button" onclick="pvClose()" aria-label="Close">${IC_CLOSE}</button></div>
+        <div class="wgsheet-b pvbody"><div class="pcload">Loading…</div></div>
+      </div></div>` : ''}
 
     ${qrBlock}
     <div style="height:28px"></div>
@@ -1965,6 +1971,11 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
       // Who's-going overlay. Open is instant; close plays a slide-down (unless
       // reduced-motion / noanim) with the state flip only at the end.
       window.wgOpen=function(){var w=document.getElementById('wgwrap');if(w){window.__ovPrev=document.activeElement;w.classList.add('open');document.body.style.overflow='hidden';var sh=w.querySelector('.wgsheet');if(sh){sh.setAttribute('tabindex','-1');try{sh.focus();}catch(e){}}}};
+      // Quick-look profile popup (tap a name in the who's-going sheet). Opens ON TOP of it and
+      // fetches a compact card; closing reveals the who's-going sheet still underneath.
+      window.pvOpen=function(id){var w=document.getElementById('pvwrap');if(!w)return;var b=w.querySelector('.pvbody');if(b)b.innerHTML='<div class="pcload">Loading…</div>';w.classList.add('open');document.body.style.overflow='hidden';
+        if(window.fetch)fetch('/u/'+id+'/card',{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.ok?r.text():Promise.reject();}).then(function(h){if(b)b.innerHTML=h;}).catch(function(){if(b)b.innerHTML='<div class="pcload">Couldn\\u2019t load that profile.</div>';});};
+      window.pvClose=function(){var w=document.getElementById('pvwrap');if(!w)return;w.classList.remove('open');var wg=document.getElementById('wgwrap');if(!(wg&&wg.classList.contains('open')))document.body.style.overflow='';};
       window.wgClose=function(){var w=document.getElementById('wgwrap');if(!w)return;var sh=w.querySelector('.wgsheet');
         var still=document.documentElement.classList.contains('noanim')||(window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches);
         function restore(){var p=window.__ovPrev;if(p&&p.focus)try{p.focus();}catch(e){}}
@@ -2150,6 +2161,22 @@ export function chatPage({ me, chat, runDate = '', hours = '7–10 PM', dmUnread
 }
 
 // ---------- PROFILE (view another player) ----------
+// Compact profile card — served as a fragment for the quick-look popup (tap a name in the
+// who's-going sheet). Just the essentials + a Message / Full-profile jump; no page chrome.
+export function profileCard({ p, stats, canContact = false, isSelf = false }) {
+  const rb = p.is_host ? '<span class="bdg host">★ Host</span>' : p.is_team ? '<span class="bdg team">◆ Team</span>' : p.is_regular ? '<span class="bdg core">★ Core</span>' : '<span class="bdg reg">Regular</span>';
+  const positions = (p.position || '').split(',').filter(Boolean).join(' · ');
+  const memberSince = stats.first ? fmtMonthYear(stats.first) : null;
+  const row = (k, v) => `<div class="pcrow"><span class="pck">${esc(k)}</span><span class="pcv">${v}</span></div>`;
+  return `<div class="pctop"><div class="pcav">${avatarInner(p.email, p.full_name)}</div>
+      <div class="pcid"><div class="pcnm">${esc(p.full_name)}</div><div class="pcbadge">${rb}</div></div></div>
+    <div class="pcstats"><div><b>${stats.total}</b><span>Games</span></div><div><b>${stats.season}</b><span>Season</span></div><div><b>${stats.streak}</b><span>Streak</span></div></div>
+    ${positions ? row('Position', esc(positions)) : ''}
+    ${memberSince ? row('Member since', esc(memberSince)) : ''}
+    ${canContact ? row('Contact', `<a href="tel:${esc(p.phone)}">${esc(p.phone)}</a> · <a href="mailto:${esc(p.email)}">${esc(p.email)}</a>`) : ''}
+    <div class="pcbtns">${isSelf ? `<a class="btn ghost sm" href="/profile">Edit profile</a>` : `<a class="btn primary sm" href="/messages/${p.id}">Message</a>`}<a class="btn ghost sm" href="/u/${p.id}">Full profile →</a></div>`;
+}
+
 export function profilePage({ p, stats, isSelf = false, canContact = false, runDate = '', hours = '7–10 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
   const badges = [
     p.is_host ? '<span class="bdg host">★ Host</span>' : '',
