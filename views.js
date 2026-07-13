@@ -2227,6 +2227,39 @@ export function profilePage({ p, stats, isSelf = false, canContact = false, runD
   ` + footWithTabs(tabNav(isSelf ? 'profile' : '', { dm: dmUnread, group: groupUnread, groupMention }));
 }
 
+// Pickleball run — a SEPARATE, hidden run on its own pk_* tables. Dedicated view (reuses the
+// shell + avatar + list styles); does not touch the basketball checkinPage. Native POST forms.
+export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', floorPlayers = [], waitPlayers = [], hidden = true, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+  const full = going >= cap, totalFull = (going + waiting) >= (cap + waitlistCap);
+  const rmForm = (p) => `<form method="POST" action="/pickleball/remove" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn leave sm" type="submit">Remove</button></form>`;
+  const rowFloor = (p, n) => `<div class="lr"><span class="ln">${n}</span><span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''}</span>${canOperate ? rmForm(p) : ''}</div>`;
+  const rowWait = (p, i) => `<div class="lr"><span class="ln">W${i}</span><span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}</span>${canOperate ? `<form method="POST" action="/pickleball/bump" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn sm" type="submit">Bump in</button></form>${rmForm(p)}` : ''}</div>`;
+  let action = '';
+  if (cancelled) action = `<button class="btn" type="button" disabled>Run cancelled</button>`;
+  else if (myState === 'in') action = `<form method="POST" action="/pickleball/leave"><button class="btn ghost" type="submit">Sit out</button></form>`;
+  else if (myState === 'waitlist') action = `<form method="POST" action="/pickleball/leave"><button class="btn ghost" type="submit">Leave waitlist (#${waiting})</button></form>`;
+  else if (!isOpen) action = `<button class="btn" type="button" disabled>Check-in closed</button>`;
+  else if (totalFull) action = `<button class="btn" type="button" disabled>Run &amp; waitlist full</button>`;
+  else if (full) action = `<form method="POST" action="/pickleball/join"><button class="btn primary" type="submit">Join waitlist (${waiting}/${waitlistCap})</button></form>`;
+  else action = `<form method="POST" action="/pickleball/join"><button class="btn primary" type="submit">I'm in</button></form>`;
+  const runToggle = canOperate && !cancelled ? (isOpen ? `<form method="POST" action="/pickleball/close" style="margin:0"><button class="btn leave" type="submit">Close check-in</button></form>` : `<form method="POST" action="/pickleball/open" style="margin:0"><button class="btn primary" type="submit">Open check-in</button></form>`) : '';
+  return HEAD('Pickleball — The Bridge', 'has-tabs') + header(`<b>PICKLEBALL</b>${esc(email)}`, '', ann, '') + `
+    <div class="rule"></div>
+    ${hidden ? `<div class="notice" style="margin-top:10px">🔒 <b>Hidden run</b> — only admins can see this. Flip it live when it's ready.${isAdmin ? ` <form method="POST" action="/pickleball/publish" style="display:inline"><button class="btn sm" type="submit" style="margin-left:6px">Make it live</button></form>` : ''}</div>` : (isAdmin ? `<div class="notice good" style="margin-top:10px">✅ <b>Live</b> — members can join. <form method="POST" action="/pickleball/publish" style="display:inline"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit" style="margin-left:6px">Hide again</button></form></div>` : '')}
+    <div class="phead"><h1>Pickleball 🥒</h1></div>
+    <p class="psub" style="margin:-4px 0 8px;color:var(--muted)">${cancelled ? 'Cancelled this week' : (runLabel ? `Next: ${esc(wdayFull(runDate))}, ${esc(runLabel)}` : 'No date set')} · ${going}/${cap} in${waiting ? ` · ${waiting} waiting` : ''}</p>
+    ${canOperate ? `<form method="POST" action="/pickleball/date" style="display:flex;gap:8px;align-items:center;margin:6px 0 4px"><input type="date" name="date" value="${esc(runDate)}" style="font-size:16px"><button class="btn ghost sm" type="submit">Set run date</button></form>` : ''}
+    <div class="controls" style="margin-top:12px">${action}${runToggle}</div>
+    ${canOperate ? `<details class="hguest" style="margin-top:10px"><summary>+ Guest</summary><form method="POST" action="/pickleball/guest"><input name="name" required maxlength="60" placeholder="Guest name — last-minute add"><div style="height:8px"></div><button class="btn sm" type="submit">Add guest</button></form></details>` : ''}
+    <div class="subhead" style="margin-top:18px">On the floor · ${going}/${cap}</div>
+    <div class="mlist">${floorPlayers.length ? floorPlayers.map((p, i) => rowFloor(p, i + 1)).join('') : '<div class="subh">Nobody yet — be the first in.</div>'}
+      ${waitPlayers.length ? `<div class="subh">Waitlist · ${waiting}</div>${waitPlayers.map((p, i) => rowWait(p, i + 1)).join('')}` : ''}</div>
+    ${canOperate ? (cancelled
+      ? `<form method="POST" action="/pickleball/cancel" style="margin-top:16px"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Restore this run</button></form>`
+      : `<form method="POST" action="/pickleball/cancel" style="margin-top:16px" onsubmit="return confirm('Cancel this week\\'s pickleball?')"><button class="btn ghost sm" type="submit">🚫 Cancel this week</button></form>`) : ''}
+  ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention }));
+}
+
 // Season board — most runs this calendar year. Top 8 + the viewer's own row (if outside
 // the top). Gentle by design: it celebrates the top and shows you yours, never ranks the
 // bottom. Self-contained inline styles so it needs no new CSS.
@@ -3389,6 +3422,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
       <a class="btn ghost" href="/admin/share" style="margin:0">📱 Share sign-up QR &amp; links</a>
       <a class="btn ghost" href="/admin/people/export.csv" style="margin:0" download>⬇︎ Export people (CSV)</a>
     </div>
+    <a class="btn ghost" href="/pickleball" style="margin:8px 0 0">🥒 Pickleball run (hidden)</a>
 
     <div class="subhead">Add a player</div>
     <form method="POST" action="/admin/people/invite" class="card rail">

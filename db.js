@@ -445,6 +445,34 @@ for (const t of ['checkins', 'run_state', 'run_overrides', 'regular_optout', 'at
   }
 }
 
+// --- Pickleball run (2026-07, PHASE 2 — ISOLATED tables, zero basketball impact) ---
+// Pickleball is a SEPARATE run on its own tables (pk_*), so nothing here touches basketball's
+// data or code paths. Mirrors the shape of the basketball run tables. Hidden until program 2
+// is flipped active; while hidden only admins can reach the routes.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS pk_checkins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_date TEXT NOT NULL,
+    email    TEXT NOT NULL,
+    name     TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(run_date, email)
+  );
+  CREATE TABLE IF NOT EXISTS pk_run_state (
+    run_date TEXT PRIMARY KEY,
+    is_open  INTEGER NOT NULL DEFAULT 0,
+    cancelled INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS pk_attendance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_date TEXT NOT NULL, email TEXT NOT NULL, name TEXT NOT NULL,
+    recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(run_date, email)
+  );
+  CREATE INDEX IF NOT EXISTS idx_pk_checkins_run ON pk_checkins(run_date);
+`);
+
 // Prune stale magic-link tokens on startup. A token is dead once it's been used
 // OR has expired — keeping them forever just grows the table unbounded (a fresh
 // row is written on every /login). Unused-and-still-valid tokens are preserved
