@@ -9,8 +9,8 @@ const esc = (s = '') => String(s).replace(/[&<>"']/g, c =>
 // no run context, e.g. sign-in / apply — generic branding).
 const _WD = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const _WDS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
-const wdayFull = (dateStr) => dateStr ? _WD[new Date(dateStr + 'T12:00:00').getDay()] : 'Friday';
-const wdayShort = (dateStr) => dateStr ? _WDS[new Date(dateStr + 'T12:00:00').getDay()] : 'FRI';
+const wdayFull = (dateStr) => dateStr ? _WD[new Date(dateStr + 'T12:00:00').getDay()] : '';
+const wdayShort = (dateStr) => dateStr ? _WDS[new Date(dateStr + 'T12:00:00').getDay()] : '';
 
 // Cache-bust styles.css by its own modification time. Static assets are served
 // with a 7-day cache; without this, returning users keep stale CSS after any
@@ -83,7 +83,7 @@ const SPLASH_BODY = `<div id="splash" aria-hidden="true">
     <div class="tt"><b>THE BRIDGE</b><span class="sb">Advanced Basketball Run</span><div class="rl"></div></div>
   </div>
   <div class="sp"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-  <div class="ft">Markham · Fridays 7–10 PM</div>
+  <div class="ft">Markham · 7–10 PM</div>
 </div>
 <script>(function(){var s=document.getElementById('splash');if(!s)return;if(document.documentElement.classList.contains('splashed'))return;var done=function(){s.classList.add('hide');try{sessionStorage.setItem('splashed','1');}catch(e){}setTimeout(function(){if(s&&s.parentNode)s.parentNode.removeChild(s);},600);};var r=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches;setTimeout(done,r?500:1500);window.addEventListener('load',function(){setTimeout(done,900);});})();</script>`;
 
@@ -420,7 +420,7 @@ ${wall ? WALL_HEAD : ''}
 <link rel="stylesheet" href="/styles.css?v=${CSS_VER}">
 </head><body class="${bodyClass}">${SPLASH_BODY}${wall ? WALL_BODY : ''}<div class="wrap">`;
 
-const FOOTER_LINKS = `<div class="foot">The Bridge Adv Runs · Markham · Fridays 7–10PM</div><div class="foot legalfoot"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/conduct">Conduct</a></div>`;
+const FOOTER_LINKS = `<div class="foot">The Bridge Adv Runs · Markham · 7–10PM</div><div class="foot legalfoot"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/conduct">Conduct</a></div>`;
 const FOOT = `${FOOTER_LINKS}</div></body></html>`;
 // Tab-bar pages: render the fixed bottom tab bar as the LAST child of `.wrap`, with the footer
 // text BEFORE it. It must stay inside `.wrap` (the client router swaps `.wrap` — the active-tab
@@ -439,11 +439,11 @@ const BALL = `<svg class="ball" viewBox="0 0 40 40" fill="none" aria-hidden="tru
 // `weekdayShort` reflects the current run's day (defaults to FRI for pages with no run
 // context). `ann` (optional) = the viewer's announcement state — when present the bell +
 // its bottom-sheet panel render; when omitted (public / non-approved pages) neither does.
-const header = (right = '', weekdayShort = 'FRI', ann = null, hours = '7–10 PM') => {
+const header = (right = '', weekdayShort = '', ann = null, hours = '7–10 PM') => {
   const { btn, sheet } = annBell(ann);
   return `<div class="mast">
   <div class="bl">${BALL}<div class="wm"><b>THE BRIDGE</b><span>Adv Runs</span></div></div>
-  <div class="mastr">${btn}<div class="when"><b>${esc(weekdayShort)}</b><span>${esc(hours)}</span></div></div>
+  <div class="mastr">${btn}<div class="when">${weekdayShort ? `<b>${esc(weekdayShort)}</b>` : ''}<span>${esc(hours)}</span></div></div>
 </div>${sheet}`;
 };
 
@@ -1447,7 +1447,7 @@ export function intakePage({ submitted = false, error = '', alreadyApproved = fa
       <div class="rule"></div>
       <span class="eyebrow">You're already in</span>
       <h1>You're already approved</h1>
-      <p class="lead">This email is already cleared for the Adv Run — no need to re-apply. Just sign in with it to check in for Friday.</p>
+      <p class="lead">This email is already cleared for the Adv Run — no need to re-apply. Just sign in with it to check in for the next run.</p>
       <a class="btn" href="/login">Sign in →</a>
     ` + FOOT;
   }
@@ -1467,7 +1467,7 @@ export function intakePage({ submitted = false, error = '', alreadyApproved = fa
     <span class="eyebrow">Faith · Ball · Community</span>
     <h1>Faith. Ball. Community.</h1>
     <p class="lead">Hey — I'm Daniel, and I host the Advanced basketball runs at The Bridge. I first came here through the recreational Monday runs myself, and that's what led me to start exploring my faith. I started this run to build a community of Christ-like people who bond over basketball — and to open that same door for others. We play competitive ball and sometimes pause for a devotional; you don't have to share our faith to play, but it's part of who we are.</p>
-    <p class="lead" style="margin-top:10px">The Advanced Run is the competitive Friday run, and it's invite-based. Fill this out, then come to the <b>Monday recreational run</b> — that's the tryout. The organizers watch you play there and decide from there.</p>
+    <p class="lead" style="margin-top:10px">The Advanced Run is the competitive run, and it's invite-based. Fill this out, then come to the <b>Monday recreational run</b> — that's the tryout. The organizers watch you play there and decide from there.</p>
 
     <div class="notice" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
       <span>Already applied or approved?</span>
@@ -1787,7 +1787,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
   const annCompose = canOperate
     ? `<details class="announce-compose"><summary>Send announcement</summary>
         <form method="POST" action="/announce" style="margin-top:10px">
-          <textarea name="body" required maxlength="500" placeholder="e.g. No run this Friday — gym's booked. Back next week."></textarea>
+          <textarea name="body" required maxlength="500" placeholder="e.g. No run this week — gym's booked. Back next week."></textarea>
           <div style="height:8px"></div>
           <label class="lvl" style="margin:0 0 8px"><input type="checkbox" name="email_everyone" checked> Also email everyone</label>
           <button class="btn sm" type="submit">Post to all players</button>
@@ -2241,7 +2241,7 @@ export function seasonPage({ rows, email, dmUnread = 0, groupUnread = 0, groupMe
   const list = rows.length
     ? rows.slice(0, 8).map(rowHtml).join('') + (meRow && meRow.rank > 8 ? `<div style="text-align:center;color:var(--muted);margin:6px 0 0">···</div>${rowHtml(meRow)}` : '')
     : `<div class="foot" style="margin-top:14px">No runs logged yet this season — get out there 🏀</div>`;
-  return HEAD('Season Board — Adv Runs', 'has-tabs') + header(`<b>SEASON</b>${esc(email)}`, 'FRI', ann) + `
+  return HEAD('Season Board — Adv Runs', 'has-tabs') + header(`<b>SEASON</b>${esc(email)}`, '', ann) + `
     <div class="rule"></div>
     <div class="phead"><h1>Season Board</h1></div>
     <p class="psub" style="margin:-4px 0 6px;color:var(--muted)">Most runs this calendar year 🏀</p>
@@ -2291,7 +2291,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
     <details class="announce-compose" style="margin-top:12px">
       <summary>Run day · ${esc(runDay.weekday)}, ${esc(runDay.label)} · ${esc(runDay.timeLabel)}${runDay.isOverride ? ' (moved)' : ''}</summary>
       ${rdBanner}
-      <p class="tally-note" style="margin:8px 0 10px">The next run is <b>${esc(runDay.weekday)}, ${esc(runDay.label)}, ${esc(runDay.timeLabel)}</b>${runDay.dateMoved ? ` — moved from the usual Friday (${esc(runDay.defaultLabel)}).` : (runDay.isOverride ? ' — usual day, custom time.' : ' (its usual day & time).')} Change the date and/or time — players get an announcement.</p>
+      <p class="tally-note" style="margin:8px 0 10px">The next run is <b>${esc(runDay.weekday)}, ${esc(runDay.label)}, ${esc(runDay.timeLabel)}</b>${runDay.dateMoved ? ` — moved from the usual day (${esc(runDay.defaultLabel)}).` : (runDay.isOverride ? ' — usual day, custom time.' : ' (its usual day & time).')} Change the date and/or time — players get an announcement.</p>
       <form method="POST" action="/admin/rundate" style="margin:0">
         <div class="field"><label>Run date</label>
           <input type="date" name="date" value="${esc(runDay.runDate)}" min="${esc(runDay.today)}" max="${esc(runDay.maxDate)}" required style="${ti}">
@@ -2310,7 +2310,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
       ${runDay.isOverride ? `<form method="POST" action="/admin/rundate" style="margin-top:8px">
         <input type="hidden" name="date" value="${esc(runDay.defaultFriday)}">
         <input type="hidden" name="email_everyone" value="1">
-        <button class="btn ghost sm" type="submit">Reset to Friday 7–10 PM (${esc(runDay.defaultLabel)})</button>
+        <button class="btn ghost sm" type="submit">Reset to the usual day &amp; time (${esc(runDay.defaultLabel)})</button>
       </form>` : ''}
       <div class="rule" style="margin:14px 0 12px"></div>
       ${runDay.cancelled
@@ -3313,7 +3313,7 @@ export function bannerPage({ err = '', bannerVer = '0' } = {}) {
     : err === 'type' ? 'That file isn’t a supported image (JPG, PNG, or WebP).'
     : err === 'crop' ? 'Couldn’t read the crop area — try again.'
     : err ? 'Something went wrong processing the image. Try again.' : '';
-  return HEAD('Change banner — Adv Runs', '', { wall: false }) + header('<b>BANNER</b>admin', 'FRI') + `
+  return HEAD('Change banner — Adv Runs', '', { wall: false }) + header('<b>BANNER</b>admin', '') + `
     <div class="rule"></div>
     <span class="eyebrow">Check-in hero photo</span>
     <h1>Change the banner</h1>
@@ -3374,7 +3374,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
 
   const phoneList = approvedPhones.map(p => `${p.full_name}: ${p.phone}`).join('\n');
 
-  return HEAD('People — Adv Runs', 'has-tabs') + header('<b>PEOPLE</b>admin', 'FRI', ann) + `
+  return HEAD('People — Adv Runs', 'has-tabs') + header('<b>PEOPLE</b>admin', '', ann) + `
     ${opsNav('people', { isAdmin: true })}${firstRunTour}
     <div class="rule"></div>
     <span class="eyebrow">${people.length} ${q ? 'match' + (people.length===1?'':'es') : 'people'}</span>
@@ -3472,7 +3472,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
 
 // ---------- SHARE (QR + link for the application form) ----------
 export function sharePage({ applyUrl = '', applyQr = '', signInUrl = '', loginQr = '', ann = null, dmUnread = 0, groupUnread = 0, groupMention = 0 }) {
-  return HEAD('Share — Adv Runs', 'has-tabs') + header('<b>SHARE</b>admin', 'FRI', ann) + `
+  return HEAD('Share — Adv Runs', 'has-tabs') + header('<b>SHARE</b>admin', '', ann) + `
     ${opsNav('people', { isAdmin: true })}
     <div class="rule"></div>
     <span class="eyebrow">Sign-up form</span>

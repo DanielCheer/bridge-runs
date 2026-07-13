@@ -4,7 +4,7 @@
 
 *Last updated: [DATE] · Draft version*
 
-Welcome to "The Bridge Adv Runs" (also called "Bridge Runs," "the app"), a simple check-in tool for our weekly Friday-evening recreational basketball run connected to The Bridge church in Markham, Ontario. By creating an account or using the app, you agree to these terms. If you don't agree, please don't use the app.
+Welcome to "The Bridge Adv Runs" (also called "Bridge Runs," "the app"), a simple check-in tool for our weekly recreational basketball run connected to The Bridge church in Markham, Ontario. By creating an account or using the app, you agree to these terms. If you don't agree, please don't use the app.
 
 The app is currently built and operated by an individual developer (Daniel, "the Developer," "we," "us"). If it is ever handed over to The Bridge church ("the Church"), the Church would operate it under terms like these.
 

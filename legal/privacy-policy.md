@@ -6,7 +6,7 @@
 
 This policy explains what personal information "The Bridge Adv Runs" (also called "Bridge Runs," "the app") collects, why we collect it, and what choices you have. We wrote it in plain language for our community. If anything here is unclear, please reach out using the contact details at the bottom.
 
-The app is a simple tool for organizing a weekly Friday-evening recreational basketball run connected to The Bridge church in Markham, Ontario. It is currently built and operated by an individual developer (Daniel, "the Developer") for community use.
+The app is a simple tool for organizing a weekly recreational basketball run connected to The Bridge church in Markham, Ontario. It is currently built and operated by an individual developer (Daniel, "the Developer") for community use.
 
 ---
 

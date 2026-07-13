@@ -84,9 +84,10 @@ export async function sendAnnouncement(recipients, body, author) {
 // them on the floor. `hours` is the claim window (owner-configurable). No-op (logged
 // with the link, so DEV testing can follow it) when SMTP isn't set up. Reuses the
 // shared transport.
-export async function sendSpotOffer(email, name, runLabel, link, hours = 3, weekday = 'Friday') {
+export async function sendSpotOffer(email, name, runLabel, link, hours = 3, weekday = '') {
   const hourWord = `${hours} hour${Number(hours) === 1 ? '' : 's'}`;
-  const day = escHtml(weekday || 'Friday');
+  const day = escHtml(weekday || '');
+  const runPhrase = day ? `${day}'s Adv Run` : 'the Adv Run';
   if (!transporter) {
     console.log('\n=== DEV MODE: no SMTP — spot offer not emailed ===');
     console.log(`Spot-offer claim link for ${email} (${runLabel}, ${hourWord} to claim):`);
@@ -98,12 +99,12 @@ export async function sendSpotOffer(email, name, runLabel, link, hours = 3, week
   await transporter.sendMail({
     from: process.env.SMTP_FROM || process.env.SMTP_USER,
     to: email,
-    subject: `A spot opened for ${day}'s run — claim it`,
-    text: `${name ? hi + ' — ' : ''}a spot just opened for ${day}'s Adv Run (${runLabel}).\n\n`
+    subject: `A spot opened for ${day ? day + "'s run" : 'the run'} — claim it`,
+    text: `${name ? hi + ' — ' : ''}a spot just opened for ${runPhrase} (${runLabel}).\n\n`
       + `Tap to claim it: ${link}\n\n`
       + `You have ${hourWord} before it passes to the next person on the waitlist. `
       + `If you don't claim it in time, you'll drop off the list for this week.`,
-    html: `<p style="font-size:15px;line-height:1.5;color:#20211c">${name ? '<b>' + hi + '</b> — ' : ''}a spot just opened for <b>${day}'s Adv Run</b> (${escHtml(runLabel)}).</p>
+    html: `<p style="font-size:15px;line-height:1.5;color:#20211c">${name ? '<b>' + hi + '</b> — ' : ''}a spot just opened for <b>${runPhrase}</b> (${escHtml(runLabel)}).</p>
            <p><a href="${link}" style="background:#E86A33;color:#111;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:700;display:inline-block">Claim my spot →</a></p>
            <p style="color:#444;font-size:13px;margin-top:16px">You have <b>${hourWord}</b> before it passes to the next person on the waitlist. If you don't claim it in time, you'll drop off the list for this week.</p>
            <p style="color:#444;font-size:13px;margin-top:12px">Button not working? Copy this link into your browser:</p>
