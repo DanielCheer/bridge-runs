@@ -407,6 +407,44 @@ if (!gmsgCols.includes('audio_dur')) db.exec('ALTER TABLE group_messages ADD COL
 if (!gmsgCols.includes('video')) db.exec('ALTER TABLE group_messages ADD COLUMN video TEXT');
 if (!gmsgCols.includes('video_dur')) db.exec('ALTER TABLE group_messages ADD COLUMN video_dur INTEGER');
 
+// --- Multi-program platform (2026-07, PHASE 1 — additive foundation, ZERO behaviour change) ---
+// The app is becoming program-aware so a second run (e.g. Pickleball) can live ALONGSIDE the
+// Basketball run without touching its data. Basketball is program 1. Every run-scoped table
+// gains program_id DEFAULT 1 (backfilled), so the existing queries — which don't filter on it
+// yet — keep returning EXACTLY the same (program-1) rows. Pickleball (program 2) is seeded
+// HIDDEN + inactive; nothing reads it until the run-scoping + routes ship in a later phase.
+// Additive only — no constraint/PK changes here (those come with the scoping phase).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS program (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL,
+    sport      TEXT NOT NULL DEFAULT '',
+    slug       TEXT UNIQUE,
+    active     INTEGER NOT NULL DEFAULT 1,        -- 0 = hidden / not live yet
+    approval   TEXT NOT NULL DEFAULT 'council',   -- council | host | open | invite
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS program_membership (
+    program_id INTEGER NOT NULL,
+    email      TEXT NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'pending',   -- pending | approved | rejected | suspended
+    role       TEXT NOT NULL DEFAULT 'approved',  -- host | team | regular | approved
+    joined_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (program_id, email)
+  );
+`);
+// Seed the two programs (idempotent). 1 = the live Advanced Basketball run; 2 = Pickleball, HIDDEN.
+db.prepare("INSERT OR IGNORE INTO program (id,name,sport,slug,active,approval) VALUES (1,'Advanced Basketball','basketball','adv',1,'council')").run();
+db.prepare("INSERT OR IGNORE INTO program (id,name,sport,slug,active,approval) VALUES (2,'Pickleball','pickleball','pickleball',0,'invite')").run();
+// Add program_id (DEFAULT 1) to every run-scoped table — guarded + backfilled so existing rows stay basketball.
+for (const t of ['checkins', 'run_state', 'run_overrides', 'regular_optout', 'attendance', 'group_messages', 'group_reads', 'group_reactions', 'announcements', 'votes']) {
+  const cols = db.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name);
+  if (!cols.includes('program_id')) {
+    db.exec(`ALTER TABLE ${t} ADD COLUMN program_id INTEGER NOT NULL DEFAULT 1`);
+    console.log(`[db] program-aware: added program_id to ${t}`);
+  }
+}
+
 // Prune stale magic-link tokens on startup. A token is dead once it's been used
 // OR has expired — keeping them forever just grows the table unbounded (a fresh
 // row is written on every /login). Unused-and-still-valid tokens are preserved
