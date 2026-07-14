@@ -2070,7 +2070,9 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
               // fresh nav); the count pulse below carries the visual feedback.
               document.documentElement.classList.add('noanim');
               window.__ckBusy=false;
-              if(!window.__swapWrap(html)){window.location.href='/checkin';return;}
+              // A redirect shim (e.g. the waiver gate) has no .wrap → swap fails; follow its
+              // target so an unwaivered "I'm in" reaches /waiver instead of dead-ending.
+              if(!window.__swapWrap(html)){var m=html.match(/location\.replace\("([^"]+)"\)/);window.location.href=m?m[1]:'/checkin';return;}
               window.scrollTo(0,y);
               if(reopenWg&&window.wgOpen)window.wgOpen(); // keep the who's-going sheet open after a remove/bump
               var n=document.querySelector('.count .n');
@@ -2411,7 +2413,7 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
 // Pickleball JOIN PROMPT — shown when an approved member who hasn't joined pickleball opens
 // the run. Joining is opt-in (separate from basketball approval): tap Join → become a member →
 // see the run + chat. Chat tab stays on basketball here (they're not a pickleball member yet).
-export function pkJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, ann = null }) {
+export function pkJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
   return HEAD('Join Pickleball — The Bridge', 'has-tabs pk') + header(`<b>PICKLEBALL</b>${esc(email)}`, '', ann, '') + `
     ${backToRuns}
     <div class="rule"></div>
@@ -2422,7 +2424,7 @@ export function pkJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, a
       <p class="lead" style="margin:0 0 14px">Join to check in each week and chat with the pickleball crew — it's separate from the basketball run.${runLabel ? ` Next run: <b>${esc(wdayFull(runDate))}, ${esc(runLabel)}</b>.` : ''}</p>
       <form method="POST" action="/pickleball/join-run"><button class="btn primary" type="submit">🥒 Join pickleball</button></form>
     </div>
-  ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: 0, groupMention: 0, program: 1 }));
+  ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: 1 }));
 }
 
 // Pickleball run — a SEPARATE, hidden run on its own pk_* tables. Dedicated view (reuses the
@@ -3676,12 +3678,12 @@ export function waiverPage({ email, next = '/checkin', err = '' } = {}) {
   ` + FOOT;
 }
 
-export function bannerPage({ err = '', bannerVer = '0', action = '/admin/banner', imgSrc = '/gym.jpg', back = '/checkin' } = {}) {
+export function bannerPage({ err = '', bannerVer = '0', action = '/admin/banner', imgSrc = '/gym.jpg', back = '/checkin', bodyClass = '' } = {}) {
   const errMsg = err === 'big' ? 'That image is too large (max 14 MB).'
     : err === 'type' ? 'That file isn’t a supported image (JPG, PNG, or WebP).'
     : err === 'crop' ? 'Couldn’t read the crop area — try again.'
     : err ? 'Something went wrong processing the image. Try again.' : '';
-  return HEAD('Change banner — Adv Runs', '', { wall: false }) + header('<b>BANNER</b>admin', '') + `
+  return HEAD('Change banner — Adv Runs', bodyClass, { wall: false }) + header('<b>BANNER</b>admin', '') + `
     <div class="rule"></div>
     <span class="eyebrow">Check-in hero photo</span>
     <h1>Change the banner</h1>
@@ -3689,9 +3691,9 @@ export function bannerPage({ err = '', bannerVer = '0', action = '/admin/banner'
     ${errMsg ? `<div class="notice bad">${errMsg}</div>` : ''}
 
     <div class="subhead">Current</div>
-    <div class="curframe"><img src="${imgSrc}?v=${esc(String(bannerVer))}" alt="Current banner"></div>
+    <div class="curframe"><img src="${esc(imgSrc)}?v=${esc(String(bannerVer))}" alt="Current banner"></div>
 
-    <form method="POST" action="${action}" enctype="multipart/form-data" id="bform" class="card rail" style="margin-top:14px">
+    <form method="POST" action="${esc(action)}" enctype="multipart/form-data" id="bform" class="card rail" style="margin-top:14px">
       <input type="hidden" name="cx" id="bcx"><input type="hidden" name="cy" id="bcy">
       <input type="hidden" name="cw" id="bcw"><input type="hidden" name="ch" id="bch">
       <label class="btn ghost" for="bfile" style="cursor:pointer">📷 Choose a photo</label>
@@ -3705,7 +3707,7 @@ export function bannerPage({ err = '', bannerVer = '0', action = '/admin/banner'
       </div>
     </form>
     ${bannerCropScript()}
-    <div class="foot" style="margin-top:24px"><a href="${back}">← Back</a></div>
+    <div class="foot" style="margin-top:24px"><a href="${esc(back)}">← Back</a></div>
   ` + FOOT;
 }
 

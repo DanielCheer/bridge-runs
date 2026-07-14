@@ -3049,10 +3049,10 @@ app.post('/admin/banner', requireApprover, (req, res) => {
   });
 });
 // Pickleball banner change — same cropper as basketball, writes pk-banner.jpg.
-app.get('/pickleball/banner', requireApprover, (req, res) => {
-  res.send(bannerPage({ err: req.query.err || '', bannerVer: pkBannerVersion(), action: '/pickleball/banner', imgSrc: pkBannerSrc(), back: '/pickleball' }));
+app.get('/pickleball/banner', requireAdmin, (req, res) => {
+  res.send(bannerPage({ err: req.query.err || '', bannerVer: pkBannerVersion(), action: '/pickleball/banner', imgSrc: pkBannerSrc(), back: '/pickleball', bodyClass: 'pk' }));
 });
-app.post('/pickleball/banner', requireApprover, (req, res) => {
+app.post('/pickleball/banner', requireAdmin, (req, res) => {
   uploadBanner(req, res, async (err) => {
     if (err) return res.redirect('/pickleball/banner?err=' + (err.code === 'LIMIT_FILE_SIZE' ? 'big' : 'bad'));
     const file = req.file;
@@ -3488,6 +3488,7 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
     db.prepare('DELETE FROM pk_group_reactions WHERE group_message_id IN (SELECT id FROM pk_group_messages WHERE from_email = ?)').run(a.email);
     db.prepare('DELETE FROM pk_group_messages WHERE from_email = ?').run(a.email);
     db.prepare('DELETE FROM pk_group_reads WHERE email = ?').run(a.email);
+    db.prepare('DELETE FROM program_membership WHERE email = ?').run(a.email); // drop all per-program memberships
     db.prepare('DELETE FROM push_subscriptions WHERE email = ?').run(a.email);
     refreshAvatarMap(); // drop them from the email→photo registry
     audit(req.userEmail, 'admin', 'people:delete', a.email);
@@ -3642,6 +3643,26 @@ function pkEmailRecipients() {
 // Auto open/close schedule for pickleball (runs on the shared 60s interval). Auto-opens
 // check-in at midnight on the run day and auto-locks at the run's start time — each once
 // per run, guarded by app_settings markers. Skipped while the run is hidden or cancelled.
+// Seat auto-renew members onto the floor for run `rd` (idempotent). Respects the total cap,
+// waiver, suspended. Shared by the scheduled auto-open AND the manual "Open check-in" so the
+// operator flow behaves like basketball's autoJoinTeam.
+function pkSeatRenewers(rd) {
+  if (!rd) return 0;
+  const existing = db.prepare('SELECT COUNT(*) n FROM pk_checkins WHERE run_date = ?').get(rd).n;
+  let room = (PK_CAP + PK_WAIT) - existing;
+  if (room <= 0) return 0;
+  const renewers = db.prepare(`SELECT pm.email, a.full_name FROM program_membership pm JOIN applicants a ON a.email = pm.email
+    WHERE pm.program_id = 2 AND pm.auto_renew = 1 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local'
+      AND COALESCE(a.suspended,0) = 0 AND COALESCE(a.waiver_ok,0) = 1
+    ORDER BY a.id`).all();
+  const insR = db.prepare('INSERT OR IGNORE INTO pk_checkins (run_date, email, name) VALUES (?,?,?)');
+  let added = 0;
+  for (const r of renewers) {
+    if (room <= 0) break;
+    if (insR.run(rd, r.email, r.full_name).changes > 0) { room--; added++; }
+  }
+  return added;
+}
 function pkAutoRunState() {
   if (!pkProgramActive()) return;
   // Only auto open/close runs the operator EXPLICITLY scheduled — never the basketball
@@ -3656,14 +3677,10 @@ function pkAutoRunState() {
     setSetting('pk_autoopen_done', rd);
     if (!pkIsOpen(rd)) {
       pkSetState(rd, 'is_open', 1);
-      // Auto-add members who opted into weekly auto-renew (INSERT OR IGNORE = idempotent).
-      const renewers = db.prepare(`SELECT pm.email, a.full_name FROM program_membership pm JOIN applicants a ON a.email = pm.email
-        WHERE pm.program_id = 2 AND pm.auto_renew = 1 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local' AND COALESCE(a.suspended,0) = 0`).all();
-      const insR = db.prepare('INSERT OR IGNORE INTO pk_checkins (run_date, email, name) VALUES (?,?,?)');
-      for (const r of renewers) insR.run(rd, r.email, r.full_name);
-      audit('system', 'system', 'pk:autoopen', `${rd} +${renewers.length} auto`);
+      const added = pkSeatRenewers(rd);
+      audit('system', 'system', 'pk:autoopen', `${rd} +${added} auto`);
       setImmediate(() => sendPush(pkMemberEmails(), { title: 'Pickleball check-in is open', body: `Check-in is open for ${runWeekday(rd)}, ${runLabelFor(rd)} pickleball — grab your spot 🥒`, url: '/pickleball', tag: 'pkqueueopen' }));
-      console.log(`[pk-autoopen] opened pickleball check-in for ${rd} (auto-added ${renewers.length})`);
+      console.log(`[pk-autoopen] opened pickleball check-in for ${rd} (auto-added ${added})`);
     }
   }
   if (now >= lockAt && getSetting('pk_autolock_done') !== rd) {
@@ -3702,8 +3719,9 @@ app.get('/pickleball', requireLogin, (req, res) => {
   // Not a member yet (and not an admin, who operates it) → show a JOIN PROMPT instead of the
   // run. Membership is opt-in: you choose to join pickleball, separate from basketball approval.
   if (!pkIsMember(req.userEmail)) {
-    return res.send(pkJoinPage({ email: req.userEmail, runDate: pkRunDate(), runLabel: runLabelFor(pkRunDate()),
-      dmUnread: unreadCount(req.userEmail), ann: null }));
+    const me = req.userEmail, mid = applicantIdOf(me);
+    return res.send(pkJoinPage({ email: me, runDate: pkRunDate(), runLabel: runLabelFor(pkRunDate()),
+      dmUnread: unreadCount(me), groupUnread: groupUnread(me), groupMention: groupMentionUnread(me, mid), ann: null }));
   }
   setRunCookie(req, res, 2); // a member opened pickleball → the neutral pages' Chat tab points here
   if (req.headers['x-prewarm'] !== '1') pkJoinMembership(req.userEmail); // ensure operators/host appear in the member list too (no-op for existing members)
@@ -3745,6 +3763,7 @@ app.post('/pickleball/autorenew', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
   if (!pkIsMember(req.userEmail)) return res.redirect('/pickleball');
   const on = req.body.on === '1' ? 1 : 0;
+  if (on && (!g.a || !g.a.waiver_ok)) return res.redirect('/waiver?next=/pickleball'); // can't auto-seat without the waiver
   db.prepare('UPDATE program_membership SET auto_renew = ? WHERE program_id = 2 AND email = ?').run(on, req.userEmail);
   res.redirect('/pickleball');
 });
@@ -3799,7 +3818,7 @@ app.post('/pickleball/leave', requireLogin, (req, res) => {
   db.prepare('DELETE FROM pk_checkins WHERE run_date = ? AND email = ?').run(pkRunDate(), req.userEmail);
   res.redirect('/pickleball');
 });
-app.post('/pickleball/open', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); pkSetState(pkRunDate(), 'is_open', 1); res.redirect('/pickleball'); });
+app.post('/pickleball/open', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(); pkSetState(rd, 'is_open', 1); pkSeatRenewers(rd); res.redirect('/pickleball'); });
 app.post('/pickleball/close', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); pkSetState(pkRunDate(), 'is_open', 0); res.redirect('/pickleball'); });
 app.post('/pickleball/cancel', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball');

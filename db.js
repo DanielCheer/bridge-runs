@@ -574,6 +574,9 @@ function rekeyEmail(oldEmail, newEmail) {
     db.prepare('UPDATE pk_group_messages     SET pinned_by=?   WHERE pinned_by=?').run(newEmail, oldEmail);
     db.prepare('UPDATE pk_group_reactions    SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE pk_group_reads        SET email=?       WHERE email=?').run(newEmail, oldEmail);
+    // Per-program membership (pickleball etc.) follows the email too — otherwise an email
+    // change silently drops membership + auto-renew and leaves a transferable orphan row.
+    db.prepare('UPDATE OR IGNORE program_membership SET email=? WHERE email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE announcement_reads    SET email=?       WHERE email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE announcement_dismissals SET email=?     WHERE email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE push_subscriptions    SET email=?       WHERE email=?').run(newEmail, oldEmail);
