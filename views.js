@@ -127,7 +127,7 @@ window.addEventListener('pagereveal',function(e){
   var t=null; try{t=sessionStorage.getItem('vtdir');sessionStorage.removeItem('vtdir');}catch(x){}
   if(t){try{e.viewTransition.types.add(t);}catch(x){}}
 });
-window.__composing=function(){var ae=document.activeElement;if(ae&&/^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)&&(ae.type||'')!=='hidden')return true;var f=document.querySelectorAll('textarea,input');for(var i=0;i<f.length;i++){var t=(f[i].type||'text').toLowerCase();if(t==='hidden'||t==='checkbox'||t==='radio'||t==='submit'||t==='button'||t==='file')continue;if(f[i].value&&f[i].value.trim())return true;}if(document.querySelector('details.announce-compose[open]'))return true;return false;};
+window.__composing=function(){var ae=document.activeElement;if(ae&&/^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)&&(ae.type||'')!=='hidden')return true;var f=document.querySelectorAll('textarea,input');for(var i=0;i<f.length;i++){var t=(f[i].type||'text').toLowerCase();if(t==='hidden'||t==='checkbox'||t==='radio'||t==='submit'||t==='button'||t==='file'||t==='date'||t==='time'||t==='datetime-local'||t==='month'||t==='week')continue;if(f[i].value&&f[i].value.trim())return true;}if(document.querySelector('details.announce-compose[open]'))return true;return false;};
 // Patch the DM (Profile tab) + group (Chat tab) unread badges in place every poll
 // tick — no reload needed to keep them fresh. Also toggles the hero group-chat dot.
 window.__patchBadges=function(dm,group,gm,ann,pkgroup,pkgm){try{
@@ -139,7 +139,8 @@ window.__patchBadges=function(dm,group,gm,ann,pkgroup,pkgm){try{
   var ct=document.querySelector('.tabs a[data-tab="chat"]'), pk=ct&&ct.getAttribute('href')==='/pickleball/chat';
   setTab('chat', pk?(pkgroup||0):group, pk?(pkgm||0):gm); setTab('profile',dm,0);
   var hchat=document.querySelector('.hchat');if(hchat){var d=hchat.querySelector('.hdot');
-    if(group>0){if(!d){d=document.createElement('span');d.className='hdot';d.setAttribute('aria-hidden','true');hchat.appendChild(d);}}else if(d){d.parentNode.removeChild(d);}}
+    var hg=(hchat.getAttribute('href')==='/pickleball/chat')?(pkgroup||0):group; // pk hero dot uses pk unread
+    if(hg>0){if(!d){d=document.createElement('span');d.className='hdot';d.setAttribute('aria-hidden','true');hchat.appendChild(d);}}else if(d){d.parentNode.removeChild(d);}}
   // Masthead announcement bell dot — toggled live from the poll ann unread flag.
   var bell=document.querySelector('.bellbtn');if(bell){var bd=bell.querySelector('.belldot');
     if(ann>0){if(!bd){bd=document.createElement('span');bd.className='belldot';bd.setAttribute('aria-hidden','true');bell.appendChild(bd);}}else if(bd){bd.parentNode.removeChild(bd);}}
@@ -1697,9 +1698,40 @@ function fmtCountdown(tipMs, now = Date.now()) {
 
 const COURT_SVG = `<svg class="court" viewBox="0 0 200 200" fill="none" aria-hidden="true"><circle cx="100" cy="200" r="70" stroke-width="2"/><path d="M40 200v-70h120v70M100 130v-40" stroke-width="2"/><circle cx="100" cy="130" r="26" stroke-width="2"/></svg>`;
 
+// Operator "Run day" + "Cancel this week" controls (HOST/ADMIN only) — an Operator-tools card
+// on the check-in page (moved off the profile). `runDay` carries the current run + defaults.
+function runDayControls({ runDay, rdMsg = '' }) {
+  if (!runDay) return '';
+  const ti = 'font-size:16px;min-height:44px;padding:11px 13px;width:100%;box-sizing:border-box;max-width:100%;min-width:0';
+  const rdBanner = rdMsg === 'set' ? '<div class="notice good">Run day updated ✓</div>'
+    : rdMsg === 'past' ? '<div class="notice bad">Pick a date that isn\'t in the past.</div>'
+    : rdMsg === 'range' ? '<div class="notice bad">Pick a date within the next 30 days.</div>'
+    : rdMsg === 'time' ? '<div class="notice bad">Check the times — end must be after start.</div>'
+    : rdMsg === 'bad' ? '<div class="notice bad">That date didn\'t look right — try again.</div>'
+    : '';
+  return `<div class="infosec" style="margin-top:20px"><div class="card"><div class="clab">Operator tools</div>
+    ${rdBanner}
+    <p class="tally-note" style="margin:8px 0 10px">Next run: <b>${esc(runDay.weekday)}, ${esc(runDay.label)}, ${esc(runDay.timeLabel)}</b>${runDay.dateMoved ? ` — moved from the usual day (${esc(runDay.defaultLabel)}).` : (runDay.isOverride ? ' — usual day, custom time.' : ' (usual day & time).')} Change it — players get an announcement.</p>
+    <form method="POST" action="/admin/rundate" style="margin:0">
+      <div class="field"><label>Run date</label><input type="date" name="date" value="${esc(runDay.runDate)}" min="${esc(runDay.today)}" max="${esc(runDay.maxDate)}" required style="${ti}"></div>
+      <div style="display:flex;gap:10px;margin-top:8px">
+        <div class="field" style="flex:1;margin:0"><label>Start</label><input type="time" name="start" value="${esc(runDay.start)}" required style="${ti}"></div>
+        <div class="field" style="flex:1;margin:0"><label>End</label><input type="time" name="end" value="${esc(runDay.end)}" required style="${ti}"></div>
+      </div>
+      <label class="lvl" style="margin:10px 0 8px;display:block"><input type="checkbox" name="email_everyone" checked> Also email everyone</label>
+      <button class="btn sm" type="submit">Set run day &amp; time</button>
+    </form>
+    ${runDay.isOverride ? `<form method="POST" action="/admin/rundate" style="margin-top:8px"><input type="hidden" name="date" value="${esc(runDay.defaultFriday)}"><input type="hidden" name="email_everyone" value="1"><button class="btn ghost sm" type="submit">Reset to the usual day &amp; time (${esc(runDay.defaultLabel)})</button></form>` : ''}
+    <div class="rule" style="margin:14px 0 12px"></div>
+    ${runDay.cancelled
+      ? `<div class="notice bad" style="margin:0 0 10px"><b>🚫 This run is cancelled.</b> Players were notified. Restore it to run check-in again.</div><form method="POST" action="/admin/run/cancel" style="margin:0"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Restore this run</button></form>`
+      : `<p class="tally-note" style="margin:0 0 8px">Something come up? Cancel this week's run — players get a "run cancelled" notification and check-in is blocked. (Only this week.)</p><form method="POST" action="/admin/run/cancel" style="margin:0" onsubmit="return confirm('Cancel this week\\'s run? Everyone will be notified it\\'s off.');"><input type="hidden" name="on" value="1"><button class="btn leave sm" type="submit">🚫 Cancel this week's run</button></form>`}
+  </div></div>`;
+}
+
 export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 PM', startLabel = '7 PM', tipoff = 0, cap, waitlistCap, going, waiting, full, runFull, isOpen, canSeeCount, regularSlotsFull,
                              myState, myWaitPos, myOffer = null, offerWindowHours = 3, iAmTeam, iAmRegular, iOptedOut, iAutoRenew,
-                             viewerIsAdmin, canOperate, canSeeRoster, suspended = false, suspendReason = '', myConfirmed = false, msg = '', bannerVer = '4', cancelled = false, locked = false, announcement = null, announcementLog = [], inPlayers, offeredPlayers = [], waitPlayers, host = null, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+                             viewerIsAdmin, canOperate, canSeeRoster, suspended = false, suspendReason = '', myConfirmed = false, msg = '', bannerVer = '4', cancelled = false, locked = false, announcement = null, announcementLog = [], inPlayers, offeredPlayers = [], waitPlayers, host = null, runDay = null, rdMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
 
   // Not cleared to play yet (admins always get through — they run the check-in)
   if (!viewerIsAdmin && status !== 'approved') {
@@ -2023,6 +2055,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
     ${qrBlock}
     <div style="height:28px"></div>
     ${locationBlock}
+    ${canOperate ? runDayControls({ runDay, rdMsg }) : ''}
     <div class="foot" style="margin-top:12px"><a href="/logout">Sign out</a></div>
     <script>
       // Who's-going overlay. Open is instant; close plays a slide-down (unless
@@ -2569,6 +2602,14 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
         var d=Math.floor(diff/86400000),h=Math.floor(diff%86400000/3600000),m=Math.floor(diff%3600000/60000);
         el.textContent=d+'D '+pad(h)+':'+pad(m);}
       pkTick(); if(!window.__pkTickBound){window.__pkTickBound=true;setInterval(pkTick,30000);}
+      // Live refresh: re-fetch + swap the page when the run fingerprint changes (join/leave/
+      // confirm/open-close/announce). Gentle — never nukes an open sheet or a form being filled.
+      window.__pkOnChange=function(){
+        if((window.__overlayOpen&&window.__overlayOpen())||(window.__composing&&window.__composing()))return;
+        if(!window.fetch||!window.__swapWrap)return;
+        fetch('/pickleball',{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.text();}).then(function(h){document.documentElement.classList.add('noanim');window.__swapWrap(h);}).catch(function(){});
+      };
+      if(window.__poll)window.__poll('pickleball',window.__pkOnChange);
     </script>
   ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: 2 }));
 }
@@ -2625,47 +2666,8 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
   const POS = [['PG', 'Point'], ['SG', 'Shoot'], ['SF', 'Small F'], ['PF', 'Power F'], ['C', 'Center']];
   // Host/admin-only: move a given week's run to a different weekday. Compact,
   // collapsed-by-default <details> so it never breaks the profile's no-scroll fit.
-  // The date input is font-size:16px (zero iOS zoom) with a 44px tap target; min =
-  // today. POSTs to /admin/rundate. A separate reset form clears an active override.
-  const rdBanner = rdMsg === 'set' ? '<div class="notice good">Run day updated ✓</div>'
-    : rdMsg === 'past' ? '<div class="notice bad">Pick a date that isn\'t in the past.</div>'
-    : rdMsg === 'range' ? '<div class="notice bad">Pick a date within the next 30 days.</div>'
-    : rdMsg === 'time' ? '<div class="notice bad">Check the times — end must be after start.</div>'
-    : rdMsg === 'bad' ? '<div class="notice bad">That date didn\'t look right — try again.</div>'
-    : '';
-  const ti = 'font-size:16px;min-height:44px;padding:11px 13px;width:100%;box-sizing:border-box;max-width:100%;min-width:0';
-  const runDaySection = runDay ? `
-    <details class="announce-compose" style="margin-top:12px">
-      <summary>Run day · ${esc(runDay.weekday)}, ${esc(runDay.label)} · ${esc(runDay.timeLabel)}${runDay.isOverride ? ' (moved)' : ''}</summary>
-      ${rdBanner}
-      <p class="tally-note" style="margin:8px 0 10px">The next run is <b>${esc(runDay.weekday)}, ${esc(runDay.label)}, ${esc(runDay.timeLabel)}</b>${runDay.dateMoved ? ` — moved from the usual day (${esc(runDay.defaultLabel)}).` : (runDay.isOverride ? ' — usual day, custom time.' : ' (its usual day & time).')} Change the date and/or time — players get an announcement.</p>
-      <form method="POST" action="/admin/rundate" style="margin:0">
-        <div class="field"><label>Run date</label>
-          <input type="date" name="date" value="${esc(runDay.runDate)}" min="${esc(runDay.today)}" max="${esc(runDay.maxDate)}" required style="${ti}">
-        </div>
-        <div style="display:flex;gap:10px;margin-top:8px">
-          <div class="field" style="flex:1;margin:0"><label>Start</label>
-            <input type="time" name="start" value="${esc(runDay.start)}" required style="${ti}">
-          </div>
-          <div class="field" style="flex:1;margin:0"><label>End</label>
-            <input type="time" name="end" value="${esc(runDay.end)}" required style="${ti}">
-          </div>
-        </div>
-        <label class="lvl" style="margin:10px 0 8px;display:block"><input type="checkbox" name="email_everyone" checked> Also email everyone</label>
-        <button class="btn sm" type="submit">Set run day & time</button>
-      </form>
-      ${runDay.isOverride ? `<form method="POST" action="/admin/rundate" style="margin-top:8px">
-        <input type="hidden" name="date" value="${esc(runDay.defaultFriday)}">
-        <input type="hidden" name="email_everyone" value="1">
-        <button class="btn ghost sm" type="submit">Reset to the usual day &amp; time (${esc(runDay.defaultLabel)})</button>
-      </form>` : ''}
-      <div class="rule" style="margin:14px 0 12px"></div>
-      ${runDay.cancelled
-        ? `<div class="notice bad" style="margin:0 0 10px"><b>🚫 This run is cancelled.</b> Players see it on the check-in page and were notified. Restore it to run check-in again.</div>
-           <form method="POST" action="/admin/run/cancel" style="margin:0"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Restore this run</button></form>`
-        : `<p class="tally-note" style="margin:0 0 8px">Something come up? Cancel this week's run — players get a "run cancelled" notification and check-in is blocked. (Only this week; next week is unaffected.)</p>
-           <form method="POST" action="/admin/run/cancel" style="margin:0" onsubmit="return confirm('Cancel this week\\'s run? Everyone will be notified it\\'s off.');"><input type="hidden" name="on" value="1"><button class="btn leave sm" type="submit">🚫 Cancel this week's run</button></form>`}
-    </details>` : '';
+  // Run-day + Cancel-run controls moved to the check-in page's Operator-tools card
+  // (runDayControls) so each run manages itself — the profile no longer carries them.
   // Every player's DM inbox lives on their own profile tab (there is no Messages tab).
   // Player-to-player DMs: start one from any player's profile (Message button).
   const inbox = `<div id="dminbox">
@@ -2750,7 +2752,6 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
       <p class="tally-note" id="pushnote" style="margin:6px 0 10px">Spot offers, announcements and mentions — right on your phone.</p>
       <button class="btn ghost sm" type="button" id="pushbtn">Enable notifications</button>
     </div>
-    ${runDaySection}
     ${inbox}
     ${annHistory}
     ${annSheet}

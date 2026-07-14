@@ -1770,6 +1770,22 @@ app.get('/runs', requireLogin, (req, res) => {
   }));
 });
 
+// Run-day control payload for the check-in Operator-tools card — HOST or ADMIN only
+// (team members can't move the run). Null for everyone else. Moved off the profile.
+function runDayFor(req, gate) {
+  const canSetRunDay = gate.viewerIsAdmin || !!(gate.a && gate.a.is_host);
+  if (!canSetRunDay) return null;
+  const rdRunDate = nextRunDate();
+  const rdBase = nearestFriday(new Date(rdRunDate + 'T12:00:00')); // base Friday this run is keyed under
+  const rdTimes = runTimesFor(rdRunDate);
+  return {
+    runDate: rdRunDate, weekday: runWeekday(rdRunDate), label: runLabelFor(rdRunDate),
+    isOverride: !!runOverrideRow(rdBase), dateMoved: rdRunDate !== rdBase,
+    start: rdTimes.start, end: rdTimes.end, timeLabel: runTimeRange(rdRunDate),
+    defaultFriday: rdBase, defaultLabel: runLabelFor(rdBase),
+    today: ymdLocal(), maxDate: shiftYmd(ymdLocal(), 30), cancelled: runIsCancelled(rdRunDate),
+  };
+}
 app.get('/checkin', requireLogin, (req, res) => {
   const email = req.userEmail;
   const gate = requirePlayer(req, res);
@@ -1833,6 +1849,9 @@ app.get('/checkin', requireLogin, (req, res) => {
     waitPlayers: canSeeRoster ? waitPlayers : [],
     // the current host (if one is set) → "Meet your host" card
     host: stmtHostCard.get() || null,
+    // Operator run-day + cancel controls (HOST/ADMIN only) — moved here from the profile.
+    runDay: runDayFor(req, gate),
+    rdMsg: req.query.rdset ? 'set' : (req.query.rderr || ''),
     dmUnread: unreadCount(email),
     groupUnread: groupUnread(email),
     groupMention: groupMentionUnread(email, a ? a.id : 0),
@@ -1866,6 +1885,11 @@ app.get('/poll', requireLogin, (req, res) => {
   } else if (page === 'pkchat') {
     const g = stmtPollPkChat.get(), rx = stmtPollPkChatReact.get();
     f = `${g.mx || 0}:${getSetting('pk_chat_seq') || 0}:${rx.c || 0}:${rx.mx || ''}`;
+  } else if (page === 'pickleball') {
+    const rd = pkRunDate(), part = pkPartition(rd);
+    const order = part.rows.map(r => `${r.id}${r.confirmed_at ? 'c' : ''}`).join(',');
+    const a = latestPkAnnouncement();
+    f = `${rd}:${pkIsOpen(rd) ? 1 : 0}:${pkIsCancelled(rd) ? 1 : 0}:${order}:${a ? a.id : 0}`;
   } else if (page === 'profile') {
     const m = stmtPollDM.get(email, email);
     f = `${m.mx || 0}:${m.c || 0}`;
@@ -1923,31 +1947,8 @@ app.get('/profile', requireLogin, (req, res) => {
   // Host DM inbox lives on the host's own profile tab now (no Messages tab). Only
   // the host loads/sees it; players get no inbox here.
   const iAmHost = !!a.is_host;
-  // Run-day control — HOST or ADMIN only (team members can't move the run). Shows the
-  // current upcoming run + a date picker to move it. runDay carries everything the
-  // compact section needs; rdMsg surfaces the POST outcome (set / error).
-  const canSetRunDay = gate.viewerIsAdmin || iAmHost;
-  const rdRunDate = nextRunDate();
-  // The base Friday this run is keyed under — nearestFriday(runDate), robust on ANY day
-  // (unlike nextFriday(), which flips to next week on the run's own Saturday). isOverride
-  // = the run isn't sitting on its base Friday; the Reset form clears the override for base.
-  const rdBase = nearestFriday(new Date(rdRunDate + 'T12:00:00'));
-  const rdTimes = runTimesFor(rdRunDate);
-  const runDay = canSetRunDay ? {
-    runDate: rdRunDate,
-    weekday: runWeekday(rdRunDate),
-    label: runLabelFor(rdRunDate),
-    isOverride: !!runOverrideRow(rdBase),      // customized day AND/OR time
-    dateMoved: rdRunDate !== rdBase,
-    start: rdTimes.start, end: rdTimes.end,     // HH:MM, prefill the time inputs
-    timeLabel: runTimeRange(rdRunDate),          // "7–10 PM"
-    defaultFriday: rdBase,
-    defaultLabel: runLabelFor(rdBase),
-    today: ymdLocal(),
-    maxDate: shiftYmd(ymdLocal(), 30),
-    cancelled: runIsCancelled(rdRunDate),
-  } : null;
-  const rdMsg = req.query.rdset ? 'set' : (req.query.rderr || '');
+  // Run-day + Cancel-run controls now live on the check-in page's Operator-tools card
+  // (moved off the profile), so nothing run-day-related is computed here anymore.
   // Photo upload/remove outcome → view notice. ok/removed = success; err:<code> maps
   // to a friendly message in the view. Codes come from the /profile/photo route below.
   const photoMsg = req.query.photo ? String(req.query.photo)
@@ -1956,7 +1957,7 @@ app.get('/profile', requireLogin, (req, res) => {
   const cc = chatCountsFor(chatProgram, a.email, a.id);
   res.send(profileTabPage({ a, stats: attendanceStats(a.email), saved: req.query.saved === '1', error: '',
     dmUnread: unreadCount(a.email), groupUnread: cc.group, groupMention: cc.gm, chatProgram, canOperate, announcementLog: canOperate ? announcementHistory() : [],
-    iAmHost, threads: loadInbox(a.email), runDay, rdMsg, photoMsg, ann: annPanel(a.email) }));
+    iAmHost, threads: loadInbox(a.email), photoMsg, ann: annPanel(a.email) }));
 });
 
 // ---------- PROFILE PHOTO (upload / remove) ----------
@@ -2888,7 +2889,7 @@ app.post('/admin/run/cancel', requireLogin, (req, res) => {
   if (!admin && !host) return res.status(403).send('Only the host or an admin can cancel the run.');
   const runDate = nextRunDate();
   const cancel = req.body.on === '1';
-  if (cancel === runIsCancelled(runDate)) return res.redirect('/profile'); // no state change → no push spam
+  if (cancel === runIsCancelled(runDate)) return res.redirect('/checkin'); // no state change → no push spam
   setRunCancelled(runDate, cancel);
   if (cancel) db.prepare('DELETE FROM checkins WHERE run_date = ?').run(runDate); // clear the floor — a cancelled run has nobody on it
   audit(email, admin ? 'admin' : 'host', cancel ? 'run:cancel' : 'run:uncancel', runDate);
@@ -2900,7 +2901,7 @@ app.post('/admin/run/cancel', requireLogin, (req, res) => {
       url: '/checkin', tag: 'announce',
     }));
   }
-  res.redirect('/profile?rdset=1');
+  res.redirect('/checkin?rdset=1');
 });
 
 // The run-day confirm/release ping is now AUTOMATIC at the 2 PM lock (see autoRunState) —
@@ -3170,11 +3171,11 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
 
   const raw = String(req.body.date || '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || isNaN(new Date(raw + 'T12:00:00')))
-    return res.redirect('/profile?rderr=bad');
+    return res.redirect('/checkin?rderr=bad');
   const today = ymdLocal();
-  if (raw < today) return res.redirect('/profile?rderr=past');
+  if (raw < today) return res.redirect('/checkin?rderr=past');
   const maxDate = new Date(); maxDate.setDate(maxDate.getDate() + 30);
-  if (raw > ymdLocal(maxDate)) return res.redirect('/profile?rderr=range');
+  if (raw > ymdLocal(maxDate)) return res.redirect('/checkin?rderr=range');
 
   // Optional start/end time (HH:MM). Blank/absent → the default 19:00–22:00. End must
   // be after start. A time that differs from default is stored even when the DAY didn't
@@ -3182,11 +3183,11 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
   const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
   const rawStart = String(req.body.start || '').trim();
   const rawEnd = String(req.body.end || '').trim();
-  if (rawStart && !TIME_RE.test(rawStart)) return res.redirect('/profile?rderr=time');
-  if (rawEnd && !TIME_RE.test(rawEnd)) return res.redirect('/profile?rderr=time');
+  if (rawStart && !TIME_RE.test(rawStart)) return res.redirect('/checkin?rderr=time');
+  if (rawEnd && !TIME_RE.test(rawEnd)) return res.redirect('/checkin?rderr=time');
   const start = rawStart || DEFAULT_START;
   const end = rawEnd || DEFAULT_END;
-  if (end <= start) return res.redirect('/profile?rderr=time');
+  if (end <= start) return res.redirect('/checkin?rderr=time');
 
   // Key the override by the default Friday NEAREST the chosen date — an override
   // REPLACES that Friday's run. Reset (default day + default time) clears any override.
@@ -3207,7 +3208,7 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
   const same = (!dateMoved && !timeCustom)
     ? !curRow
     : (curRow && curRow.run_date === raw && (curRow.run_time || null) === storeTime && (curRow.run_end || null) === storeEnd);
-  if (same) return res.redirect('/profile?rdset=1');
+  if (same) return res.redirect('/checkin?rdset=1');
 
   const oldRunDate = nextRunDate();  // the live upcoming run date BEFORE the change
   if (!dateMoved && !timeCustom) {
@@ -3269,7 +3270,7 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
       } catch (err) { console.error(`[rundate] announcement email prep FAILED: ${err.message}`); }
     });
   }
-  res.redirect('/profile?rdset=1');
+  res.redirect('/checkin?rdset=1');
 });
 
 // Share page — a big scannable QR + tap-able link for the application form,
