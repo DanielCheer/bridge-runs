@@ -21,7 +21,7 @@ import {
 import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap,
-  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage, runsPage, pkChatPage,
+  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage, runsPage, pkChatPage, pkJoinPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -914,11 +914,12 @@ function hasOlderPkGroup(id) {
 function loadPkGroupChat(me) {
   const msgs = db.prepare(`SELECT * FROM (SELECT * FROM pk_group_messages ORDER BY id DESC LIMIT 200) ORDER BY id ASC`).all();
   const maps = hydratePkGroupMessages(me, msgs);
+  // Members = people who JOINED pickleball (program_membership 2), not the whole approved roster.
   const members = db.prepare(`
-    SELECT id, full_name, email, is_host, is_team, is_regular, avatar
-    FROM applicants
-    WHERE status = 'approved' AND email NOT LIKE '%@guest.local'
-    ORDER BY is_host DESC, is_team DESC, is_regular DESC, full_name COLLATE NOCASE`).all();
+    SELECT a.id, a.full_name, a.email, a.is_host, a.is_team, a.is_regular, a.avatar
+    FROM program_membership pm JOIN applicants a ON a.email = pm.email
+    WHERE pm.program_id = 2 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local'
+    ORDER BY a.is_host DESC, a.is_team DESC, a.is_regular DESC, a.full_name COLLATE NOCASE`).all();
   const pinned = db.prepare('SELECT * FROM pk_group_messages WHERE pinned_at IS NOT NULL ORDER BY pinned_at DESC LIMIT 5').all();
   const pinnedNames = new Map();
   if (pinned.length) {
@@ -963,6 +964,18 @@ const stmtMarkPkGroupRead = db.prepare(`INSERT INTO pk_group_reads (email, last_
               VALUES (?, (SELECT COALESCE(MAX(id),0) FROM pk_group_messages), datetime('now'))
               ON CONFLICT(email) DO UPDATE SET last_read_id = excluded.last_read_id, last_read_at = excluded.last_read_at`);
 function markPkGroupRead(me) { stmtMarkPkGroupRead.run(me); }
+// Chat gate = page gate + pickleball MEMBERSHIP. You must have opened the pickleball run
+// (which joins you) to access its chat — being an approved basketball player isn't enough.
+// pkIsMember/pkGate are hoisted function declarations, so this resolves despite ordering.
+function pkChatGate(req, res, json) {
+  const g = pkGate(req, res); if (!g) return null;         // pkGate already responded on failure
+  if (!pkIsMember(req.userEmail)) {
+    if (json) res.status(403).json({ err: 'notmember' });
+    else res.redirect('/pickleball');                      // open the run first to join
+    return null;
+  }
+  return g;
+}
 
 // Remember the last run the viewer opened (1 = basketball, 2 = pickleball) so the
 // program-neutral pages (Runs hub, Profile) point their run-aware Chat tab at the right
@@ -2468,7 +2481,7 @@ app.post('/chat/video', requireLogin, (req, res) => {
 // Gated by pkGate: approved members + admins, 404 while the run is hidden. Reuses the
 // shared media pipeline (same /chat-media dir) and the base-pathed chat view.
 app.get('/pickleball/chat', requireLogin, (req, res) => {
-  const g = pkGate(req, res); if (!g) return;
+  const g = pkChatGate(req, res); if (!g) return;
   setRunCookie(req, res, 2);
   const me = req.userEmail;
   const chatData = loadPkGroupChat(me);
@@ -2485,12 +2498,12 @@ app.get('/pickleball/chat', requireLogin, (req, res) => {
   }));
 });
 app.post('/pickleball/chat/seen', requireLogin, (req, res) => {
-  const g = pkGate(req, res); if (!g) return;
+  const g = pkChatGate(req, res); if (!g) return;
   markPkGroupRead(req.userEmail);
   res.status(204).end();
 });
 app.get('/pickleball/chat/older', requireLogin, (req, res) => {
-  const g = pkGate(req, res); if (!g) return;
+  const g = pkChatGate(req, res); if (!g) return;
   const me = req.userEmail;
   const before = parseInt(req.query.before, 10);
   if (!Number.isInteger(before) || before <= 0) return res.status(400).send('');
@@ -2501,7 +2514,7 @@ app.get('/pickleball/chat/older', requireLogin, (req, res) => {
 });
 app.post('/pickleball/chat', requireLogin, (req, res) => {
   uploadChatImage(req, res, async (err) => {
-    const g = pkGate(req, res); if (!g) return;
+    const g = pkChatGate(req, res); if (!g) return;
     if (mutedOut(g, res, { back: '/pickleball/chat' })) return;
     const me = req.userEmail;
     if (err) return res.redirect('/pickleball/chat?err=' + (err.code === 'LIMIT_FILE_SIZE' ? 'big' : 'bad'));
@@ -2545,7 +2558,7 @@ app.post('/pickleball/chat', requireLogin, (req, res) => {
   });
 });
 app.post('/pickleball/chat/react', requireLogin, (req, res) => {
-  const g = pkGate(req, res); if (!g) return;
+  const g = pkChatGate(req, res); if (!g) return;
   if (mutedOut(g, res, { back: '/pickleball/chat' })) return;
   const me = req.userEmail;
   const messageId = Number(req.body.message_id) || 0;
@@ -2564,7 +2577,7 @@ app.post('/pickleball/chat/react', requireLogin, (req, res) => {
   res.redirect('/pickleball/chat');
 });
 app.post('/pickleball/chat/delete', requireLogin, (req, res) => {
-  const g = pkGate(req, res); if (!g) return;
+  const g = pkChatGate(req, res); if (!g) return;
   const me = req.userEmail;
   const messageId = Number(req.body.message_id) || 0;
   const msg = db.prepare('SELECT id, from_email, image, audio, video FROM pk_group_messages WHERE id = ?').get(messageId);
@@ -2578,7 +2591,7 @@ app.post('/pickleball/chat/delete', requireLogin, (req, res) => {
   res.redirect('/pickleball/chat');
 });
 app.post('/pickleball/chat/pin', requireLogin, (req, res) => {
-  const g = pkGate(req, res); if (!g) return;
+  const g = pkChatGate(req, res); if (!g) return;
   if (mutedOut(g, res, { back: '/pickleball/chat' })) return;
   const canPin = g.admin || !!(g.a && (g.a.is_host || g.a.is_team));
   if (!canPin) return res.redirect('/pickleball/chat');
@@ -2592,7 +2605,7 @@ app.post('/pickleball/chat/pin', requireLogin, (req, res) => {
 });
 app.post('/pickleball/chat/voice', requireLogin, (req, res) => {
   uploadChatAudio(req, res, async (err) => {
-    const g = pkGate(req, res); if (!g) return;
+    const g = pkChatGate(req, res, true); if (!g) return;
     if (mutedOut(g, res, { json: true })) return;
     const me = req.userEmail;
     if (err) return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ err: err.code === 'LIMIT_FILE_SIZE' ? 'big' : 'bad' });
@@ -2622,7 +2635,7 @@ app.post('/pickleball/chat/voice', requireLogin, (req, res) => {
 });
 app.post('/pickleball/chat/video', requireLogin, (req, res) => {
   uploadChatVideo(req, res, async (err) => {
-    const g = pkGate(req, res); if (!g) return;
+    const g = pkChatGate(req, res, true); if (!g) return;
     if (mutedOut(g, res, { json: true })) return;
     const me = req.userEmail;
     if (err) return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ err: err.code === 'LIMIT_FILE_SIZE' ? 'big' : 'bad' });
@@ -3546,10 +3559,27 @@ function pkPartition(rd) {
 function pkStartEpoch(rd) { return rd ? new Date(rd + 'T18:00:00').getTime() : 0; }
 // Latest LIVE pickleball announcement (own pk_announcements table; retracted ones archived).
 function latestPkAnnouncement() { return db.prepare('SELECT id, body, author, created_at FROM pk_announcements WHERE COALESCE(archived,0) = 0 ORDER BY id DESC LIMIT 1').get() || null; }
-// Push audience for pickleball = every approved, non-guest member (open-join run). sendPush
-// only reaches those with a subscription, so this is a safe superset.
+// Pickleball MEMBERSHIP: you become a pickleball member by opening the run (GET /pickleball) —
+// tracked in program_membership (program 2). Chat access, the members list, and the push
+// audience all read from this, so being an approved BASKETBALL player alone doesn't grant it.
+function pkJoinMembership(email) {
+  if (!email || /@guest\.local$/.test(email)) return;
+  db.prepare("INSERT OR IGNORE INTO program_membership (program_id, email, status, role) VALUES (2, ?, 'approved', 'approved')").run(email);
+}
+function pkIsMember(email) {
+  if (!email) return false;
+  if (isAdmin(email)) return true; // admins operate the run — always members
+  return !!db.prepare('SELECT 1 FROM program_membership WHERE program_id = 2 AND email = ?').get(email);
+}
+// Push/announce audience = actual pickleball members (approved, non-guest). Not the whole club.
 function pkMemberEmails() {
-  return db.prepare("SELECT email FROM applicants WHERE status = 'approved' AND email NOT LIKE '%@guest.local'").all().map(r => r.email);
+  return db.prepare(`SELECT pm.email FROM program_membership pm JOIN applicants a ON a.email = pm.email
+    WHERE pm.program_id = 2 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local'`).all().map(r => r.email);
+}
+// Email audience = pickleball members who haven't opted out of announcement emails.
+function pkEmailRecipients() {
+  return db.prepare(`SELECT pm.email FROM program_membership pm JOIN applicants a ON a.email = pm.email
+    WHERE pm.program_id = 2 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local' AND COALESCE(a.email_optout,0) = 0`).all().map(r => r.email);
 }
 // Auto open/close schedule for pickleball (runs on the shared 60s interval). Auto-opens
 // check-in at midnight on the run day and auto-locks at the run's start time — each once
@@ -3606,7 +3636,14 @@ function pkEnsureWeek() {
 }
 app.get('/pickleball', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
-  setRunCookie(req, res, 2); // opening pickleball → the neutral pages' Chat tab points at pickleball
+  // Not a member yet (and not an admin, who operates it) → show a JOIN PROMPT instead of the
+  // run. Membership is opt-in: you choose to join pickleball, separate from basketball approval.
+  if (!pkIsMember(req.userEmail)) {
+    return res.send(pkJoinPage({ email: req.userEmail, runDate: pkRunDate(), runLabel: runLabelFor(pkRunDate()),
+      dmUnread: unreadCount(req.userEmail), ann: null }));
+  }
+  setRunCookie(req, res, 2); // a member opened pickleball → the neutral pages' Chat tab points here
+  if (req.headers['x-prewarm'] !== '1') pkJoinMembership(req.userEmail); // ensure operators/host appear in the member list too (no-op for existing members)
   pkEnsureWeek();
   const rd = pkRunDate(), part = pkPartition(rd);
   const mine = part.rows.find(p => p.email === req.userEmail);
@@ -3618,6 +3655,14 @@ app.get('/pickleball', requireLogin, (req, res) => {
     tipoff: pkStartEpoch(rd), announcement: latestPkAnnouncement(),
     dmUnread: unreadCount(req.userEmail), groupUnread: pkGroupUnread(req.userEmail), groupMention: pkGroupMentionUnread(req.userEmail, g.a ? g.a.id : 0), ann: null,
   }));
+});
+// Join the pickleball RUN (membership) — the opt-in from the join prompt. Distinct from the
+// per-week check-in below. Adds a program_membership row, then lands on the run.
+app.post('/pickleball/join-run', requireLogin, (req, res) => {
+  const g = pkGate(req, res); if (!g) return;
+  pkJoinMembership(req.userEmail);
+  setRunCookie(req, res, 2);
+  res.redirect('/pickleball');
 });
 app.post('/pickleball/join', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
@@ -3675,7 +3720,7 @@ app.post('/pickleball/announce', requireLogin, (req, res) => {
     sendPush(pkMemberEmails(), { title: 'Pickleball announcement', body: body.slice(0, 140), url: '/pickleball', tag: 'pkann' });
     // Email audience honours email_optout (announcementRecipients already filters it); push
     // ignores it, matching the basketball convention.
-    if (emailConfigured) { const r = announcementRecipients(); if (r.length) sendAnnouncement(r, body, author).catch(e => console.error(`[pk-announce] email FAILED: ${e.message}`)); }
+    if (emailConfigured) { const r = pkEmailRecipients(); if (r.length) sendAnnouncement(r, body, author).catch(e => console.error(`[pk-announce] email FAILED: ${e.message}`)); }
   });
   res.redirect('/pickleball');
 });

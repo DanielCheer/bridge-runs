@@ -1383,9 +1383,10 @@ const firstRunTour = `
         if(!STEPS.length){ done(); killBridge(); return; }
         i = resume>=0 ? Math.max(0,Math.min(resume,STEPS.length-1)) : 0;
         tour.hidden=false; document.body.style.overflow='hidden'; render();
-        // Spotlight is now anchored on the new page → drop the bridge scrim on the next frame
-        // (its .2s fade covers any final reflow) so the two dark backdrops hand off seamlessly.
-        var br=document.getElementById('tourbridge'); if(br){ br.style.opacity='0'; setTimeout(killBridge,220); }
+        // Cut the bridge in a SINGLE frame right after the spotlight paints (double-rAF) — no
+        // opacity fade (that slow reveal read as janky) and no bare-page frame. Re-run place()
+        // in the same frame so the spotlight can't hand off to a stale position.
+        requestAnimationFrame(function(){ requestAnimationFrame(function(){ place(); killBridge(); }); });
       }, resume>=0?200:(force?0:((document.getElementById('splash')&&!reduce)?1700:350)));
     };
     window.__startTour(false);
@@ -2396,6 +2397,23 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
     </div>
     ${canJoin ? firstRunTour : ''}
   ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: chatProgram }));
+}
+
+// Pickleball JOIN PROMPT — shown when an approved member who hasn't joined pickleball opens
+// the run. Joining is opt-in (separate from basketball approval): tap Join → become a member →
+// see the run + chat. Chat tab stays on basketball here (they're not a pickleball member yet).
+export function pkJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, ann = null }) {
+  return HEAD('Join Pickleball — The Bridge', 'has-tabs') + header(`<b>PICKLEBALL</b>${esc(email)}`, '', ann, '') + `
+    ${backToRuns}
+    <div class="rule"></div>
+    <div class="phead"><h1>Pickleball 🥒</h1></div>
+    <div class="card rail" style="margin-top:12px">
+      <span class="eyebrow">Join the run</span>
+      <h3 style="margin:4px 0 8px">Want in on pickleball?</h3>
+      <p class="lead" style="margin:0 0 14px">Join to check in each week and chat with the pickleball crew — it's separate from the basketball run.${runLabel ? ` Next run: <b>${esc(wdayFull(runDate))}, ${esc(runLabel)}</b>.` : ''}</p>
+      <form method="POST" action="/pickleball/join-run"><button class="btn primary" type="submit">🥒 Join pickleball</button></form>
+    </div>
+  ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: 0, groupMention: 0, program: 1 }));
 }
 
 // Pickleball run — a SEPARATE, hidden run on its own pk_* tables. Dedicated view (reuses the
