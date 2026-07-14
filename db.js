@@ -508,6 +508,12 @@ db.exec(`
     last_read_at TEXT NOT NULL DEFAULT (datetime('now')),
     last_read_id INTEGER NOT NULL DEFAULT 0
   );
+  CREATE TABLE IF NOT EXISTS pk_announcements (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    body       TEXT NOT NULL,
+    author     TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 // Prune stale magic-link tokens on startup. A token is dead once it's been used

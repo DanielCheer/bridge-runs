@@ -3482,6 +3482,8 @@ setInterval(() => {
     ensureWeek(rd);
     expireAndReoffer(rd, null);
     autoRunState();
+    pkEnsureWeek();      // pickleball weekly rollover (isolated; no-op until its date passes)
+    pkAutoRunState();    // pickleball auto open/close schedule
   } catch (e) { console.error(`[interval] rollover/expiry FAILED: ${e.message}`); }
 }, 60000).unref();
 
@@ -3525,8 +3527,48 @@ function pkIsOpen(rd) { const r = db.prepare('SELECT is_open FROM pk_run_state W
 function pkIsCancelled(rd) { const r = db.prepare('SELECT cancelled FROM pk_run_state WHERE run_date = ?').get(rd); return !!(r && r.cancelled); }
 function pkSetState(rd, field, val) { db.prepare(`INSERT INTO pk_run_state (run_date, ${field}) VALUES (?, ?) ON CONFLICT(run_date) DO UPDATE SET ${field} = excluded.${field}`).run(rd, val ? 1 : 0); }
 function pkPartition(rd) {
-  const rows = db.prepare('SELECT email, name, sort_order, id FROM pk_checkins WHERE run_date = ? ORDER BY sort_order ASC, id ASC').all(rd);
+  // Join applicants so the roster rows can open a profile popup + show role badges
+  // (guests have no applicant row → applicant_id null → non-tappable, matches basketball).
+  const rows = db.prepare(`
+    SELECT c.email, c.name, c.sort_order, c.id,
+           a.id AS applicant_id, a.is_host, a.is_team, a.is_regular
+    FROM pk_checkins c LEFT JOIN applicants a ON a.email = c.email
+    WHERE c.run_date = ? ORDER BY c.sort_order ASC, c.id ASC`).all(rd);
   return { floor: rows.slice(0, PK_CAP), wait: rows.slice(PK_CAP), rows };
+}
+// Pickleball run start epoch for the countdown — the run date at a default 7 PM local
+// (pickleball has no configurable time yet; this drives the banner ticker only).
+function pkStartEpoch(rd) { return rd ? new Date(rd + 'T19:00:00').getTime() : 0; }
+// Latest pickleball announcement (own pk_announcements table — separate from basketball).
+function latestPkAnnouncement() { return db.prepare('SELECT id, body, author, created_at FROM pk_announcements ORDER BY id DESC LIMIT 1').get() || null; }
+// Push audience for pickleball = every approved, non-guest member (open-join run). sendPush
+// only reaches those with a subscription, so this is a safe superset.
+function pkMemberEmails() {
+  return db.prepare("SELECT email FROM applicants WHERE status = 'approved' AND email NOT LIKE '%@guest.local'").all().map(r => r.email);
+}
+// Auto open/close schedule for pickleball (runs on the shared 60s interval). Auto-opens
+// check-in at midnight on the run day and auto-locks at the run's start time — each once
+// per run, guarded by app_settings markers. Skipped while the run is hidden or cancelled.
+function pkAutoRunState() {
+  if (!pkProgramActive()) return;
+  const rd = pkRunDate();
+  if (!rd || pkIsCancelled(rd)) return;
+  const now = Date.now();
+  const openAt = new Date(rd + 'T00:00:00').getTime();
+  const lockAt = pkStartEpoch(rd);
+  if (now >= openAt && now < lockAt && getSetting('pk_autoopen_done') !== rd) {
+    setSetting('pk_autoopen_done', rd);
+    if (!pkIsOpen(rd)) {
+      pkSetState(rd, 'is_open', 1);
+      audit('system', 'system', 'pk:autoopen', rd);
+      setImmediate(() => sendPush(pkMemberEmails(), { title: 'Pickleball check-in is open', body: `Check-in is open for ${runWeekday(rd)}, ${runLabelFor(rd)} pickleball — grab your spot 🥒`, url: '/pickleball', tag: 'pkqueueopen' }));
+      console.log(`[pk-autoopen] opened pickleball check-in for ${rd}`);
+    }
+  }
+  if (now >= lockAt && getSetting('pk_autolock_done') !== rd) {
+    setSetting('pk_autolock_done', rd);
+    if (pkIsOpen(rd)) { pkSetState(rd, 'is_open', 0); audit('system', 'system', 'pk:autolock', rd); }
+  }
 }
 // Access gate: approved players + admins. HIDDEN while program 2 is inactive → admins only.
 function pkGate(req, res) {
@@ -3559,7 +3601,8 @@ app.get('/pickleball', requireLogin, (req, res) => {
     email: req.userEmail, runDate: rd, runLabel: runLabelFor(rd), isOpen: pkIsOpen(rd), cancelled: pkIsCancelled(rd),
     cap: PK_CAP, waitlistCap: PK_WAIT, going: part.floor.length, waiting: part.wait.length,
     canOperate: g.canOperate, isAdmin: g.admin, myState, floorPlayers: part.floor, waitPlayers: part.wait, hidden: !pkProgramActive(),
-    dmUnread: unreadCount(req.userEmail), groupUnread: pkGroupUnread(req.userEmail), groupMention: pkGroupMentionUnread(req.userEmail, g.a ? g.a.id : 0), ann: annPanel(req.userEmail),
+    tipoff: pkStartEpoch(rd), announcement: latestPkAnnouncement(),
+    dmUnread: unreadCount(req.userEmail), groupUnread: pkGroupUnread(req.userEmail), groupMention: pkGroupMentionUnread(req.userEmail, g.a ? g.a.id : 0), ann: null,
   }));
 });
 app.post('/pickleball/join', requireLogin, (req, res) => {
@@ -3603,6 +3646,23 @@ app.post('/pickleball/guest', requireLogin, (req, res) => {
 app.post('/pickleball/remove', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); db.prepare('DELETE FROM pk_checkins WHERE run_date = ? AND email = ?').run(pkRunDate(), String(req.body.email || '')); res.redirect('/pickleball'); });
 app.post('/pickleball/bump', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(); if (pkIsCancelled(rd)) return res.redirect('/pickleball'); const row = db.prepare('SELECT MIN(sort_order) m FROM pk_checkins WHERE run_date = ?').get(rd); db.prepare('UPDATE pk_checkins SET sort_order = ? WHERE run_date = ? AND email = ?').run(((row && row.m) || 0) - 1, rd, String(req.body.email || '')); res.redirect('/pickleball'); });
 app.post('/pickleball/publish', requireAdmin, (req, res) => { db.prepare('UPDATE program SET active = ? WHERE id = 2').run(req.body.on === '0' ? 0 : 1); audit(req.userEmail, 'admin', req.body.on === '0' ? 'pk:hide' : 'pk:publish', ''); res.redirect('/pickleball'); });
+// Post a pickleball announcement — operator only. Stored on the isolated pk_announcements
+// table, pushed to pickleball members' phones (and emailed if SMTP is set), separate from
+// basketball announcements. Shown as a banner on the pickleball page.
+app.post('/pickleball/announce', requireLogin, (req, res) => {
+  const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball');
+  const body = (req.body.body || '').trim().slice(0, 1000);
+  if (!body) return res.redirect('/pickleball');
+  if (rateLimited('pk-announce', req.userEmail, 6, 10 * 60 * 1000)) return res.redirect('/pickleball');
+  const author = (g.a && g.a.full_name) || req.userEmail;
+  db.prepare('INSERT INTO pk_announcements (body, author) VALUES (?,?)').run(body, author);
+  audit(req.userEmail, 'admin', 'pk:announce', body.slice(0, 60));
+  setImmediate(() => {
+    sendPush(pkMemberEmails(), { title: 'Pickleball announcement', body: body.slice(0, 140), url: '/pickleball', tag: 'pkann' });
+    if (emailConfigured) { const r = pkMemberEmails(); if (r.length) sendAnnouncement(r, body, author).catch(e => console.error(`[pk-announce] email FAILED: ${e.message}`)); }
+  });
+  res.redirect('/pickleball');
+});
 
 // Terminal error handler — a sync throw (or a forwarded async reject via next(e)) in any route
 // lands here with a 500 instead of a hung socket. Must be the LAST app.use (4-arg signature).

@@ -2386,11 +2386,14 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
 
 // Pickleball run — a SEPARATE, hidden run on its own pk_* tables. Dedicated view (reuses the
 // shell + avatar + list styles); does not touch the basketball checkinPage. Native POST forms.
-export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', floorPlayers = [], waitPlayers = [], hidden = true, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', floorPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
   const full = going >= cap, totalFull = (going + waiting) >= (cap + waitlistCap);
   const rmForm = (p) => `<form method="POST" action="/pickleball/remove" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn leave sm" type="submit">Remove</button></form>`;
-  const rowFloor = (p, n) => `<div class="lr"><span class="ln">${n}</span><span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''}</span>${canOperate ? rmForm(p) : ''}</div>`;
-  const rowWait = (p, i) => `<div class="lr"><span class="ln">W${i}</span><span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}</span>${canOperate ? `<form method="POST" action="/pickleball/bump" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn sm" type="submit">Bump in</button></form>${rmForm(p)}` : ''}</div>`;
+  // Tappable name → profile popup (reuses the shared pvOpen + /u/:id/card); guests (no
+  // applicant_id) stay plain text. Role badge mirrors the basketball roster.
+  const nameLink = (p, inner) => (p.applicant_id && !/@guest\.local$/.test(p.email)) ? `<a class="lrlink" href="/u/${p.applicant_id}" onclick="if(window.pvOpen){pvOpen(${p.applicant_id});return false;}">${inner}</a>` : inner;
+  const rowFloor = (p, n) => `<div class="lr"><span class="ln">${n}</span>${nameLink(p, `<span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''}</span>`)}${roleBadge(p)}${canOperate ? rmForm(p) : ''}</div>`;
+  const rowWait = (p, i) => `<div class="lr"><span class="ln">W${i}</span>${nameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}</span>`)}${canOperate ? `<form method="POST" action="/pickleball/bump" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn sm" type="submit">Bump in</button></form>${rmForm(p)}` : ''}</div>`;
   let action = '';
   if (cancelled) action = `<button class="btn" type="button" disabled>Run cancelled</button>`;
   else if (myState === 'in') action = `<form method="POST" action="/pickleball/leave"><button class="btn ghost" type="submit">Sit out</button></form>`;
@@ -2406,6 +2409,12 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
     ${hidden ? `<div class="notice" style="margin-top:10px">🔒 <b>Hidden run</b> — only admins can see this. Flip it live when it's ready.${isAdmin ? ` <form method="POST" action="/pickleball/publish" style="display:inline"><button class="btn sm" type="submit" style="margin-left:6px">Make it live</button></form>` : ''}</div>` : (isAdmin ? `<div class="notice good" style="margin-top:10px">✅ <b>Live</b> — members can join. <form method="POST" action="/pickleball/publish" style="display:inline"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit" style="margin-left:6px">Hide again</button></form></div>` : '')}
     <div class="phead"><h1>Pickleball 🥒</h1></div>
     <p class="psub" style="margin:-4px 0 8px;color:var(--muted)">${cancelled ? 'Cancelled this week' : (runLabel ? `Next: ${esc(wdayFull(runDate))}, ${esc(runLabel)}` : 'No date set')} · ${going}/${cap} in${waiting ? ` · ${waiting} waiting` : ''}</p>
+    ${cancelled || !runDate ? '' : `<div class="pkbanner">
+      <div class="l"><span>Next run</span><b>${esc(wdayFull(runDate))} · ${esc(runLabel)}</b></div>
+      <div class="r"><span>Starts in</span><b class="tick" data-tip="${tipoff}">${esc(fmtCountdown(tipoff))}</b></div>
+    </div>`}
+    ${announcement ? `<div class="notice" style="margin-top:10px">📣 <b>Announcement</b> · ${esc(announcement.body)}${announcement.author ? `<span style="color:var(--muted)"> — ${esc(announcement.author)}</span>` : ''}</div>` : ''}
+    ${canOperate ? `<details class="announce-compose" style="margin-top:8px"><summary>📣 Post announcement</summary><form method="POST" action="/pickleball/announce"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all pickleball members (pushes to their phones)"></textarea><div style="height:8px"></div><button class="btn sm" type="submit">Post &amp; notify</button></form></details>` : ''}
     ${canOperate ? `<form method="POST" action="/pickleball/date" style="display:flex;gap:8px;align-items:center;margin:6px 0 4px"><input type="date" name="date" value="${esc(runDate)}" style="font-size:16px"><button class="btn ghost sm" type="submit">Set run date</button></form>` : ''}
     <div class="controls" style="margin-top:12px">${action}${runToggle}</div>
     <a class="btn ghost sm" href="/pickleball/chat" style="margin-top:10px;display:inline-flex;align-items:center;gap:6px">💬 Pickleball chat</a>
@@ -2416,6 +2425,30 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
     ${canOperate ? (cancelled
       ? `<form method="POST" action="/pickleball/cancel" style="margin-top:16px"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Restore this run</button></form>`
       : `<form method="POST" action="/pickleball/cancel" style="margin-top:16px" onsubmit="return confirm('Cancel this week\\'s pickleball?')"><button class="btn ghost sm" type="submit">🚫 Cancel this week</button></form>`) : ''}
+    <div id="pvwrap" class="wgwrap pvwrap"><div class="wgscrim" onclick="pvClose()"></div>
+      <div class="wgsheet pvsheet" role="dialog" aria-modal="true" aria-label="Player profile">
+        <div class="wgsheet-h"><b>Profile</b><button class="wgx" type="button" onclick="pvClose()" aria-label="Close">${IC_CLOSE}</button></div>
+        <div class="wgsheet-b pvbody"><div class="pcload">Loading…</div></div>
+      </div></div>
+    <style>
+      .pkbanner{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:12px 0 4px;padding:14px 16px;border-radius:16px;
+        background:linear-gradient(120deg,#2C6B66,#1f4f4b);color:#fff}
+      .pkbanner .l span,.pkbanner .r span{display:block;font-size:11px;letter-spacing:.14em;text-transform:uppercase;opacity:.8}
+      .pkbanner .l b{font-size:16px} .pkbanner .r{text-align:right}
+      .pkbanner .r b{font-size:20px;font-variant-numeric:tabular-nums;color:#F2C879}
+    </style>
+    <script>
+      window.pvOpen=function(id){var w=document.getElementById('pvwrap');if(!w)return;var b=w.querySelector('.pvbody');if(b)b.innerHTML='<div class="pcload">Loading…</div>';w.classList.add('open');document.body.style.overflow='hidden';
+        if(window.fetch)fetch('/u/'+id+'/card',{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.ok?r.text():Promise.reject();}).then(function(h){if(b)b.innerHTML=h;}).catch(function(){if(b)b.innerHTML='<div class="pcload">Couldn\\u2019t load that profile.</div>';});};
+      window.pvClose=function(){var w=document.getElementById('pvwrap');if(!w)return;w.classList.remove('open');document.body.style.overflow='';};
+      // Countdown ticker for the next-run banner (mirrors the check-in tip-off ticker).
+      function pkTick(){var el=document.querySelector('.pkbanner .tick');if(!el)return;var tip=+el.getAttribute('data-tip');var diff=tip-Date.now();
+        if(diff<=0){el.textContent='NOW';return;}
+        function pad(n){return String(n).padStart(2,'0');}
+        var d=Math.floor(diff/86400000),h=Math.floor(diff%86400000/3600000),m=Math.floor(diff%3600000/60000);
+        el.textContent=d+'D '+pad(h)+':'+pad(m);}
+      pkTick(); if(!window.__pkTickBound){window.__pkTickBound=true;setInterval(pkTick,30000);}
+    </script>
   ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: 2 }));
 }
 
