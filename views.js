@@ -244,7 +244,7 @@ window.__pollStop=function(){window.__pollPage=null;window.__pollOnChange=null;}
       paint(res,href,push,type);
       // Actually LANDED on chat → now mark it read (the prewarm skipped it). Beacon =
       // fire-and-forget; the badge clears on the next poll tick.
-      if(abs.pathname==='/chat'&&navigator.sendBeacon){try{navigator.sendBeacon('/chat/seen');}catch(e){}}
+      if((abs.pathname==='/chat'||abs.pathname==='/pickleball/chat')&&navigator.sendBeacon){try{navigator.sendBeacon(abs.pathname+'/seen');}catch(e){}}
     }).catch(function(){hard(href);});
   }
   window.__go=go; // exposed so the team tour can drive a smooth router swap between pages
@@ -875,6 +875,7 @@ const composerInitJS = () => `
         // optimistic bubble echoes instantly, then window.__threadRefresh() reconciles.
         (function(){
           var cform=document.getElementById('composer'); if(!cform) return;
+          var CB=cform.getAttribute('action')||'/chat'; // base path (/chat or /pickleball/chat) — keep media in the same room
           var attach=document.getElementById('cattach'), menu=document.getElementById('attmenu');
           var tray=document.getElementById('stickertray'), cfile=document.getElementById('cfile');
           var threadEl=document.getElementById('thread');
@@ -932,7 +933,7 @@ const composerInitJS = () => `
             var fd=new FormData(); fd.append('video',f);
             var rt=document.getElementById('replyTo'); if(rt&&rt.value) fd.append('reply_to',rt.value);
             cvideo.value=''; if(window.clearReply)window.clearReply();
-            fetch('/chat/video',{method:'POST',body:fd,headers:{'X-Requested-With':'fetch'},credentials:'same-origin'})
+            fetch(CB+'/video',{method:'POST',body:fd,headers:{'X-Requested-With':'fetch'},credentials:'same-origin'})
               .then(function(r){ if(!r.ok){ alert(r.status===413?'That video is too large to send.':r.status===415?'That file isn’t a video we can play.':'Couldn’t send the video — please try again.'); } if(window.__threadRefresh)window.__threadRefresh(); })
               .catch(function(){ location.reload(); });
           }); }
@@ -1010,6 +1011,7 @@ const composerInitJS = () => `
         (function(){
           var mic=document.getElementById('cmic'); if(!mic) return;   // group chat only
           var cform=document.getElementById('composer'); if(!cform) return;
+          var CB=cform.getAttribute('action')||'/chat'; // base path (/chat or /pickleball/chat) — keep media in the same room
           var bar=document.getElementById('voicebar'), tEl=document.getElementById('vtime'),
               hint=document.getElementById('vhint'), dot=document.getElementById('vrecdot');
           var threadEl=document.getElementById('thread');
@@ -1055,7 +1057,7 @@ const composerInitJS = () => `
               var b=document.createElement('div'); b.className='mb mb-voice mb-vpending'; b.textContent='\\uD83C\\uDF99 '+fmt(dur);
               w.appendChild(b); d.appendChild(w); threadEl.appendChild(d); try{window.scrollTo(0,document.body.scrollHeight);}catch(e){} }
             if(window.clearReply)window.clearReply();
-            fetch('/chat/voice',{method:'POST',body:fd,headers:{'X-Requested-With':'fetch'},credentials:'same-origin'})
+            fetch(CB+'/voice',{method:'POST',body:fd,headers:{'X-Requested-With':'fetch'},credentials:'same-origin'})
               .then(function(r){ if(!r.ok){ return r.json().catch(function(){return{};}).then(function(j){ var msg=(j&&j.err==='big')?'That recording is too long to send.':(j&&j.err==='type')?'This recording format isn\\u2019t supported on your device.':'Couldn\\u2019t send the voice message.'; alert(msg); if(window.__threadRefresh)window.__threadRefresh(); }); } if(window.__threadRefresh)window.__threadRefresh(); })
               .catch(function(){ if(window.__threadRefresh)window.__threadRefresh(); });
           }
@@ -2404,7 +2406,8 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
   // Tappable name → profile popup (reuses the shared pvOpen + /u/:id/card); guests (no
   // applicant_id) stay plain text. Role badge mirrors the basketball roster.
   const nameLink = (p, inner) => (p.applicant_id && !/@guest\.local$/.test(p.email)) ? `<a class="lrlink" href="/u/${p.applicant_id}" onclick="if(window.pvOpen){pvOpen(${p.applicant_id});return false;}">${inner}</a>` : inner;
-  const rowFloor = (p, n) => `<div class="lr"><span class="ln">${n}</span>${nameLink(p, `<span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''}</span>`)}${roleBadge(p)}${canOperate ? rmForm(p) : ''}</div>`;
+  const pkRole = (p) => roleBadge({ host: !!p.is_host, team: !!p.is_team, regular: !!p.is_regular, guest: /@guest\.local$/.test(p.email) });
+  const rowFloor = (p, n) => `<div class="lr"><span class="ln">${n}</span>${nameLink(p, `<span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''}</span>`)}${pkRole(p)}${canOperate ? rmForm(p) : ''}</div>`;
   const rowWait = (p, i) => `<div class="lr"><span class="ln">W${i}</span>${nameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}</span>`)}${canOperate ? `<form method="POST" action="/pickleball/bump" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn sm" type="submit">Bump in</button></form>${rmForm(p)}` : ''}</div>`;
   let action = '';
   if (cancelled) action = `<button class="btn" type="button" disabled>Run cancelled</button>`;

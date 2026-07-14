@@ -967,10 +967,13 @@ function markPkGroupRead(me) { stmtMarkPkGroupRead.run(me); }
 // Remember the last run the viewer opened (1 = basketball, 2 = pickleball) so the
 // program-neutral pages (Runs hub, Profile) point their run-aware Chat tab at the right
 // room. A lightweight UNSIGNED preference cookie (not identity) — read only for tab routing.
-function setRunCookie(res, program) {
+function setRunCookie(req, res, program) {
+  if (req.headers['x-prewarm'] === '1') return; // a router prewarm isn't a real visit — don't flip context
   try { res.cookie('bridge_run', String(program), { httpOnly: true, sameSite: 'lax', maxAge: 180 * 24 * 60 * 60 * 1000, path: '/' }); } catch {}
 }
-function runCookie(req) { return req.cookies && req.cookies.bridge_run === '2' ? 2 : 1; }
+// Only treat the cookie as pickleball when the run is actually live — otherwise a stale
+// (or unpublished-since) bridge_run=2 would point the Chat tab at a route pkGate now 404s.
+function runCookie(req) { return req.cookies && req.cookies.bridge_run === '2' && pkProgramActive() ? 2 : 1; }
 // The chat unread badge for whichever program the viewer is currently "in" — used on the
 // neutral pages so the Chat tab badge matches the room it will open.
 function chatCountsFor(program, email, aid) {
@@ -1734,7 +1737,7 @@ app.get('/checkin', requireLogin, (req, res) => {
   const email = req.userEmail;
   const gate = requirePlayer(req, res);
   if (!gate) return;
-  setRunCookie(res, 1); // opening basketball → the neutral pages' Chat tab points at basketball
+  setRunCookie(req, res, 1); // opening basketball → the neutral pages' Chat tab points at basketball
   const { a, viewerIsAdmin } = gate;
   const status = a?.status || 'none';
   const { runDate, inPlayers, offeredPlayers, waitPlayers, totalCount } = loadRun(req);
@@ -1831,8 +1834,9 @@ app.get('/poll', requireLogin, (req, res) => {
     f = `${m.mx || 0}:${m.c || 0}`;
   }
   const aid = applicantIdOf(email);
+  const pkOn = pkProgramActive(); // skip the pk unread queries on every 10s tick while the run is hidden
   res.json({ f, dm: unreadCount(email), group: groupUnread(email), gm: groupMentionUnread(email, aid),
-    pkgroup: pkGroupUnread(email), pkgm: pkGroupMentionUnread(email, aid),
+    pkgroup: pkOn ? pkGroupUnread(email) : 0, pkgm: pkOn ? pkGroupMentionUnread(email, aid) : 0,
     ann: announcementUnread(email) ? 1 : 0, v: BUILD_VER });
 });
 
@@ -2224,6 +2228,7 @@ app.get('/players/search', requireLogin, (req, res) => {
 app.get('/chat', requireLogin, (req, res) => {
   const gate = requirePlayer(req, res);
   if (!gate) return;
+  setRunCookie(req, res, 1); // reading basketball chat → neutral pages' Chat tab points back at basketball
   const { a, viewerIsAdmin } = gate;
   const me = req.userEmail;
   const chatData = loadGroupChat(me);
@@ -2464,7 +2469,7 @@ app.post('/chat/video', requireLogin, (req, res) => {
 // shared media pipeline (same /chat-media dir) and the base-pathed chat view.
 app.get('/pickleball/chat', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
-  setRunCookie(res, 2);
+  setRunCookie(req, res, 2);
   const me = req.userEmail;
   const chatData = loadPkGroupChat(me);
   const isMod = g.admin || !!(g.a && g.a.is_host);
@@ -2476,7 +2481,7 @@ app.get('/pickleball/chat', requireLogin, (req, res) => {
     runDate: pkRunDate(),
     dmUnread: unreadCount(me),
     pkGroupUnread: 0, pkGroupMention: 0,
-    ann: annPanel(me),
+    ann: null, // no basketball announcement bell on a pickleball surface (matches the pk check-in page)
   }));
 });
 app.post('/pickleball/chat/seen', requireLogin, (req, res) => {
@@ -2507,13 +2512,13 @@ app.post('/pickleball/chat', requireLogin, (req, res) => {
     if (replyTo && !db.prepare('SELECT 1 FROM pk_group_messages WHERE id = ?').get(replyTo)) replyTo = 0;
     const mentions = body ? validMentions(req.body.mentions) : null;
     if (sticker) {
-      if (rateLimited('chat-media', me, 20, 10 * 60 * 1000)) return res.redirect('/pickleball/chat?err=slow');
+      if (rateLimited('pkchat-media', me, 20, 10 * 60 * 1000)) return res.redirect('/pickleball/chat?err=slow');
       db.prepare('INSERT INTO pk_group_messages (from_email, body, reply_to, image) VALUES (?,?,?,?)')
         .run(me, '', replyTo || null, sticker);
       return res.redirect('/pickleball/chat');
     }
     if (file && file.buffer && file.buffer.length) {
-      if (rateLimited('chat-media', me, 15, 10 * 60 * 1000)) return res.redirect('/pickleball/chat?err=slow');
+      if (rateLimited('pkchat-media', me, 15, 10 * 60 * 1000)) return res.redirect('/pickleball/chat?err=slow');
       if (!sniffImage(file.buffer)) return res.redirect('/pickleball/chat?err=type');
       let msgId = 0;
       try {
@@ -2532,7 +2537,7 @@ app.post('/pickleball/chat', requireLogin, (req, res) => {
       return res.redirect('/pickleball/chat');
     }
     if (!body) return res.redirect('/pickleball/chat');
-    if (rateLimited('chat-send', me, 30, 10 * 60 * 1000)) return res.redirect('/pickleball/chat?err=slow');
+    if (rateLimited('pkchat-send', me, 30, 10 * 60 * 1000)) return res.redirect('/pickleball/chat?err=slow');
     db.prepare('INSERT INTO pk_group_messages (from_email, body, reply_to, mentions) VALUES (?,?,?,?)')
       .run(me, body, replyTo || null, mentions);
     notifyPkMentions(me, body, mentions);
@@ -2547,7 +2552,7 @@ app.post('/pickleball/chat/react', requireLogin, (req, res) => {
   if (!db.prepare('SELECT 1 FROM pk_group_messages WHERE id = ?').get(messageId)) return res.redirect('/pickleball/chat');
   const emoji = validEmoji(req.body.emoji);
   if (!emoji) return res.redirect('/pickleball/chat');
-  if (rateLimited('chat-react', me, 40, 10 * 60 * 1000)) return res.redirect('/pickleball/chat');
+  if (rateLimited('pkchat-react', me, 40, 10 * 60 * 1000)) return res.redirect('/pickleball/chat');
   const existing = db.prepare('SELECT emoji FROM pk_group_reactions WHERE group_message_id = ? AND from_email = ?').get(messageId, me);
   if (existing && existing.emoji === emoji) {
     db.prepare('DELETE FROM pk_group_reactions WHERE group_message_id = ? AND from_email = ?').run(messageId, me);
@@ -2595,7 +2600,7 @@ app.post('/pickleball/chat/voice', requireLogin, (req, res) => {
     if (!file || !file.buffer || !file.buffer.length) return res.status(400).json({ err: 'empty' });
     const ext = sniffAudio(file.buffer);
     if (!ext) return res.status(415).json({ err: 'type' });
-    if (rateLimited('chat-media', me, 15, 10 * 60 * 1000)) return res.status(429).json({ err: 'slow' });
+    if (rateLimited('pkchat-media', me, 15, 10 * 60 * 1000)) return res.status(429).json({ err: 'slow' });
     let dur = Math.round(Number(req.body.dur) || 0);
     if (!(dur > 0)) dur = 0;
     if (dur > 300) dur = 300;
@@ -2625,7 +2630,7 @@ app.post('/pickleball/chat/video', requireLogin, (req, res) => {
     if (!file || !file.buffer || !file.buffer.length) return res.status(400).json({ err: 'empty' });
     const ext = sniffVideo(file.buffer);
     if (!ext) return res.status(415).json({ err: 'type' });
-    if (rateLimited('chat-media', me, 15, 10 * 60 * 1000)) return res.status(429).json({ err: 'slow' });
+    if (rateLimited('pkchat-media', me, 15, 10 * 60 * 1000)) return res.status(429).json({ err: 'slow' });
     let dur = Math.round(Number(req.body.dur) || 0);
     if (!(dur > 0)) dur = 0;
     if (dur > 3600) dur = 3600;
@@ -3551,7 +3556,10 @@ function pkMemberEmails() {
 // per run, guarded by app_settings markers. Skipped while the run is hidden or cancelled.
 function pkAutoRunState() {
   if (!pkProgramActive()) return;
-  const rd = pkRunDate();
+  // Only auto open/close runs the operator EXPLICITLY scheduled — never the basketball
+  // fallback date. Otherwise every week at midnight the whole club would get a "pickleball
+  // check-in is open" push for a run nobody scheduled. Manual open/close still works anytime.
+  const rd = getSetting('pk_run_date');
   if (!rd || pkIsCancelled(rd)) return;
   const now = Date.now();
   const openAt = new Date(rd + 'T00:00:00').getTime();
@@ -3581,18 +3589,24 @@ function pkGate(req, res) {
 // Lazy rollover (mirrors basketball's ensureWeek): once an EXPLICIT pk_run_date passes, archive
 // the floor into pk_attendance, purge past rows, and revert to the default (next basketball date).
 function pkEnsureWeek() {
-  const set = getSetting('pk_run_date');
-  if (!set || set >= ymdLocal()) return; // no explicit date, or still upcoming/today
-  const floor = db.prepare('SELECT email, name FROM pk_checkins WHERE run_date = ? ORDER BY sort_order ASC, id ASC LIMIT ?').all(set, PK_CAP);
+  const today = ymdLocal();
+  // Archive + purge ANY past pickleball run — explicit-date OR the basketball fallback date —
+  // so the floor is always recorded to pk_attendance and stale rows never accumulate.
+  const pastDates = db.prepare('SELECT DISTINCT run_date FROM pk_checkins WHERE run_date < ?').all(today).map(r => r.run_date);
   const ins = db.prepare('INSERT OR IGNORE INTO pk_attendance (run_date, email, name) VALUES (?,?,?)');
-  for (const p of floor) if (!/@guest\.local$/.test(p.email)) ins.run(set, p.email, p.name);
-  db.prepare('DELETE FROM pk_checkins WHERE run_date <= ?').run(set);
-  db.prepare('DELETE FROM pk_run_state WHERE run_date <= ?').run(set);
-  db.prepare("DELETE FROM app_settings WHERE key = 'pk_run_date'").run();
+  for (const rd of pastDates) {
+    const floor = db.prepare('SELECT email, name FROM pk_checkins WHERE run_date = ? ORDER BY sort_order ASC, id ASC LIMIT ?').all(rd, PK_CAP);
+    for (const p of floor) if (!/@guest\.local$/.test(p.email)) ins.run(rd, p.email, p.name);
+  }
+  db.prepare('DELETE FROM pk_checkins WHERE run_date < ?').run(today);
+  db.prepare('DELETE FROM pk_run_state WHERE run_date < ?').run(today);
+  // Clear a passed explicit date back to the default (next basketball date).
+  const set = getSetting('pk_run_date');
+  if (set && set < today) db.prepare("DELETE FROM app_settings WHERE key = 'pk_run_date'").run();
 }
 app.get('/pickleball', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
-  setRunCookie(res, 2); // opening pickleball → the neutral pages' Chat tab points at pickleball
+  setRunCookie(req, res, 2); // opening pickleball → the neutral pages' Chat tab points at pickleball
   pkEnsureWeek();
   const rd = pkRunDate(), part = pkPartition(rd);
   const mine = part.rows.find(p => p.email === req.userEmail);
@@ -3659,7 +3673,9 @@ app.post('/pickleball/announce', requireLogin, (req, res) => {
   audit(req.userEmail, 'admin', 'pk:announce', body.slice(0, 60));
   setImmediate(() => {
     sendPush(pkMemberEmails(), { title: 'Pickleball announcement', body: body.slice(0, 140), url: '/pickleball', tag: 'pkann' });
-    if (emailConfigured) { const r = pkMemberEmails(); if (r.length) sendAnnouncement(r, body, author).catch(e => console.error(`[pk-announce] email FAILED: ${e.message}`)); }
+    // Email audience honours email_optout (announcementRecipients already filters it); push
+    // ignores it, matching the basketball convention.
+    if (emailConfigured) { const r = announcementRecipients(); if (r.length) sendAnnouncement(r, body, author).catch(e => console.error(`[pk-announce] email FAILED: ${e.message}`)); }
   });
   res.redirect('/pickleball');
 });

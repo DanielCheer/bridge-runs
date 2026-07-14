@@ -221,8 +221,11 @@ if (!ltCols.includes('attempts')) db.exec('ALTER TABLE login_tokens ADD COLUMN a
 // which forced a full-table scan on every poll tick) with an integer `last_read_id`, so
 // unread = COUNT of group_messages with id > last_read_id (a bounded PK range, not a scan).
 // Backfill each reader's id from the last message at/under their old timestamp.
+// grCols.length guards a FRESH db: the table isn't created until further below, so on an
+// empty db this PRAGMA returns [] and we skip the ALTER (the CREATE now declares the column
+// inline). On an existing db the table is present → the ALTER backfills as before.
 const grCols = db.prepare('PRAGMA table_info(group_reads)').all().map(c => c.name);
-if (!grCols.includes('last_read_id')) {
+if (grCols.length && !grCols.includes('last_read_id')) {
   db.exec('ALTER TABLE group_reads ADD COLUMN last_read_id INTEGER NOT NULL DEFAULT 0');
   db.exec(`UPDATE group_reads SET last_read_id =
     COALESCE((SELECT MAX(id) FROM group_messages WHERE created_at <= group_reads.last_read_at), 0)`);
@@ -363,7 +366,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_group_reactions_msg ON group_reactions(group_message_id);
   CREATE TABLE IF NOT EXISTS group_reads (
     email        TEXT PRIMARY KEY,
-    last_read_at TEXT NOT NULL DEFAULT (datetime('now'))
+    last_read_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_read_id INTEGER NOT NULL DEFAULT 0
   );
 `);
 
