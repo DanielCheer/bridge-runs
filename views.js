@@ -2463,6 +2463,15 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
         </form>
       </details>`
     : '';
+  // ----- hero footer (INSIDE the card, like basketball): Post announcement (operators,
+  //       LEFT) + Auto-renew pill (members, RIGHT) -----
+  const annCompose = canOperate
+    ? `<details class="announce-compose"><summary>📣 Post announcement</summary><form method="POST" action="/pickleball/announce"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all pickleball members (pushes to their phones)"></textarea><div style="height:8px"></div><button class="btn sm" type="submit">Post &amp; notify</button></form></details>`
+    : '';
+  const autoRenewPill = cancelled ? '' : `<form method="POST" action="/pickleball/autorenew" style="margin:0"><input type="hidden" name="on" value="${iAutoRenew ? '0' : '1'}"><button class="arpill${iAutoRenew ? ' on' : ''}" type="submit" title="Auto-join the pickleball run each week">🔁 Auto-renew${iAutoRenew ? ' · ON' : ' · OFF'}</button></form>`;
+  const heroFooter = (annCompose || autoRenewPill)
+    ? `<div class="hann"><div class="hann-l">${annCompose}</div>${autoRenewPill ? `<div class="hann-r">${autoRenewPill}</div>` : ''}</div>`
+    : '';
   const scoreInner = `
     <div class="count">
       <span class="n">${going}</span>
@@ -2480,6 +2489,7 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
       <div class="score" role="button" tabindex="0" onclick="wgOpen()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();wgOpen()}">${scoreInner}</div>
       <div class="hbar"><div>${going}<span>Checked in</span></div><div>${waiting}<span>Waitlist</span></div>${addGuest}</div>
       <div class="hsub"><span class="hdate">${cancelled ? 'cancelled' : isOpen ? 'registration live' : 'check-in closed'}</span></div>
+      ${heroFooter}
     </div>`;
 
   // ----- "Who's going" bottom-sheet overlay (cloned from basketball's wgSheet) -----
@@ -2514,26 +2524,22 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
       </div>
       ${canOperate ? `<a class="bannedit" href="/pickleball/banner" aria-label="Change banner photo">🖼 Change</a>` : ''}
     </div>
-    ${hero}
     ${announcement ? `<div class="notice" style="margin-top:10px;display:flex;align-items:flex-start;gap:8px;justify-content:space-between"><span>📣 <b>Announcement</b> · ${esc(announcement.body)}${announcement.author ? `<span style="color:var(--muted)"> — ${esc(announcement.author)}</span>` : ''}</span>${canOperate ? `<form method="POST" action="/pickleball/announce/retract" style="margin:0;flex-shrink:0"><button class="btn ghost sm" type="submit" title="Retract this announcement">Retract</button></form>` : ''}</div>` : ''}
-    ${canOperate ? `<details class="announce-compose" style="margin-top:8px"><summary>📣 Post announcement</summary><form method="POST" action="/pickleball/announce"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all pickleball members (pushes to their phones)"></textarea><div style="height:8px"></div><button class="btn sm" type="submit">Post &amp; notify</button></form></details>` : ''}
-    ${canOperate ? `<form method="POST" action="/pickleball/date" style="display:flex;gap:8px;align-items:center;margin:6px 0 4px"><input type="date" name="date" value="${esc(runDate)}" style="font-size:16px"><button class="btn ghost sm" type="submit">Set run date</button></form>` : ''}
-    <div class="controls" style="margin-top:12px">${action}${runToggle}</div>
+    ${hero}
+    ${(action || runToggle) ? `<div class="controls">${action}${runToggle}</div>` : ''}
     ${myState === 'in' && !cancelled ? (myConfirmed
       ? `<div class="notice good" style="margin-top:10px">✓ <b>You're confirmed</b> for this run — see you there!</div>`
       : `<form method="POST" action="/pickleball/confirm" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming</button></form>`) : ''}
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px">
-      <a class="btn ghost sm" href="/pickleball/chat" style="display:inline-flex;align-items:center;gap:6px">💬 Pickleball chat</a>
-      <a class="btn ghost sm" href="/pickleball/season" style="display:inline-flex;align-items:center;gap:6px">🏆 Season board</a>
-      ${cancelled ? '' : `<a href="/pickleball/run.ics" style="font-size:13px;color:var(--muted)">📅 Add to calendar</a>`}
-    </div>
-    <form method="POST" action="/pickleball/autorenew" style="margin-top:10px">
-      <input type="hidden" name="on" value="${iAutoRenew ? '0' : '1'}">
-      <button class="btn ghost sm arpill" type="submit" title="Auto-join the pickleball run each week">${iAutoRenew ? '🔁 Auto-renew · ON' : '🔁 Auto-renew · OFF'}</button>
-    </form>
-    ${canOperate ? (cancelled
-      ? `<form method="POST" action="/pickleball/cancel" style="margin-top:16px"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Restore this run</button></form>`
-      : `<form method="POST" action="/pickleball/cancel" style="margin-top:16px" onsubmit="return confirm('Cancel this week\\'s pickleball?')"><button class="btn ghost sm" type="submit">🚫 Cancel this week</button></form>`) : ''}
+    ${cancelled ? '' : `<div style="margin-top:12px"><a href="/pickleball/run.ics" style="font-size:13px;color:var(--muted)">📅 Add this run to your calendar</a></div>`}
+    ${qrBlock}
+    <div style="height:28px"></div>
+    ${locationBlock}
+    ${canOperate ? `<div class="infosec" style="margin-top:20px"><div class="card"><div class="clab">Operator tools</div>
+      <form method="POST" action="/pickleball/date" style="display:flex;gap:8px;align-items:center;margin:8px 0 0"><input type="date" name="date" value="${esc(runDate)}" style="font-size:16px"><button class="btn ghost sm" type="submit">Set run date</button></form>
+      ${cancelled
+        ? `<form method="POST" action="/pickleball/cancel" style="margin-top:10px"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Restore this run</button></form>`
+        : `<form method="POST" action="/pickleball/cancel" style="margin-top:10px" onsubmit="return confirm('Cancel this week\\'s pickleball?')"><button class="btn ghost sm" type="submit">🚫 Cancel this week</button></form>`}
+    </div></div>` : ''}
     ${wgSheet}
     <div id="pvwrap" class="wgwrap pvwrap"><div class="wgscrim" onclick="pvClose()"></div>
       <div class="wgsheet pvsheet" role="dialog" aria-modal="true" aria-label="Player profile">
@@ -2730,7 +2736,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
         <div class="d">Games attended · Member since ${esc(memberSince)}<br>${stats.season} this season · ${stats.streak}-run streak${a.is_host ? ' · ★ Host' : ''}</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
-        <a class="btn ghost sm" href="/season">🏆 Season board</a>
+        <a class="btn ghost sm" href="${chatProgram === 2 ? '/pickleball/season' : '/season'}">🏆 ${chatProgram === 2 ? 'Pickleball season' : 'Season board'}</a>
       </div>
       ${(stats.dates && stats.dates.length) ? `<details style="margin-top:10px">
         <summary style="cursor:pointer;font-size:13px;color:var(--muted)">Run history · ${stats.dates.length}</summary>
