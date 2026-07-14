@@ -2428,7 +2428,7 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
       <div class="l"><span>Next run</span><b>${esc(wdayFull(runDate))} · ${esc(runLabel)}</b></div>
       <div class="r"><span>Starts in</span><b class="tick" data-tip="${tipoff}">${esc(fmtCountdown(tipoff))}</b></div>
     </div>`}
-    ${announcement ? `<div class="notice" style="margin-top:10px">📣 <b>Announcement</b> · ${esc(announcement.body)}${announcement.author ? `<span style="color:var(--muted)"> — ${esc(announcement.author)}</span>` : ''}</div>` : ''}
+    ${announcement ? `<div class="notice" style="margin-top:10px;display:flex;align-items:flex-start;gap:8px;justify-content:space-between"><span>📣 <b>Announcement</b> · ${esc(announcement.body)}${announcement.author ? `<span style="color:var(--muted)"> — ${esc(announcement.author)}</span>` : ''}</span>${canOperate ? `<form method="POST" action="/pickleball/announce/retract" style="margin:0;flex-shrink:0"><button class="btn ghost sm" type="submit" title="Retract this announcement">Retract</button></form>` : ''}</div>` : ''}
     ${canOperate ? `<details class="announce-compose" style="margin-top:8px"><summary>📣 Post announcement</summary><form method="POST" action="/pickleball/announce"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all pickleball members (pushes to their phones)"></textarea><div style="height:8px"></div><button class="btn sm" type="submit">Post &amp; notify</button></form></details>` : ''}
     ${canOperate ? `<form method="POST" action="/pickleball/date" style="display:flex;gap:8px;align-items:center;margin:6px 0 4px"><input type="date" name="date" value="${esc(runDate)}" style="font-size:16px"><button class="btn ghost sm" type="submit">Set run date</button></form>` : ''}
     <div class="controls" style="margin-top:12px">${action}${runToggle}</div>
@@ -3632,7 +3632,6 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
       <a class="btn ghost" href="/admin/share" style="margin:0">📱 Share sign-up QR &amp; links</a>
       <a class="btn ghost" href="/admin/people/export.csv" style="margin:0" download>⬇︎ Export people (CSV)</a>
     </div>
-    <a class="btn ghost" href="/pickleball" style="margin:8px 0 0">🥒 Pickleball run (hidden)</a>
 
     <div class="subhead">Add a player</div>
     <form method="POST" action="/admin/people/invite" class="card rail">

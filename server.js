@@ -3541,11 +3541,11 @@ function pkPartition(rd) {
     WHERE c.run_date = ? ORDER BY c.sort_order ASC, c.id ASC`).all(rd);
   return { floor: rows.slice(0, PK_CAP), wait: rows.slice(PK_CAP), rows };
 }
-// Pickleball run start epoch for the countdown — the run date at a default 7 PM local
-// (pickleball has no configurable time yet; this drives the banner ticker only).
-function pkStartEpoch(rd) { return rd ? new Date(rd + 'T19:00:00').getTime() : 0; }
-// Latest pickleball announcement (own pk_announcements table — separate from basketball).
-function latestPkAnnouncement() { return db.prepare('SELECT id, body, author, created_at FROM pk_announcements ORDER BY id DESC LIMIT 1').get() || null; }
+// Pickleball run start epoch — the run date at 6 PM local. Drives the countdown banner
+// AND the auto-lock time (check-in closes at start).
+function pkStartEpoch(rd) { return rd ? new Date(rd + 'T18:00:00').getTime() : 0; }
+// Latest LIVE pickleball announcement (own pk_announcements table; retracted ones archived).
+function latestPkAnnouncement() { return db.prepare('SELECT id, body, author, created_at FROM pk_announcements WHERE COALESCE(archived,0) = 0 ORDER BY id DESC LIMIT 1').get() || null; }
 // Push audience for pickleball = every approved, non-guest member (open-join run). sendPush
 // only reaches those with a subscription, so this is a safe superset.
 function pkMemberEmails() {
@@ -3677,6 +3677,14 @@ app.post('/pickleball/announce', requireLogin, (req, res) => {
     // ignores it, matching the basketball convention.
     if (emailConfigured) { const r = announcementRecipients(); if (r.length) sendAnnouncement(r, body, author).catch(e => console.error(`[pk-announce] email FAILED: ${e.message}`)); }
   });
+  res.redirect('/pickleball');
+});
+// Retract the current pickleball announcement — operator only. Archives it so it stops
+// showing on the page (no new push/email; the original notification already went out).
+app.post('/pickleball/announce/retract', requireLogin, (req, res) => {
+  const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball');
+  const cur = latestPkAnnouncement();
+  if (cur) { db.prepare('UPDATE pk_announcements SET archived = 1 WHERE id = ?').run(cur.id); audit(req.userEmail, 'admin', 'pk:announce:retract', String(cur.id)); }
   res.redirect('/pickleball');
 });
 

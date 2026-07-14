@@ -516,9 +516,13 @@ db.exec(`
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     body       TEXT NOT NULL,
     author     TEXT NOT NULL DEFAULT '',
+    archived   INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `);
+// `archived` (retract) — additive + guarded for an existing pk_announcements table.
+const pkaCols = db.prepare('PRAGMA table_info(pk_announcements)').all().map(c => c.name);
+if (pkaCols.length && !pkaCols.includes('archived')) db.exec('ALTER TABLE pk_announcements ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
 
 // Prune stale magic-link tokens on startup. A token is dead once it's been used
 // OR has expired — keeping them forever just grows the table unbounded (a fresh
