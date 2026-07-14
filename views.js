@@ -2241,7 +2241,7 @@ export function pkChatPage({ me, chat, runDate = '', dmUnread = 0, pkGroupUnread
         </div>
       </div>
     </div>`;
-  return HEAD('Pickleball Chat — The Bridge', 'has-chat') + header('', '', ann, '') + WELCOME_MODAL + `
+  return HEAD('Pickleball Chat — The Bridge', 'has-chat pk') + header('', '', ann, '') + WELCOME_MODAL + `
     ${backToRuns}
     <div class="rule"></div>
     <div class="chatsec chatsec-top">
@@ -2412,7 +2412,7 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
 // the run. Joining is opt-in (separate from basketball approval): tap Join → become a member →
 // see the run + chat. Chat tab stays on basketball here (they're not a pickleball member yet).
 export function pkJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, ann = null }) {
-  return HEAD('Join Pickleball — The Bridge', 'has-tabs') + header(`<b>PICKLEBALL</b>${esc(email)}`, '', ann, '') + `
+  return HEAD('Join Pickleball — The Bridge', 'has-tabs pk') + header(`<b>PICKLEBALL</b>${esc(email)}`, '', ann, '') + `
     ${backToRuns}
     <div class="rule"></div>
     <div class="phead"><h1>Pickleball 🥒</h1></div>
@@ -2445,7 +2445,60 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
   else if (full) action = `<form method="POST" action="/pickleball/join"><button class="btn primary" type="submit">Join waitlist (${waiting}/${waitlistCap})</button></form>`;
   else action = `<form method="POST" action="/pickleball/join"><button class="btn primary" type="submit">I'm in</button></form>`;
   const runToggle = canOperate && !cancelled ? (isOpen ? `<form method="POST" action="/pickleball/close" style="margin:0"><button class="btn leave" type="submit">Close check-in</button></form>` : `<form method="POST" action="/pickleball/open" style="margin:0"><button class="btn primary" type="submit">Open check-in</button></form>`) : '';
-  return HEAD('Pickleball — The Bridge', 'has-tabs') + header(`<b>PICKLEBALL</b>${esc(email)}`, '', ann, '') + `
+
+  // ----- teal scoreboard hero (mirrors the basketball check-in hero) -----
+  // "Group chat" button beside the Run pill — links to the Pickleball chat tab; small
+  // unread dot when group unread > 0.
+  const chatBtn = `<a class="hchat" href="/pickleball/chat" aria-label="Group chat${groupUnread > 0 ? `, ${groupUnread} unread` : ''}">
+        <span class="hci">${GROUP_ICON}</span>Group chat${groupUnread > 0 ? '<span class="hdot" aria-hidden="true"></span>' : ''}
+      </a>`;
+  // Operator "Add a guest" — sits on the RIGHT of the Checked-in / Waitlist row.
+  const addGuest = canOperate
+    ? `<details class="hguest">
+        <summary>+ Guest</summary>
+        <form method="POST" action="/pickleball/guest">
+          <input name="name" required maxlength="60" placeholder="Guest name — last-minute add">
+          <div style="height:8px"></div>
+          <button class="btn sm" type="submit">Add guest to the run</button>
+        </form>
+      </details>`
+    : '';
+  const scoreInner = `
+    <div class="count">
+      <span class="n">${going}</span>
+      <span class="of">/${cap}</span>
+    </div>
+    <div class="seeall"><div class="chev">›</div><span>Who's going</span></div>`;
+  const hero = `
+    <div class="hero">
+      <div class="wood"></div>
+      ${COURT_SVG}
+      <div class="htop">
+        <span class="spill${(cancelled || !isOpen) ? ' closed' : ''}">● Run ${cancelled ? 'Cancelled' : (isOpen ? 'Open' : 'Closed')}</span>
+        ${chatBtn}
+      </div>
+      <div class="score" role="button" tabindex="0" onclick="wgOpen()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();wgOpen()}">${scoreInner}</div>
+      <div class="hbar"><div>${going}<span>Checked in</span></div><div>${waiting}<span>Waitlist</span></div>${addGuest}</div>
+      <div class="hsub"><span class="hdate">${cancelled ? 'cancelled' : isOpen ? 'registration live' : 'check-in closed'}</span></div>
+    </div>`;
+
+  // ----- "Who's going" bottom-sheet overlay (cloned from basketball's wgSheet) -----
+  // Read-only for members; operators (canOperate) get Remove on floor rows and
+  // Bump-in + Remove on waitlist rows (rowFloor / rowWait already carry those). These
+  // POST normally (302 → /pickleball).
+  const wgSheet = `
+    <div id="wgwrap" class="wgwrap">
+      <div class="wgscrim" onclick="wgClose()"></div>
+      <div class="wgsheet" role="dialog" aria-modal="true" aria-label="Who's going">
+        <div class="wgsheet-h"><b>On the floor · ${going} / ${cap}</b><button class="wgx" type="button" onclick="wgClose()" aria-label="Close">${IC_CLOSE}</button></div>
+        <div class="wgsheet-b">
+          ${floorPlayers.length ? floorPlayers.map((p, i) => rowFloor(p, i + 1)).join('') : '<div class="subh">Nobody yet — be the first in.</div>'}
+          ${waitPlayers.length ? `<div class="subh">Waitlist · ${waiting}</div>${waitPlayers.map((p, i) => rowWait(p, i + 1)).join('')}` : ''}
+        </div>
+      </div>
+    </div>`;
+
+  return HEAD('Pickleball — The Bridge', 'has-tabs pk') + header(`<b>PICKLEBALL</b>${esc(email)}`, '', ann, '') + `
     ${backToRuns}
     <div class="rule"></div>
     ${hidden ? `<div class="notice" style="margin-top:10px">🔒 <b>Hidden run</b> — only admins can see this. Flip it live when it's ready.${isAdmin ? ` <form method="POST" action="/pickleball/publish" style="display:inline"><button class="btn sm" type="submit" style="margin-left:6px">Make it live</button></form>` : ''}</div>` : (isAdmin ? `<div class="notice good" style="margin-top:10px">✅ <b>Live</b> — members can join. <form method="POST" action="/pickleball/publish" style="display:inline"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit" style="margin-left:6px">Hide again</button></form></div>` : '')}
@@ -2460,6 +2513,7 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
         <div class="r"><span>Starts in</span><b class="tick" data-tip="${tipoff}">${esc(fmtCountdown(tipoff))}</b></div>`}
       </div>
     </div>
+    ${hero}
     ${announcement ? `<div class="notice" style="margin-top:10px;display:flex;align-items:flex-start;gap:8px;justify-content:space-between"><span>📣 <b>Announcement</b> · ${esc(announcement.body)}${announcement.author ? `<span style="color:var(--muted)"> — ${esc(announcement.author)}</span>` : ''}</span>${canOperate ? `<form method="POST" action="/pickleball/announce/retract" style="margin:0;flex-shrink:0"><button class="btn ghost sm" type="submit" title="Retract this announcement">Retract</button></form>` : ''}</div>` : ''}
     ${canOperate ? `<details class="announce-compose" style="margin-top:8px"><summary>📣 Post announcement</summary><form method="POST" action="/pickleball/announce"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all pickleball members (pushes to their phones)"></textarea><div style="height:8px"></div><button class="btn sm" type="submit">Post &amp; notify</button></form></details>` : ''}
     ${canOperate ? `<form method="POST" action="/pickleball/date" style="display:flex;gap:8px;align-items:center;margin:6px 0 4px"><input type="date" name="date" value="${esc(runDate)}" style="font-size:16px"><button class="btn ghost sm" type="submit">Set run date</button></form>` : ''}
@@ -2476,29 +2530,29 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
       <input type="hidden" name="on" value="${iAutoRenew ? '0' : '1'}">
       <button class="btn ghost sm arpill" type="submit" title="Auto-join the pickleball run each week">${iAutoRenew ? '🔁 Auto-renew · ON' : '🔁 Auto-renew · OFF'}</button>
     </form>
-    ${canOperate ? `<details class="hguest" style="margin-top:10px"><summary>+ Guest</summary><form method="POST" action="/pickleball/guest"><input name="name" required maxlength="60" placeholder="Guest name — last-minute add"><div style="height:8px"></div><button class="btn sm" type="submit">Add guest</button></form></details>` : ''}
-    <div class="subhead" style="margin-top:18px">On the floor · ${going}/${cap}</div>
-    <div class="mlist">${floorPlayers.length ? floorPlayers.map((p, i) => rowFloor(p, i + 1)).join('') : '<div class="subh">Nobody yet — be the first in.</div>'}
-      ${waitPlayers.length ? `<div class="subh">Waitlist · ${waiting}</div>${waitPlayers.map((p, i) => rowWait(p, i + 1)).join('')}` : ''}</div>
     ${canOperate ? (cancelled
       ? `<form method="POST" action="/pickleball/cancel" style="margin-top:16px"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Restore this run</button></form>`
       : `<form method="POST" action="/pickleball/cancel" style="margin-top:16px" onsubmit="return confirm('Cancel this week\\'s pickleball?')"><button class="btn ghost sm" type="submit">🚫 Cancel this week</button></form>`) : ''}
+    ${wgSheet}
     <div id="pvwrap" class="wgwrap pvwrap"><div class="wgscrim" onclick="pvClose()"></div>
       <div class="wgsheet pvsheet" role="dialog" aria-modal="true" aria-label="Player profile">
         <div class="wgsheet-h"><b>Profile</b><button class="wgx" type="button" onclick="pvClose()" aria-label="Close">${IC_CLOSE}</button></div>
         <div class="wgsheet-b pvbody"><div class="pcload">Loading…</div></div>
       </div></div>
-    <style>
-      .pkbanner{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:12px 0 4px;padding:14px 16px;border-radius:16px;
-        background:linear-gradient(120deg,#2C6B66,#1f4f4b);color:#fff}
-      .pkbanner .l span,.pkbanner .r span{display:block;font-size:11px;letter-spacing:.14em;text-transform:uppercase;opacity:.8}
-      .pkbanner .l b{font-size:16px} .pkbanner .r{text-align:right}
-      .pkbanner .r b{font-size:20px;font-variant-numeric:tabular-nums;color:#F2C879}
-    </style>
     <script>
+      // Who's-going overlay (cloned from the basketball check-in page). Open is instant;
+      // close plays a slide-down unless reduced-motion / noanim.
+      window.wgOpen=function(){var w=document.getElementById('wgwrap');if(w){window.__ovPrev=document.activeElement;w.classList.add('open');document.body.style.overflow='hidden';var sh=w.querySelector('.wgsheet');if(sh){sh.setAttribute('tabindex','-1');try{sh.focus();}catch(e){}}}};
+      window.wgClose=function(){var w=document.getElementById('wgwrap');if(!w)return;var sh=w.querySelector('.wgsheet');
+        var still=document.documentElement.classList.contains('noanim')||(window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches);
+        function restore(){var p=window.__ovPrev;if(p&&p.focus)try{p.focus();}catch(e){}}
+        if(sh&&!still){sh.classList.add('closing');setTimeout(function(){w.classList.remove('open');sh.classList.remove('closing');document.body.style.overflow='';restore();},200);}
+        else{w.classList.remove('open');document.body.style.overflow='';restore();}};
+      // Quick-look profile popup (tap a name). Opens ON TOP of the who's-going sheet; closing
+      // reveals the who's-going sheet still underneath.
       window.pvOpen=function(id){var w=document.getElementById('pvwrap');if(!w)return;var b=w.querySelector('.pvbody');if(b)b.innerHTML='<div class="pcload">Loading…</div>';w.classList.add('open');document.body.style.overflow='hidden';
         if(window.fetch)fetch('/u/'+id+'/card',{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.ok?r.text():Promise.reject();}).then(function(h){if(b)b.innerHTML=h;}).catch(function(){if(b)b.innerHTML='<div class="pcload">Couldn\\u2019t load that profile.</div>';});};
-      window.pvClose=function(){var w=document.getElementById('pvwrap');if(!w)return;w.classList.remove('open');document.body.style.overflow='';};
+      window.pvClose=function(){var w=document.getElementById('pvwrap');if(!w)return;w.classList.remove('open');var wg=document.getElementById('wgwrap');if(!(wg&&wg.classList.contains('open')))document.body.style.overflow='';};
       // Countdown ticker for the next-run banner (mirrors the check-in tip-off ticker).
       function pkTick(){var el=document.querySelector('.gymbanner .tick');if(!el)return;var tip=+el.getAttribute('data-tip');var diff=tip-Date.now();
         if(diff<=0){el.textContent='NOW';return;}
@@ -2524,7 +2578,7 @@ export function seasonPage({ rows, email, dmUnread = 0, groupUnread = 0, groupMe
   const list = rows.length
     ? rows.slice(0, 8).map(rowHtml).join('') + (meRow && meRow.rank > 8 ? `<div style="text-align:center;color:var(--muted);margin:6px 0 0">···</div>${rowHtml(meRow)}` : '')
     : `<div class="foot" style="margin-top:14px">${esc(emptyMsg)}</div>`;
-  return HEAD(`${esc(title)} — The Bridge`, 'has-tabs') + header(`<b>SEASON</b>${esc(email)}`, '', ann) + `
+  return HEAD(`${esc(title)} — The Bridge`, program === 2 ? 'has-tabs pk' : 'has-tabs') + header(`<b>SEASON</b>${esc(email)}`, '', ann) + `
     ${program === 2 ? backToRuns : ''}
     <div class="rule"></div>
     <div class="phead"><h1>${esc(title)}</h1></div>

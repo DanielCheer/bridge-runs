@@ -26,6 +26,21 @@
   --body:'Inter',system-ui,sans-serif; --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
 }
 
+/* Pickleball run theme — a lighter teal in place of the deep green, and an off-white/beige
+   in place of the orange. Applied via body.pk (set on every pickleball page); it only
+   re-points the shared colour variables, so the whole page (hero, buttons, tabs, pills)
+   re-skins without any structural change. Basketball pages have no .pk class → unchanged. */
+body.pk{
+  --teal:#4f9f95;
+  --hero:linear-gradient(150deg,#5aa79d 0%,#438d83 58%,#316f66 100%);
+  --orange:#dccba3; --orange-deep:#a9976a; --orange-dark:#bda878; --peach:#efe6d2; --burn:#4b3d21;
+  --foil:linear-gradient(145deg,#cdbc94 0%,#efe6d2 38%,#e0d0a8 56%,#f6efdd 100%);
+  --solid:linear-gradient(180deg,#efe6d2,#e2d3ac 55%,#d3c193);
+}
+/* beige buttons/pills need dark ink + a neutral (non-orange) shadow to stay legible */
+body.pk .btn{color:var(--ink);text-shadow:none;box-shadow:0 10px 24px -14px rgba(90,75,40,.6),inset 0 1px 0 rgba(255,255,255,.55)}
+body.pk .spill,body.pk .arpill.on{color:var(--burn);box-shadow:0 2px 10px rgba(150,130,80,.4)}
+body.pk .backruns{background:var(--solid)!important;color:var(--ink)!important;box-shadow:0 3px 10px rgba(90,75,40,.28)!important}
 *{box-sizing:border-box}
 /* Kill the iOS overscroll rubber-band on the document scroller: without this, pulling
    past the top/bottom bounces the page AND drags the position:fixed bars (bottom tabs,
