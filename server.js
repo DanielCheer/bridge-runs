@@ -347,7 +347,7 @@ app.get('/manifest.webmanifest', (req, res) => {
   res.type('application/manifest+json').send(JSON.stringify({
     name: 'The Bridge Adv Runs',
     short_name: 'Bridge Runs',
-    start_url: '/checkin',
+    start_url: '/runs',
     scope: '/',
     display: 'standalone',
     background_color: '#22615A',
