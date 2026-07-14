@@ -3520,7 +3520,7 @@ app.get('/season', requireLogin, (req, res) => {
 });
 
 // ---------- PICKLEBALL (separate, hidden run — ISOLATED pk_* tables, no basketball impact) ----------
-const PK_CAP = Number(process.env.PK_CAP || 12), PK_WAIT = Number(process.env.PK_WAIT || 4);
+const PK_CAP = Number(process.env.PK_CAP || 20), PK_WAIT = Number(process.env.PK_WAIT || 4);
 function pkProgramActive() { const r = db.prepare('SELECT active FROM program WHERE id = 2').get(); return !!(r && r.active); }
 function pkRunDate() { return getSetting('pk_run_date') || nextRunDate(); } // admin-set date; defaults to the next basketball run date
 function pkIsOpen(rd) { const r = db.prepare('SELECT is_open FROM pk_run_state WHERE run_date = ?').get(rd); return !!(r && r.is_open); }

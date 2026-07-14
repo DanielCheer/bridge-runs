@@ -1296,7 +1296,8 @@ const firstRunTour = `
     var STEPS=[], i=0, running=0, hole=document.getElementById('tourhole'), tip=document.getElementById('tourtip'),
         ttl=document.getElementById('tourttl'), txt=document.getElementById('tourtxt'),
         next=document.getElementById('tournext'), dots=document.getElementById('tourdots');
-    function done(){ try{localStorage.setItem(KEY,'1');sessionStorage.removeItem('__tourResume');}catch(e){} tour.hidden=true; document.body.style.overflow=''; running=0; }
+    function killBridge(){ var b=document.getElementById('tourbridge'); if(b&&b.parentNode)b.parentNode.removeChild(b); }
+    function done(){ try{localStorage.setItem(KEY,'1');sessionStorage.removeItem('__tourResume');}catch(e){} tour.hidden=true; document.body.style.overflow=''; running=0; killBridge(); }
     function place(){
       var s=STEPS[i], el=s.sel?document.querySelector(s.sel):null;
       document.getElementById('tourcatch').style.background = el ? 'transparent' : 'rgba(18,20,14,.72)';
@@ -1325,7 +1326,15 @@ const firstRunTour = `
       var target=STEPS[idx].path||'/runs';
       if(target!==location.pathname){                 // step lives on another page → navigate, resume there
         try{ sessionStorage.setItem('__tourResume', String(idx)); }catch(e){}
-        tour.hidden=true; document.body.style.overflow=''; running=0;
+        // Bridge scrim on <body> (OUTSIDE .wrap, so the router's .wrap swap can't destroy it):
+        // holds a continuous dark backdrop across the page hop so the tour never flashes the
+        // bare page between leaving this step and re-anchoring on the next. Removed when the
+        // tour re-shows on the new page (or by the failsafe below).
+        var br=document.getElementById('tourbridge');
+        if(!br){ br=document.createElement('div'); br.id='tourbridge';
+          br.style.cssText='position:fixed;inset:0;z-index:399;background:rgba(18,20,14,.72);opacity:1;transition:opacity .2s'; document.body.appendChild(br); }
+        setTimeout(killBridge, 3000); // failsafe: the SPA swap keeps this JS context alive, so a stuck bridge always clears
+        tour.hidden=true; running=0; // keep body scroll LOCKED — the bridge is up
         if(window.__go) window.__go(target,true); else window.location.href=target;
         return;
       }
@@ -1369,10 +1378,13 @@ const firstRunTour = `
           sup=supported();
       setTimeout(function(){
         STEPS=STEPS_ALL.filter(function(s){ if(s.op&&!isOp)return false; if(s.adm&&!isAdm)return false; if(s.notif&&!sup)return false; return true; });
-        if(!STEPS.length){ done(); return; }
+        if(!STEPS.length){ done(); killBridge(); return; }
         i = resume>=0 ? Math.max(0,Math.min(resume,STEPS.length-1)) : 0;
         tour.hidden=false; document.body.style.overflow='hidden'; render();
-      }, resume>=0?260:(force?0:((document.getElementById('splash')&&!reduce)?1700:350)));
+        // Spotlight is now anchored on the new page → drop the bridge scrim on the next frame
+        // (its .2s fade covers any final reflow) so the two dark backdrops hand off seamlessly.
+        var br=document.getElementById('tourbridge'); if(br){ br.style.opacity='0'; setTimeout(killBridge,220); }
+      }, resume>=0?200:(force?0:((document.getElementById('splash')&&!reduce)?1700:350)));
     };
     window.__startTour(false);
   })();
