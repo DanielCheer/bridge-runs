@@ -9,3 +9,7 @@ backups/
 public/chat-media/
 public/avatars/
 _predesign_backup/
+
+# stray db from a DB_PATH-unset node invocation
+undefined
+undefined-*
