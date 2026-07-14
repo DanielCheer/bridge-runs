@@ -21,7 +21,7 @@ import {
 import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap,
-  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage, runsPage,
+  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage, runsPage, pkChatPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -964,6 +964,21 @@ const stmtMarkPkGroupRead = db.prepare(`INSERT INTO pk_group_reads (email, last_
               ON CONFLICT(email) DO UPDATE SET last_read_id = excluded.last_read_id, last_read_at = excluded.last_read_at`);
 function markPkGroupRead(me) { stmtMarkPkGroupRead.run(me); }
 
+// Remember the last run the viewer opened (1 = basketball, 2 = pickleball) so the
+// program-neutral pages (Runs hub, Profile) point their run-aware Chat tab at the right
+// room. A lightweight UNSIGNED preference cookie (not identity) — read only for tab routing.
+function setRunCookie(res, program) {
+  try { res.cookie('bridge_run', String(program), { httpOnly: true, sameSite: 'lax', maxAge: 180 * 24 * 60 * 60 * 1000, path: '/' }); } catch {}
+}
+function runCookie(req) { return req.cookies && req.cookies.bridge_run === '2' ? 2 : 1; }
+// The chat unread badge for whichever program the viewer is currently "in" — used on the
+// neutral pages so the Chat tab badge matches the room it will open.
+function chatCountsFor(program, email, aid) {
+  return program === 2
+    ? { group: pkGroupUnread(email), gm: pkGroupMentionUnread(email, aid) }
+    : { group: groupUnread(email), gm: groupMentionUnread(email, aid) };
+}
+
 // The SINGLE authorization seam for messaging. Host-only in v1: a player may
 // message the host; the host may message any approved, non-guest player. To open
 // full DMs later, relax only the final return (+ add a people-picker) — no route
@@ -1701,13 +1716,16 @@ app.get('/runs', requireLogin, (req, res) => {
     });
   }
 
+  const chatProgram = runCookie(req);
+  const cc = chatCountsFor(chatProgram, email, a ? a.id : 0);
   res.send(runsPage({
     email, runs, canJoin, status,
     isAdmin: viewerIsAdmin,
     canOperate: viewerIsAdmin || !!(a && a.is_team),
     dmUnread: unreadCount(email),
-    groupUnread: groupUnread(email),
-    groupMention: groupMentionUnread(email, a ? a.id : 0),
+    groupUnread: cc.group,
+    groupMention: cc.gm,
+    chatProgram,
     ann: annPanel(email),
   }));
 });
@@ -1716,6 +1734,7 @@ app.get('/checkin', requireLogin, (req, res) => {
   const email = req.userEmail;
   const gate = requirePlayer(req, res);
   if (!gate) return;
+  setRunCookie(res, 1); // opening basketball → the neutral pages' Chat tab points at basketball
   const { a, viewerIsAdmin } = gate;
   const status = a?.status || 'none';
   const { runDate, inPlayers, offeredPlayers, waitPlayers, totalCount } = loadRun(req);
@@ -1804,11 +1823,17 @@ app.get('/poll', requireLogin, (req, res) => {
   } else if (page === 'chat') {
     const g = stmtPollChat.get(), rx = stmtPollChatReact.get();
     f = `${g.mx || 0}:${getSetting('chat_seq') || 0}:${rx.c || 0}:${rx.mx || ''}`;
+  } else if (page === 'pkchat') {
+    const g = stmtPollPkChat.get(), rx = stmtPollPkChatReact.get();
+    f = `${g.mx || 0}:${getSetting('pk_chat_seq') || 0}:${rx.c || 0}:${rx.mx || ''}`;
   } else if (page === 'profile') {
     const m = stmtPollDM.get(email, email);
     f = `${m.mx || 0}:${m.c || 0}`;
   }
-  res.json({ f, dm: unreadCount(email), group: groupUnread(email), gm: groupMentionUnread(email, applicantIdOf(email)), ann: announcementUnread(email) ? 1 : 0, v: BUILD_VER });
+  const aid = applicantIdOf(email);
+  res.json({ f, dm: unreadCount(email), group: groupUnread(email), gm: groupMentionUnread(email, aid),
+    pkgroup: pkGroupUnread(email), pkgm: pkGroupMentionUnread(email, aid),
+    ann: announcementUnread(email) ? 1 : 0, v: BUILD_VER });
 });
 
 // ---------- ROSTER (removed) ----------
@@ -1886,8 +1911,10 @@ app.get('/profile', requireLogin, (req, res) => {
   // to a friendly message in the view. Codes come from the /profile/photo route below.
   const photoMsg = req.query.photo ? String(req.query.photo)
     : (req.query.photoerr ? 'err:' + String(req.query.photoerr) : '');
+  const chatProgram = runCookie(req);
+  const cc = chatCountsFor(chatProgram, a.email, a.id);
   res.send(profileTabPage({ a, stats: attendanceStats(a.email), saved: req.query.saved === '1', error: '',
-    dmUnread: unreadCount(a.email), groupUnread: groupUnread(a.email), groupMention: groupMentionUnread(a.email, a.id), canOperate, announcementLog: canOperate ? announcementHistory() : [],
+    dmUnread: unreadCount(a.email), groupUnread: cc.group, groupMention: cc.gm, chatProgram, canOperate, announcementLog: canOperate ? announcementHistory() : [],
     iAmHost, threads: loadInbox(a.email), runDay, rdMsg, photoMsg, ann: annPanel(a.email) }));
 });
 
@@ -2426,6 +2453,193 @@ app.post('/chat/video', requireLogin, (req, res) => {
     } catch (e) {
       db.prepare('DELETE FROM group_messages WHERE id = ?').run(id); // no ghost row on disk failure
       console.error(`[chat] video write failed for ${me}: ${e.message}`);
+      return res.status(500).json({ err: 'bad' });
+    }
+    res.json({ ok: 1 });
+  });
+});
+
+// ---------- PICKLEBALL CHAT (isolated mirror of /chat*, on pk_group_* tables) ----------
+// Gated by pkGate: approved members + admins, 404 while the run is hidden. Reuses the
+// shared media pipeline (same /chat-media dir) and the base-pathed chat view.
+app.get('/pickleball/chat', requireLogin, (req, res) => {
+  const g = pkGate(req, res); if (!g) return;
+  setRunCookie(res, 2);
+  const me = req.userEmail;
+  const chatData = loadPkGroupChat(me);
+  const isMod = g.admin || !!(g.a && g.a.is_host);
+  const canPin = isMod || !!(g.a && g.a.is_team);
+  if (req.headers['x-prewarm'] !== '1') markPkGroupRead(me);
+  res.send(pkChatPage({
+    me,
+    chat: { me, ...chatData, isMod, canPin, err: req.query.err || '' },
+    runDate: pkRunDate(),
+    dmUnread: unreadCount(me),
+    pkGroupUnread: 0, pkGroupMention: 0,
+    ann: annPanel(me),
+  }));
+});
+app.post('/pickleball/chat/seen', requireLogin, (req, res) => {
+  const g = pkGate(req, res); if (!g) return;
+  markPkGroupRead(req.userEmail);
+  res.status(204).end();
+});
+app.get('/pickleball/chat/older', requireLogin, (req, res) => {
+  const g = pkGate(req, res); if (!g) return;
+  const me = req.userEmail;
+  const before = parseInt(req.query.before, 10);
+  if (!Number.isInteger(before) || before <= 0) return res.status(400).send('');
+  const data = loadPkGroupChatOlder(me, before);
+  const isMod = g.admin || !!(g.a && g.a.is_host);
+  const canPin = isMod || !!(g.a && g.a.is_team);
+  res.send(chatOlderFragment({ me, ...data, isMod, canPin, base: '/pickleball/chat' }));
+});
+app.post('/pickleball/chat', requireLogin, (req, res) => {
+  uploadChatImage(req, res, async (err) => {
+    const g = pkGate(req, res); if (!g) return;
+    if (mutedOut(g, res, { back: '/pickleball/chat' })) return;
+    const me = req.userEmail;
+    if (err) return res.redirect('/pickleball/chat?err=' + (err.code === 'LIMIT_FILE_SIZE' ? 'big' : 'bad'));
+    const body = (req.body.body || '').trim().slice(0, 1000);
+    const file = req.file;
+    const sticker = stickerPath(req.body.sticker);
+    let replyTo = Number(req.body.reply_to) || 0;
+    if (replyTo && !db.prepare('SELECT 1 FROM pk_group_messages WHERE id = ?').get(replyTo)) replyTo = 0;
+    const mentions = body ? validMentions(req.body.mentions) : null;
+    if (sticker) {
+      if (rateLimited('chat-media', me, 20, 10 * 60 * 1000)) return res.redirect('/pickleball/chat?err=slow');
+      db.prepare('INSERT INTO pk_group_messages (from_email, body, reply_to, image) VALUES (?,?,?,?)')
+        .run(me, '', replyTo || null, sticker);
+      return res.redirect('/pickleball/chat');
+    }
+    if (file && file.buffer && file.buffer.length) {
+      if (rateLimited('chat-media', me, 15, 10 * 60 * 1000)) return res.redirect('/pickleball/chat?err=slow');
+      if (!sniffImage(file.buffer)) return res.redirect('/pickleball/chat?err=type');
+      let msgId = 0;
+      try {
+        const jpeg = await processChatImage(file.buffer);
+        const info = db.prepare('INSERT INTO pk_group_messages (from_email, body, reply_to, mentions) VALUES (?,?,?,?)')
+          .run(me, body, replyTo || null, mentions);
+        msgId = info.lastInsertRowid;
+        const imgPath = await writeChatImage(jpeg, msgId);
+        db.prepare('UPDATE pk_group_messages SET image = ? WHERE id = ?').run(imgPath, msgId);
+        notifyPkMentions(me, body, mentions);
+      } catch (e) {
+        if (msgId) db.prepare('DELETE FROM pk_group_messages WHERE id = ?').run(msgId);
+        console.error(`[pkchat] image process failed for ${me}: ${e.message}`);
+        return res.redirect('/pickleball/chat?err=bad');
+      }
+      return res.redirect('/pickleball/chat');
+    }
+    if (!body) return res.redirect('/pickleball/chat');
+    if (rateLimited('chat-send', me, 30, 10 * 60 * 1000)) return res.redirect('/pickleball/chat?err=slow');
+    db.prepare('INSERT INTO pk_group_messages (from_email, body, reply_to, mentions) VALUES (?,?,?,?)')
+      .run(me, body, replyTo || null, mentions);
+    notifyPkMentions(me, body, mentions);
+    res.redirect('/pickleball/chat');
+  });
+});
+app.post('/pickleball/chat/react', requireLogin, (req, res) => {
+  const g = pkGate(req, res); if (!g) return;
+  if (mutedOut(g, res, { back: '/pickleball/chat' })) return;
+  const me = req.userEmail;
+  const messageId = Number(req.body.message_id) || 0;
+  if (!db.prepare('SELECT 1 FROM pk_group_messages WHERE id = ?').get(messageId)) return res.redirect('/pickleball/chat');
+  const emoji = validEmoji(req.body.emoji);
+  if (!emoji) return res.redirect('/pickleball/chat');
+  if (rateLimited('chat-react', me, 40, 10 * 60 * 1000)) return res.redirect('/pickleball/chat');
+  const existing = db.prepare('SELECT emoji FROM pk_group_reactions WHERE group_message_id = ? AND from_email = ?').get(messageId, me);
+  if (existing && existing.emoji === emoji) {
+    db.prepare('DELETE FROM pk_group_reactions WHERE group_message_id = ? AND from_email = ?').run(messageId, me);
+  } else {
+    db.prepare(`INSERT INTO pk_group_reactions (group_message_id, from_email, emoji) VALUES (?,?,?)
+                ON CONFLICT(group_message_id, from_email) DO UPDATE SET emoji = excluded.emoji, created_at = datetime('now')`)
+      .run(messageId, me, emoji);
+  }
+  res.redirect('/pickleball/chat');
+});
+app.post('/pickleball/chat/delete', requireLogin, (req, res) => {
+  const g = pkGate(req, res); if (!g) return;
+  const me = req.userEmail;
+  const messageId = Number(req.body.message_id) || 0;
+  const msg = db.prepare('SELECT id, from_email, image, audio, video FROM pk_group_messages WHERE id = ?').get(messageId);
+  if (!msg) return res.redirect('/pickleball/chat');
+  const isMod = g.admin || !!(g.a && g.a.is_host);
+  if (!isMod && msg.from_email !== me) return res.redirect('/pickleball/chat');
+  db.prepare('DELETE FROM pk_group_reactions WHERE group_message_id = ?').run(messageId);
+  db.prepare('DELETE FROM pk_group_messages WHERE id = ?').run(messageId);
+  bumpPkChatSeq();
+  safeUnlinkChatImage(msg.image); safeUnlinkChatImage(msg.audio); safeUnlinkChatImage(msg.video);
+  res.redirect('/pickleball/chat');
+});
+app.post('/pickleball/chat/pin', requireLogin, (req, res) => {
+  const g = pkGate(req, res); if (!g) return;
+  if (mutedOut(g, res, { back: '/pickleball/chat' })) return;
+  const canPin = g.admin || !!(g.a && (g.a.is_host || g.a.is_team));
+  if (!canPin) return res.redirect('/pickleball/chat');
+  const messageId = Number(req.body.message_id) || 0;
+  const msg = db.prepare('SELECT id, pinned_at FROM pk_group_messages WHERE id = ?').get(messageId);
+  if (!msg) return res.redirect('/pickleball/chat');
+  if (msg.pinned_at) db.prepare('UPDATE pk_group_messages SET pinned_at = NULL, pinned_by = NULL WHERE id = ?').run(messageId);
+  else db.prepare("UPDATE pk_group_messages SET pinned_at = datetime('now'), pinned_by = ? WHERE id = ?").run(req.userEmail, messageId);
+  bumpPkChatSeq();
+  res.redirect('/pickleball/chat');
+});
+app.post('/pickleball/chat/voice', requireLogin, (req, res) => {
+  uploadChatAudio(req, res, async (err) => {
+    const g = pkGate(req, res); if (!g) return;
+    if (mutedOut(g, res, { json: true })) return;
+    const me = req.userEmail;
+    if (err) return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ err: err.code === 'LIMIT_FILE_SIZE' ? 'big' : 'bad' });
+    const file = req.file;
+    if (!file || !file.buffer || !file.buffer.length) return res.status(400).json({ err: 'empty' });
+    const ext = sniffAudio(file.buffer);
+    if (!ext) return res.status(415).json({ err: 'type' });
+    if (rateLimited('chat-media', me, 15, 10 * 60 * 1000)) return res.status(429).json({ err: 'slow' });
+    let dur = Math.round(Number(req.body.dur) || 0);
+    if (!(dur > 0)) dur = 0;
+    if (dur > 300) dur = 300;
+    let replyTo = Number(req.body.reply_to) || 0;
+    if (replyTo && !db.prepare('SELECT 1 FROM pk_group_messages WHERE id = ?').get(replyTo)) replyTo = 0;
+    const info = db.prepare('INSERT INTO pk_group_messages (from_email, body, reply_to) VALUES (?,?,?)')
+      .run(me, '', replyTo || null);
+    const id = info.lastInsertRowid;
+    try {
+      const apath = await writeChatAudio(file.buffer, id, ext);
+      db.prepare('UPDATE pk_group_messages SET audio = ?, audio_dur = ? WHERE id = ?').run(apath, dur, id);
+    } catch (e) {
+      db.prepare('DELETE FROM pk_group_messages WHERE id = ?').run(id);
+      console.error(`[pkchat] voice write failed for ${me}: ${e.message}`);
+      return res.status(500).json({ err: 'bad' });
+    }
+    res.json({ ok: 1 });
+  });
+});
+app.post('/pickleball/chat/video', requireLogin, (req, res) => {
+  uploadChatVideo(req, res, async (err) => {
+    const g = pkGate(req, res); if (!g) return;
+    if (mutedOut(g, res, { json: true })) return;
+    const me = req.userEmail;
+    if (err) return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ err: err.code === 'LIMIT_FILE_SIZE' ? 'big' : 'bad' });
+    const file = req.file;
+    if (!file || !file.buffer || !file.buffer.length) return res.status(400).json({ err: 'empty' });
+    const ext = sniffVideo(file.buffer);
+    if (!ext) return res.status(415).json({ err: 'type' });
+    if (rateLimited('chat-media', me, 15, 10 * 60 * 1000)) return res.status(429).json({ err: 'slow' });
+    let dur = Math.round(Number(req.body.dur) || 0);
+    if (!(dur > 0)) dur = 0;
+    if (dur > 3600) dur = 3600;
+    let replyTo = Number(req.body.reply_to) || 0;
+    if (replyTo && !db.prepare('SELECT 1 FROM pk_group_messages WHERE id = ?').get(replyTo)) replyTo = 0;
+    const info = db.prepare('INSERT INTO pk_group_messages (from_email, body, reply_to) VALUES (?,?,?)')
+      .run(me, '', replyTo || null);
+    const id = info.lastInsertRowid;
+    try {
+      const vpath = await writeChatVideo(file.buffer, id, ext);
+      db.prepare('UPDATE pk_group_messages SET video = ?, video_dur = ? WHERE id = ?').run(vpath, dur, id);
+    } catch (e) {
+      db.prepare('DELETE FROM pk_group_messages WHERE id = ?').run(id);
+      console.error(`[pkchat] video write failed for ${me}: ${e.message}`);
       return res.status(500).json({ err: 'bad' });
     }
     res.json({ ok: 1 });
@@ -3178,6 +3392,9 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
     for (const r of db.prepare('SELECT image, audio, video FROM group_messages WHERE from_email = ?').all(a.email)) {
       safeUnlinkChatImage(r.image); safeUnlinkChatImage(r.audio); safeUnlinkChatImage(r.video);
     }
+    for (const r of db.prepare('SELECT image, audio, video FROM pk_group_messages WHERE from_email = ?').all(a.email)) {
+      safeUnlinkChatImage(r.image); safeUnlinkChatImage(r.audio); safeUnlinkChatImage(r.video);
+    }
     // purge messaging: their own reactions everywhere, reactions on their messages,
     // then their messages (both directions). Ordered so no orphaned rows survive,
     // independent of the FK cascade.
@@ -3190,6 +3407,11 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
     db.prepare('DELETE FROM group_reactions WHERE group_message_id IN (SELECT id FROM group_messages WHERE from_email = ?)').run(a.email);
     db.prepare('DELETE FROM group_messages WHERE from_email = ?').run(a.email);
     db.prepare('DELETE FROM group_reads WHERE email = ?').run(a.email);
+    // same purge for the pickleball chat (isolated pk_group_* tables)
+    db.prepare('DELETE FROM pk_group_reactions WHERE from_email = ?').run(a.email);
+    db.prepare('DELETE FROM pk_group_reactions WHERE group_message_id IN (SELECT id FROM pk_group_messages WHERE from_email = ?)').run(a.email);
+    db.prepare('DELETE FROM pk_group_messages WHERE from_email = ?').run(a.email);
+    db.prepare('DELETE FROM pk_group_reads WHERE email = ?').run(a.email);
     db.prepare('DELETE FROM push_subscriptions WHERE email = ?').run(a.email);
     refreshAvatarMap(); // drop them from the email→photo registry
     audit(req.userEmail, 'admin', 'people:delete', a.email);
@@ -3328,6 +3550,7 @@ function pkEnsureWeek() {
 }
 app.get('/pickleball', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
+  setRunCookie(res, 2); // opening pickleball → the neutral pages' Chat tab points at pickleball
   pkEnsureWeek();
   const rd = pkRunDate(), part = pkPartition(rd);
   const mine = part.rows.find(p => p.email === req.userEmail);
@@ -3336,7 +3559,7 @@ app.get('/pickleball', requireLogin, (req, res) => {
     email: req.userEmail, runDate: rd, runLabel: runLabelFor(rd), isOpen: pkIsOpen(rd), cancelled: pkIsCancelled(rd),
     cap: PK_CAP, waitlistCap: PK_WAIT, going: part.floor.length, waiting: part.wait.length,
     canOperate: g.canOperate, isAdmin: g.admin, myState, floorPlayers: part.floor, waitPlayers: part.wait, hidden: !pkProgramActive(),
-    dmUnread: unreadCount(req.userEmail), groupUnread: groupUnread(req.userEmail), groupMention: groupMentionUnread(req.userEmail, g.a ? g.a.id : 0), ann: annPanel(req.userEmail),
+    dmUnread: unreadCount(req.userEmail), groupUnread: pkGroupUnread(req.userEmail), groupMention: pkGroupMentionUnread(req.userEmail, g.a ? g.a.id : 0), ann: annPanel(req.userEmail),
   }));
 });
 app.post('/pickleball/join', requireLogin, (req, res) => {

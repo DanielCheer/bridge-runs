@@ -130,11 +130,14 @@ window.addEventListener('pagereveal',function(e){
 window.__composing=function(){var ae=document.activeElement;if(ae&&/^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)&&(ae.type||'')!=='hidden')return true;var f=document.querySelectorAll('textarea,input');for(var i=0;i<f.length;i++){var t=(f[i].type||'text').toLowerCase();if(t==='hidden'||t==='checkbox'||t==='radio'||t==='submit'||t==='button'||t==='file')continue;if(f[i].value&&f[i].value.trim())return true;}if(document.querySelector('details.announce-compose[open]'))return true;return false;};
 // Patch the DM (Profile tab) + group (Chat tab) unread badges in place every poll
 // tick — no reload needed to keep them fresh. Also toggles the hero group-chat dot.
-window.__patchBadges=function(dm,group,gm,ann){try{
-  function setTab(href,n,mention){var a=document.querySelector('.tabs a[href="'+href+'"]');if(!a)return;var b=a.querySelector('.tabbadge');
+window.__patchBadges=function(dm,group,gm,ann,pkgroup,pkgm){try{
+  function setTab(key,n,mention){var a=document.querySelector('.tabs a[data-tab="'+key+'"]');if(!a)return;var b=a.querySelector('.tabbadge');
     if(n>0){var t=(mention>0?'@':'')+(n>9?'9+':String(n));if(!b){b=document.createElement('span');b.className='tabbadge';a.appendChild(b);}b.textContent=t;b.className='tabbadge'+(mention>0?' mention':'');}
     else if(b){b.parentNode.removeChild(b);}}
-  setTab('/chat',group,gm); setTab('/profile',dm,0);
+  // The Chat tab is run-aware: if it currently points at pickleball chat, badge it with the
+  // pickleball counts; otherwise the basketball counts. Keeps the live badge honest per run.
+  var ct=document.querySelector('.tabs a[data-tab="chat"]'), pk=ct&&ct.getAttribute('href')==='/pickleball/chat';
+  setTab('chat', pk?(pkgroup||0):group, pk?(pkgm||0):gm); setTab('profile',dm,0);
   var hchat=document.querySelector('.hchat');if(hchat){var d=hchat.querySelector('.hdot');
     if(group>0){if(!d){d=document.createElement('span');d.className='hdot';d.setAttribute('aria-hidden','true');hchat.appendChild(d);}}else if(d){d.parentNode.removeChild(d);}}
   // Masthead announcement bell dot — toggled live from the poll ann unread flag.
@@ -189,7 +192,7 @@ window.__poll=function(page,onChange){
     if(window.__pollResetLast){last=null;window.__pollResetLast=false;}
     fetch('/poll?page='+encodeURIComponent(pg),{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}})
       .then(function(r){if(!r.ok)throw 0;return r.json();})
-      .then(function(d){fails=0;window.__patchBadges(d.dm,d.group,d.gm,d.ann);
+      .then(function(d){fails=0;window.__patchBadges(d.dm,d.group,d.gm,d.ann,d.pkgroup,d.pkgm);
         if(d.v&&window.__ver&&d.v!==window.__ver&&(!window.__composing||!window.__composing())){window.__reload();return;}
         if(last!==null&&d.f!==last){try{if(window.__pollOnChange)window.__pollOnChange();}catch(e){}}
         last=d.f;})
@@ -1142,16 +1145,22 @@ const mentionAutocompleteJS = () => `
 // counts: the Chat tab carries the group (Run Chat) unread; the Profile tab carries
 // the 1:1 DM unread (host DMs live in Profile now). Either hides at 0. Callers pass
 // { dm, group }. Pass a non-matching `current` (e.g. '') to highlight none.
-const tabNav = (current, { dm = 0, group = 0, groupMention = 0 } = {}) => {
-  const tab = (href, key, label, extra = '') => `<a href="${href}" class="tab${current === key ? ' on' : ''}">${ICON[key]}${label}${extra}</a>`;
+// `program` makes the Chat tab run-aware: program 2 (pickleball) points Chat at
+// /pickleball/chat and its badge reflects the counts the caller passes; program 1
+// (default, basketball) points at /chat. The caller always passes the counts (group/
+// groupMention) for whichever chat the tab points to, so the badge logic stays uniform.
+// data-tab lets the live poll patch the right tab regardless of its (varying) href.
+const tabNav = (current, { dm = 0, group = 0, groupMention = 0, program = 1 } = {}) => {
+  const tab = (href, key, label, extra = '') => `<a href="${href}" data-tab="${key}" class="tab${current === key ? ' on' : ''}">${ICON[key]}${label}${extra}</a>`;
   // groupMention > 0 → a DISTINCT "@" marker (teal) instead of the plain orange count,
   // so a mentioned player can tell "you were tagged" from ordinary unread at a glance.
   const badge = (n, mention = 0) => n > 0
     ? `<span class="tabbadge${mention > 0 ? ' mention' : ''}">${mention > 0 ? '@' : ''}${n > 9 ? '9+' : n}</span>`
     : '';
+  const chatHref = program === 2 ? '/pickleball/chat' : '/chat';
   return `<nav class="tabs"><div class="tabrow">
     ${tab('/runs', 'runs', 'Runs')}
-    ${tab('/chat', 'chat', 'Chat', badge(group, groupMention))}
+    ${tab(chatHref, 'chat', 'Chat', badge(group, groupMention))}
     ${tab('/profile', 'profile', 'Profile', badge(dm))}
   </div></nav>`;
 };
@@ -2184,6 +2193,53 @@ export function chatPage({ me, chat, runDate = '', hours = '7–10 PM', dmUnread
   ` + footWithTabs(tabNav('chat', { dm: dmUnread, group: groupUnread, groupMention }));
 }
 
+// Pickleball chat — the pickleball run's own room, an isolated mirror of chatPage on the
+// pk_group_* tables + /pickleball/chat routes. Reuses the shared chatFragment (base-pathed)
+// so the whole message UI (reactions, replies, pins, voice/video, @mentions, poll-patch) is
+// identical. Program-2 tab context → the bottom Chat tab stays on pickleball chat here.
+export function pkChatPage({ me, chat, runDate = '', dmUnread = 0, pkGroupUnread = 0, pkGroupMention = 0, ann = null }) {
+  const members = chat.members || [];
+  const memRow = (p) => {
+    const flags = { host: !!p.is_host, team: !!p.is_team, regular: !!p.is_regular };
+    return `<a class="lr" href="/u/${p.id}">
+      <span class="lav">${avatarInner(p.email, p.full_name)}</span>
+      <span class="lnm">${esc(p.full_name)}${p.email === me ? ' <span class="tag">You</span>' : ''}</span>
+      ${roleBadge(flags)}
+    </a>`;
+  };
+  const membersSheet = `
+    <div id="memwrap" class="wgwrap">
+      <div class="wgscrim" onclick="memClose()"></div>
+      <div class="wgsheet" role="dialog" aria-modal="true" aria-label="Pickleball members">
+        <div class="wgsheet-h"><b>Pickleball members · ${members.length}</b><button class="wgx" type="button" onclick="memClose()" aria-label="Close">${IC_CLOSE}</button></div>
+        <div class="wgsheet-b">
+          ${members.length ? members.map(memRow).join('') : '<div class="subh">No members yet.</div>'}
+        </div>
+      </div>
+    </div>`;
+  return HEAD('Pickleball Chat — The Bridge', 'has-chat') + header('', '', ann, '') + WELCOME_MODAL + `
+    ${backToRuns}
+    <div class="rule"></div>
+    <div class="chatsec chatsec-top">
+      <div class="chatsec-h chatsec-tap" role="button" tabindex="0" onclick="memOpen()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();memOpen()}" aria-label="View pickleball members">
+        <span class="chav">🥒</span>
+        <div class="chatsec-t"><b>Pickleball Chat</b><span>${chat.memberCount} member${chat.memberCount === 1 ? '' : 's'} · talk to the pickleball run</span></div>
+        <span class="chatsec-chev" aria-hidden="true">›</span>
+      </div>
+    </div>
+    ${chatFragment({ ...chat, base: '/pickleball/chat', pollPage: 'pkchat', placeholder: 'Message the pickleball run', emptyName: 'Pickleball Chat', emptyMsg: 'This is the start of the pickleball room — say hi 🥒' })}
+    ${membersSheet}
+    <script>
+      window.memOpen=function(){var w=document.getElementById('memwrap');if(w){window.__ovPrev=document.activeElement;w.classList.add('open');document.body.style.overflow='hidden';var sh=w.querySelector('.wgsheet');if(sh){sh.setAttribute('tabindex','-1');try{sh.focus();}catch(e){}}}};
+      window.memClose=function(){var w=document.getElementById('memwrap');if(!w)return;var sh=w.querySelector('.wgsheet');
+        var still=document.documentElement.classList.contains('noanim')||(window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches);
+        function restore(){var p=window.__ovPrev;if(p&&p.focus)try{p.focus();}catch(e){}}
+        if(sh&&!still){sh.classList.add('closing');setTimeout(function(){w.classList.remove('open');sh.classList.remove('closing');document.body.style.overflow='';restore();},200);}
+        else{w.classList.remove('open');document.body.style.overflow='';restore();}};
+    </script>
+  ` + footWithTabs(tabNav('chat', { dm: dmUnread, group: pkGroupUnread, groupMention: pkGroupMention, program: 2 }));
+}
+
 // ---------- PROFILE (view another player) ----------
 // Compact profile card — served as a fragment for the quick-look popup (tap a name in the
 // who's-going sheet). Just the essentials + a Message / Full-profile jump; no page chrome.
@@ -2247,7 +2303,7 @@ export function profilePage({ p, stats, isSelf = false, canContact = false, runD
 // that run's check-in page. `runs` = [{ key, emoji, name, href, runDate, dateLabel,
 // timeLabel, going, cap, status:'open'|'closed'|'cancelled', hidden }]. Self-contained
 // styles (scoped .rh*) so it needs no new global CSS.
-export function runsPage({ email, runs = [], canJoin = true, status = 'approved', canOperate = false, isAdmin = false, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+export function runsPage({ email, runs = [], canJoin = true, status = 'approved', canOperate = false, isAdmin = false, dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null }) {
   // Non-approved viewers can SEE the runs but can't join — a tap routes them to apply
   // (or to their status) instead of into a check-in they're not cleared for.
   const applyHref = status === 'none' ? '/' : '/status';
@@ -2325,7 +2381,7 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       ${runs.map(card).join('')}
     </div>
     ${canJoin ? firstRunTour : ''}
-  ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention }));
+  ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: chatProgram }));
 }
 
 // Pickleball run — a SEPARATE, hidden run on its own pk_* tables. Dedicated view (reuses the
@@ -2352,6 +2408,7 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
     <p class="psub" style="margin:-4px 0 8px;color:var(--muted)">${cancelled ? 'Cancelled this week' : (runLabel ? `Next: ${esc(wdayFull(runDate))}, ${esc(runLabel)}` : 'No date set')} · ${going}/${cap} in${waiting ? ` · ${waiting} waiting` : ''}</p>
     ${canOperate ? `<form method="POST" action="/pickleball/date" style="display:flex;gap:8px;align-items:center;margin:6px 0 4px"><input type="date" name="date" value="${esc(runDate)}" style="font-size:16px"><button class="btn ghost sm" type="submit">Set run date</button></form>` : ''}
     <div class="controls" style="margin-top:12px">${action}${runToggle}</div>
+    <a class="btn ghost sm" href="/pickleball/chat" style="margin-top:10px;display:inline-flex;align-items:center;gap:6px">💬 Pickleball chat</a>
     ${canOperate ? `<details class="hguest" style="margin-top:10px"><summary>+ Guest</summary><form method="POST" action="/pickleball/guest"><input name="name" required maxlength="60" placeholder="Guest name — last-minute add"><div style="height:8px"></div><button class="btn sm" type="submit">Add guest</button></form></details>` : ''}
     <div class="subhead" style="margin-top:18px">On the floor · ${going}/${cap}</div>
     <div class="mlist">${floorPlayers.length ? floorPlayers.map((p, i) => rowFloor(p, i + 1)).join('') : '<div class="subh">Nobody yet — be the first in.</div>'}
@@ -2359,7 +2416,7 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
     ${canOperate ? (cancelled
       ? `<form method="POST" action="/pickleball/cancel" style="margin-top:16px"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Restore this run</button></form>`
       : `<form method="POST" action="/pickleball/cancel" style="margin-top:16px" onsubmit="return confirm('Cancel this week\\'s pickleball?')"><button class="btn ghost sm" type="submit">🚫 Cancel this week</button></form>`) : ''}
-  ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention }));
+  ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: 2 }));
 }
 
 // Season board — most runs this calendar year. Top 8 + the viewer's own row (if outside
@@ -2405,7 +2462,7 @@ function inboxRows(me, threads) {
 }
 
 // ---------- PROFILE (own editable tab) ----------
-export function profileTabPage({ a, stats, saved = false, error = '', dmUnread = 0, groupUnread = 0, groupMention = 0, canOperate = false, announcementLog = [], iAmHost = false, threads = [], runDay = null, rdMsg = '', photoMsg = '', ann = null }) {
+export function profileTabPage({ a, stats, saved = false, error = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, canOperate = false, announcementLog = [], iAmHost = false, threads = [], runDay = null, rdMsg = '', photoMsg = '', ann = null }) {
   // The own-profile tab is a chromeless editor (its own .bar, no masthead), so the
   // global announcements bell lives in the .bar rather than the .mast here. Same
   // button + panel + JS as every other page (one shared affordance, one live dot).
@@ -2600,7 +2657,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
         }
       })();
     </script>
-  ` + footWithTabs(tabNav('profile', { dm: dmUnread, group: groupUnread, groupMention }));
+  ` + footWithTabs(tabNav('profile', { dm: dmUnread, group: groupUnread, groupMention, program: chatProgram }));
 }
 
 // ---------- MESSAGES: day / clock helpers (SQL UTC → server-local) ----------
@@ -2955,7 +3012,7 @@ ${composerInitJS()}
 // a prepended older page renders self-contained; the client dedupes the seam
 // day-divider after inserting. Shared by chatFragment + chatOlderFragment.
 function groupMsgBody({ me, msgs = [], reactions = new Map(), parents = new Map(),
-                       senders = new Map(), mentionNames = new Map(), isMod = false, canPin = false }) {
+                       senders = new Map(), mentionNames = new Map(), isMod = false, canPin = false }, base = '/chat') {
   const nameFor = (email) => { const s = senders.get(email); return s ? s.full_name : email; };
   const idFor = (email) => { const s = senders.get(email); return s ? s.id : 0; };
 
@@ -2993,7 +3050,7 @@ function groupMsgBody({ me, msgs = [], reactions = new Map(), parents = new Map(
     }
 
     const rx = reactions.get(m.id) || [];
-    const chips = rx.length ? `<div class="tapbacks">${rx.map(r => `<form method="POST" action="/chat/react" class="tbf">
+    const chips = rx.length ? `<div class="tapbacks">${rx.map(r => `<form method="POST" action="${base}/react" class="tbf">
         <input type="hidden" name="message_id" value="${m.id}"><input type="hidden" name="emoji" value="${esc(r.emoji)}">
         <button class="tb${r.mine ? ' mine' : ''}" type="submit" title="Toggle reaction">${esc(r.emoji)}${r.count > 1 ? ` <span>${r.count}</span>` : ''}</button>
       </form>`).join('')}</div>` : '';
@@ -3005,10 +3062,10 @@ function groupMsgBody({ me, msgs = [], reactions = new Map(), parents = new Map(
     // (own message always; any message if host/admin).
     const canDel = isMod || mine;
     const saveable = m.video ? m.video : m.audio ? m.audio : (m.image && !isSticker(m.image) ? m.image : '');
-    const lpData = `data-mid="${m.id}" data-reacturl="/chat/react" data-reply-id="${m.id}" data-reply-nm="${esc(mine ? 'You' : nameFor(m.from_email))}"`
-      + (canDel ? ' data-candel="1" data-delurl="/chat/delete"' : '')
+    const lpData = `data-mid="${m.id}" data-reacturl="${base}/react" data-reply-id="${m.id}" data-reply-nm="${esc(mine ? 'You' : nameFor(m.from_email))}"`
+      + (canDel ? ` data-candel="1" data-delurl="${base}/delete"` : '')
       + (saveable ? ` data-save="${esc(saveable)}"` : '')
-      + (canPin ? ` data-canpin="1" data-pinurl="/chat/pin" data-pinned="${m.pinned_at ? '1' : '0'}"` : '');
+      + (canPin ? ` data-canpin="1" data-pinurl="${base}/pin" data-pinned="${m.pinned_at ? '1' : '0'}"` : '');
 
     body += `<div class="msg ${mine ? 'mine' : 'theirs'}${grouped ? ' grouped' : ''}${tail ? ' tail' : ''}" ${lpData}>
         ${head}${stub}
@@ -3028,12 +3085,12 @@ const loadOlderBtn = (hasOlder) => hasOlder
 
 // Pinned-messages bar at the top of the room (Discord-style). Collapsible; each row
 // jumps to the message in the thread; pinners (team/host/admin) get an unpin ✕.
-const pinnedBar = (pinned = [], pinnedNames = new Map(), canPin = false) => {
+const pinnedBar = (pinned = [], pinnedNames = new Map(), canPin = false, base = '/chat') => {
   if (!pinned.length) return '';
   const rows = pinned.map(p => {
     const who = esc(pinnedNames.get(p.from_email) || p.from_email);
     const txt = p.body ? esc(p.body.slice(0, 90)) : (p.audio ? '🎤 Voice message' : p.video ? '🎥 Video' : p.image ? '📷 Photo' : '📌 Pinned');
-    const unpin = canPin ? `<form method="POST" action="/chat/pin" class="pinx-f"><input type="hidden" name="message_id" value="${p.id}"><button type="submit" class="pinx" aria-label="Unpin">${IC_CLOSE}</button></form>` : '';
+    const unpin = canPin ? `<form method="POST" action="${base}/pin" class="pinx-f"><input type="hidden" name="message_id" value="${p.id}"><button type="submit" class="pinx" aria-label="Unpin">${IC_CLOSE}</button></form>` : '';
     return `<div class="pinrow"><button type="button" class="pinjump" data-jump="${p.id}"><b>${who}</b> <span>${txt}</span></button>${unpin}</div>`;
   }).join('');
   return `<details class="pinned" id="pinnedbar" open><summary>📌 Pinned · ${pinned.length}</summary>${rows}</details>`;
@@ -3041,30 +3098,33 @@ const pinnedBar = (pinned = [], pinnedNames = new Map(), canPin = false) => {
 
 // A prepended scroll-back page: an optional fresh button + the older bubbles.
 export function chatOlderFragment({ me, msgs = [], reactions = new Map(), parents = new Map(),
-                                    senders = new Map(), mentionNames = new Map(), isMod = false, canPin = false, hasOlder = false }) {
-  return loadOlderBtn(hasOlder) + groupMsgBody({ me, msgs, reactions, parents, senders, mentionNames, isMod, canPin });
+                                    senders = new Map(), mentionNames = new Map(), isMod = false, canPin = false, hasOlder = false, base = '/chat' }) {
+  return loadOlderBtn(hasOlder) + groupMsgBody({ me, msgs, reactions, parents, senders, mentionNames, isMod, canPin }, base);
 }
 
 function chatFragment({ me, msgs = [], reactions = new Map(), parents = new Map(),
                         senders = new Map(), mentionNames = new Map(), isMod = false, canPin = false,
-                        pinned = [], pinnedNames = new Map(), hasOlder = false, err = '' }) {
-  let body = groupMsgBody({ me, msgs, reactions, parents, senders, mentionNames, isMod, canPin });
+                        pinned = [], pinnedNames = new Map(), hasOlder = false, err = '',
+                        base = '/chat', pollPage = 'chat', placeholder = 'Message the run',
+                        emptyName = 'Run Chat', emptyMsg = 'This is the start of the room — say hi to the whole run 👋' }) {
+  let body = groupMsgBody({ me, msgs, reactions, parents, senders, mentionNames, isMod, canPin }, base);
 
   if (!msgs.length) {
-    body = `<div class="mstart"><div class="mstartav">${GROUP_ICON}</div><b>Run Chat</b><p>This is the start of the room — say hi to the whole run 👋</p></div>`;
+    body = `<div class="mstart"><div class="mstartav">${GROUP_ICON}</div><b>${esc(emptyName)}</b><p>${esc(emptyMsg)}</p></div>`;
   }
 
-  const composer = composerForm('/chat', 'Message the run', { mentions: true });
+  const composer = composerForm(base, placeholder, { mentions: true });
 
   return `
     ${sendErrNotice(err)}
-    ${pinnedBar(pinned, pinnedNames, canPin)}
+    ${pinnedBar(pinned, pinnedNames, canPin, base)}
     <div class="thread" id="thread">${loadOlderBtn(hasOlder)}${body}</div>
     ${composer}
     <script>
       (function(){
         var thread=document.getElementById('thread');
-        var tid='chat';
+        var tid=${JSON.stringify(pollPage)};
+        var CHATBASE=${JSON.stringify(base)};
         // Tap a pinned row → scroll to that message in the thread (if it's loaded).
         document.addEventListener('click',function(e){
           var j=e.target&&e.target.closest&&e.target.closest('.pinjump'); if(!j)return;
@@ -3125,7 +3185,7 @@ ${mentionAutocompleteJS()}
             if(atBottom)toBottom();
           }
           if(prefetched){ apply(prefetched); return; }
-          fetch('/chat',{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.text();}).then(apply).catch(function(){});
+          fetch(CHATBASE,{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.text();}).then(apply).catch(function(){});
         };
         // Keep the newest message in view as photos decode: a lazy image loading below the
         // fold grows the page; if we're already near the bottom, re-anchor so you don't get
@@ -3142,7 +3202,7 @@ ${mentionAutocompleteJS()}
           if(!before||!window.fetch){ if(btn.parentNode)btn.parentNode.removeChild(btn); return; }
           btn.__busy=1; btn.textContent='Loading…';
           var prevH=document.body.scrollHeight, prevY=window.scrollY;
-          fetch('/chat/older?before='+encodeURIComponent(before),{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}})
+          fetch(CHATBASE+'/older?before='+encodeURIComponent(before),{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}})
             .then(function(r){return r.text();})
             .then(function(html){
               var tmp=document.createElement('div'); tmp.innerHTML=html;
@@ -3169,11 +3229,11 @@ ${mentionAutocompleteJS()}
           cbody.value=''; autoGrow(); if(window.clearReply)window.clearReply();
           fetch(form.action,{method:'POST',body:body,headers:{'X-Requested-With':'fetch'},credentials:'same-origin'})
             .then(function(r){ if(r.redirected&&r.url&&r.url.indexOf('err=slow')>=0){window.location.href=r.url;return;} return r.text().then(function(html){ window.__threadRefresh(false,html); }); }) // reuse the POST response — no 2nd fetch
-            .catch(function(){ window.location.href='/chat'; });
+            .catch(function(){ window.location.href=CHATBASE; });
         }); }
         // Poll-and-patch the feed (P0-1): re-fetch + patch #thread only on change,
         // never touching the composer. Replaces the old 20s full-page reload.
-        if(window.__poll)window.__poll('chat',function(){window.__threadRefresh(true);});
+        if(window.__poll)window.__poll(tid,function(){window.__threadRefresh(true);});
       })();
     </script>
     ${longPressScript()}
