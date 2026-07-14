@@ -253,6 +253,7 @@ window.__pollStop=function(){window.__pollPage=null;window.__pollOnChange=null;}
     if(e.defaultPrevented||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;
     var a=e.target&&e.target.closest&&e.target.closest('.tabs a[href],.opsnav a[href],.rhcard[href],.backruns[href]');
     if(!a)return;
+    if(a.hasAttribute('data-full'))return;   // opt out of the SPA swap → normal full navigation (e.g. apply form)
     if(a.target&&a.target!==''&&a.target!=='_self')return;
     var href=a.getAttribute('href'); if(!href||href.charAt(0)==='#')return;
     var abs; try{abs=new URL(href,location.href);}catch(x){return;}
@@ -2246,8 +2247,16 @@ export function profilePage({ p, stats, isSelf = false, canContact = false, runD
 // that run's check-in page. `runs` = [{ key, emoji, name, href, runDate, dateLabel,
 // timeLabel, going, cap, status:'open'|'closed'|'cancelled', hidden }]. Self-contained
 // styles (scoped .rh*) so it needs no new global CSS.
-export function runsPage({ email, runs = [], canOperate = false, isAdmin = false, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+export function runsPage({ email, runs = [], canJoin = true, status = 'approved', canOperate = false, isAdmin = false, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+  // Non-approved viewers can SEE the runs but can't join — a tap routes them to apply
+  // (or to their status) instead of into a check-in they're not cleared for.
+  const applyHref = status === 'none' ? '/' : '/status';
   const pill = (r) => {
+    if (!canJoin) return status === 'pending'
+      ? `<span class="rhpill grey">Applied</span>`
+      : status === 'rejected'
+      ? `<span class="rhpill grey">Not this season</span>`
+      : `<span class="rhpill amber">Apply to join</span>`;
     if (r.hidden) return `<span class="rhpill amber">Hidden</span>`;
     if (r.status === 'cancelled') return `<span class="rhpill red">Cancelled</span>`;
     if (r.status === 'open') return `<span class="rhpill green">Check-in open</span>`;
@@ -2260,7 +2269,7 @@ export function runsPage({ email, runs = [], canOperate = false, isAdmin = false
       : [day && r.dateLabel ? `${day}, ${esc(r.dateLabel)}` : (day || 'No date set'), r.timeLabel ? esc(r.timeLabel) : ''].filter(Boolean).join(' · ');
     return when;
   };
-  const card = (r) => `<a class="rhcard" href="${r.href}">
+  const card = (r) => `<a class="rhcard" href="${canJoin ? r.href : applyHref}"${canJoin ? '' : ' data-full'}>
       <span class="rhemoji" aria-hidden="true">${r.emoji}</span>
       <span class="rhbody">
         <span class="rhname">${esc(r.name)}${r.hidden ? ' <span class="rhlock" title="Only admins can see this run">🔒</span>' : ''}</span>
@@ -2268,12 +2277,17 @@ export function runsPage({ email, runs = [], canOperate = false, isAdmin = false
       </span>
       <span class="rhmeta">
         ${pill(r)}
-        <span class="rhcount">${r.going}<span class="rhslash">/${r.cap}</span></span>
+        ${canJoin ? `<span class="rhcount">${r.going}<span class="rhslash">/${r.cap}</span></span>` : ''}
       </span>
       <span class="rharrow" aria-hidden="true">›</span>
     </a>`;
+  const applyBanner = canJoin ? '' : `<div class="notice" style="margin:12px 0 0">${status === 'pending'
+      ? `⏳ <b>Application in review</b> — you’ll be able to check in here once the organizers approve you.`
+      : status === 'rejected'
+      ? `<b>Not on the Adv list this season.</b> The open Monday recreational run is always available.`
+      : `👋 <b>Not a member yet?</b> Apply to join — fill out the form and you’ll get in once you’re approved. <a class="btn sm" href="/" data-full style="margin-left:6px;width:auto">Apply to join →</a>`}</div>`;
   return HEAD('Runs — The Bridge', 'has-tabs') + header(`<b>RUNS</b>${esc(email)}`, '', ann) + WELCOME_MODAL + `
-    <script>window.__tourRole={op:${canOperate ? 1 : 0},adm:${isAdmin ? 1 : 0}};</script>
+    ${canJoin ? `<script>window.__tourRole={op:${canOperate ? 1 : 0},adm:${isAdmin ? 1 : 0}};</script>` : ''}
     <style>
       .rhead{margin:14px 2px 4px}
       .rhead h1{font-size:26px;margin:0}
@@ -2304,12 +2318,13 @@ export function runsPage({ email, runs = [], canOperate = false, isAdmin = false
     </style>
     <div class="rhead">
       <h1>Runs</h1>
-      <p>Pick a run to check in.</p>
+      <p>${canJoin ? 'Pick a run to check in.' : 'The runs at The Bridge. Apply to join and check in.'}</p>
     </div>
+    ${applyBanner}
     <div class="rhlist">
       ${runs.map(card).join('')}
     </div>
-    ${firstRunTour}
+    ${canJoin ? firstRunTour : ''}
   ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention }));
 }
 

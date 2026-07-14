@@ -1563,11 +1563,15 @@ function mutedOut(gate, res, { json = false, back = '/chat' } = {}) {
 // hidden-until-live behaviour. Read-only aside from the no-op week rolls.
 app.get('/runs', requireLogin, (req, res) => {
   const email = req.userEmail;
-  const gate = requirePlayer(req, res);
-  if (!gate) return;
+  // Any signed-in member can SEE the hub — non-approved viewers get an apply prompt on
+  // tap (handled in the view) instead of being bounced away, so they can find the runs.
+  const a = applicantByEmail(email);
+  const viewerIsAdmin = isAdmin(email);
+  const status = a?.status || 'none';
+  const canJoin = viewerIsAdmin || status === 'approved';
   const runs = [];
 
-  // Basketball (program 1) — always visible to approved players + admins.
+  // Basketball (program 1) — always listed.
   const bb = loadRun(req);
   runs.push({
     key: 'basketball', emoji: '🏀', name: 'Basketball', href: '/checkin',
@@ -1578,7 +1582,7 @@ app.get('/runs', requireLogin, (req, res) => {
   });
 
   // Pickleball (program 2) — admins always; members only when live.
-  if (gate.viewerIsAdmin || pkProgramActive()) {
+  if (viewerIsAdmin || pkProgramActive()) {
     pkEnsureWeek();
     const rd = pkRunDate(), part = pkPartition(rd);
     runs.push({
@@ -1591,12 +1595,12 @@ app.get('/runs', requireLogin, (req, res) => {
   }
 
   res.send(runsPage({
-    email, runs,
-    isAdmin: gate.viewerIsAdmin,
-    canOperate: gate.viewerIsAdmin || !!(gate.a && gate.a.is_team),
+    email, runs, canJoin, status,
+    isAdmin: viewerIsAdmin,
+    canOperate: viewerIsAdmin || !!(a && a.is_team),
     dmUnread: unreadCount(email),
     groupUnread: groupUnread(email),
-    groupMention: groupMentionUnread(email, gate.a ? gate.a.id : 0),
+    groupMention: groupMentionUnread(email, a ? a.id : 0),
     ann: annPanel(email),
   }));
 });
