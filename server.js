@@ -604,6 +604,12 @@ const uploadBanner = multer({ storage: multer.memoryStorage(), limits: { fileSiz
 function bannerVersion() {
   try { return String(Math.floor(fs.statSync(BANNER_PATH).mtimeMs)); } catch { return '0'; }
 }
+// Pickleball gets its OWN banner photo (pk-banner.jpg); until one is uploaded it falls back
+// to the basketball court photo, so the page always shows something.
+const PK_BANNER_PATH = process.env.PK_BANNER_PATH || path.join(__dirname, 'public', 'pk-banner.jpg');
+function pkBannerHasOwn() { try { return fs.statSync(PK_BANNER_PATH).size > 0; } catch { return false; } }
+function pkBannerSrc() { return pkBannerHasOwn() ? '/pk-banner.jpg' : '/gym.jpg'; }
+function pkBannerVersion() { try { return String(Math.floor(fs.statSync(pkBannerHasOwn() ? PK_BANNER_PATH : BANNER_PATH).mtimeMs)); } catch { return '0'; } }
 
 // Delete a stored chat photo by its public path. Only /chat-media/<safe-name> paths are
 // touched — stickers (/stickers/*) and anything with a separator/`..` are refused, so a
@@ -3022,6 +3028,38 @@ app.post('/admin/banner', requireApprover, (req, res) => {
     }
   });
 });
+// Pickleball banner change — same cropper as basketball, writes pk-banner.jpg.
+app.get('/pickleball/banner', requireApprover, (req, res) => {
+  res.send(bannerPage({ err: req.query.err || '', bannerVer: pkBannerVersion(), action: '/pickleball/banner', imgSrc: pkBannerSrc(), back: '/pickleball' }));
+});
+app.post('/pickleball/banner', requireApprover, (req, res) => {
+  uploadBanner(req, res, async (err) => {
+    if (err) return res.redirect('/pickleball/banner?err=' + (err.code === 'LIMIT_FILE_SIZE' ? 'big' : 'bad'));
+    const file = req.file;
+    if (!file || !file.buffer || !file.buffer.length) return res.redirect('/pickleball/banner?err=empty');
+    if (!sniffImage(file.buffer)) return res.redirect('/pickleball/banner?err=type');
+    try {
+      const m = await sharp(file.buffer).metadata();
+      const oriented = (m.orientation || 1) >= 5;
+      const W = oriented ? m.height : m.width, H = oriented ? m.width : m.height;
+      let left = Math.round(Number(req.body.cx)), top = Math.round(Number(req.body.cy));
+      let width = Math.round(Number(req.body.cw)), height = Math.round(Number(req.body.ch));
+      if (!(W > 0 && H > 0 && width > 0 && height > 0)) return res.redirect('/pickleball/banner?err=crop');
+      left = Math.max(0, Math.min(left, W - 1)); top = Math.max(0, Math.min(top, H - 1));
+      width = Math.max(1, Math.min(width, W - left)); height = Math.max(1, Math.min(height, H - top));
+      const out = await sharp(file.buffer, { failOn: 'error' }).rotate()
+        .extract({ left, top, width, height })
+        .resize(2320, 1160, { fit: 'fill' })
+        .jpeg({ quality: 84, mozjpeg: true }).toBuffer();
+      await fs.promises.writeFile(PK_BANNER_PATH, out);
+      audit(req.userEmail, req.actorRole, 'pk:banner:update', `${width}x${height}`);
+      return res.redirect('/pickleball');
+    } catch (e) {
+      console.error(`[pk-banner] crop failed for ${req.userEmail}: ${e.message}`);
+      return res.redirect('/pickleball/banner?err=bad');
+    }
+  });
+});
 
 // An approver casts (or changes) their vote. Unanimous approve → approved;
 // any reject → rejected. Recomputed live.
@@ -3660,6 +3698,7 @@ app.get('/pickleball', requireLogin, (req, res) => {
     cap: PK_CAP, waitlistCap: PK_WAIT, going: part.floor.length, waiting: part.wait.length,
     canOperate: g.canOperate, isAdmin: g.admin, myState, floorPlayers: part.floor, waitPlayers: part.wait, hidden: !pkProgramActive(),
     myConfirmed, iAutoRenew,
+    bannerSrc: pkBannerSrc(), bannerVer: pkBannerVersion(),
     tipoff: pkStartEpoch(rd), announcement: latestPkAnnouncement(),
     dmUnread: unreadCount(req.userEmail), groupUnread: pkGroupUnread(req.userEmail), groupMention: pkGroupMentionUnread(req.userEmail, g.a ? g.a.id : 0), ann: null,
   }));

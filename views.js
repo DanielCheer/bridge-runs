@@ -2427,7 +2427,7 @@ export function pkJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, a
 
 // Pickleball run — a SEPARATE, hidden run on its own pk_* tables. Dedicated view (reuses the
 // shell + avatar + list styles); does not touch the basketball checkinPage. Native POST forms.
-export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', floorPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, myConfirmed = false, iAutoRenew = false, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', floorPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, myConfirmed = false, iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
   const full = going >= cap, totalFull = (going + waiting) >= (cap + waitlistCap);
   const rmForm = (p) => `<form method="POST" action="/pickleball/remove" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn leave sm" type="submit">Remove</button></form>`;
   // Tappable name → profile popup (reuses the shared pvOpen + /u/:id/card); guests (no
@@ -2505,13 +2505,14 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
     <div class="phead"><h1>Pickleball 🥒</h1></div>
     <p class="psub" style="margin:-4px 0 8px;color:var(--muted)">${cancelled ? 'Cancelled this week' : (runLabel ? `Next: ${esc(wdayFull(runDate))}, ${esc(runLabel)}` : 'No date set')} · ${going}/${cap} in${waiting ? ` · ${waiting} waiting` : ''}</p>
     <div class="gymbanner">
-      <img src="/gym.jpg?v=4" alt="The Bridge court" width="1160" height="580" fetchpriority="high">
+      <img src="${esc(bannerSrc)}?v=${esc(String(bannerVer))}" alt="The Bridge court" width="1160" height="580" fetchpriority="high">
       <div class="gymcap">
         ${cancelled
           ? `<div class="l">This week<b>🚫 Run cancelled</b></div>`
           : `<div class="l">Next run<b>${esc(wdayFull(runDate))} · ${esc(runLabel)} · 6 PM</b></div>
         <div class="r"><span>Starts in</span><b class="tick" data-tip="${tipoff}">${esc(fmtCountdown(tipoff))}</b></div>`}
       </div>
+      ${canOperate ? `<a class="bannedit" href="/pickleball/banner" aria-label="Change banner photo">🖼 Change</a>` : ''}
     </div>
     ${hero}
     ${announcement ? `<div class="notice" style="margin-top:10px;display:flex;align-items:flex-start;gap:8px;justify-content:space-between"><span>📣 <b>Announcement</b> · ${esc(announcement.body)}${announcement.author ? `<span style="color:var(--muted)"> — ${esc(announcement.author)}</span>` : ''}</span>${canOperate ? `<form method="POST" action="/pickleball/announce/retract" style="margin:0;flex-shrink:0"><button class="btn ghost sm" type="submit" title="Retract this announcement">Retract</button></form>` : ''}</div>` : ''}
@@ -3649,7 +3650,7 @@ const bannerCropScript = () => `<script>
 })();
 </script>`;
 
-export function bannerPage({ err = '', bannerVer = '0' } = {}) {
+export function bannerPage({ err = '', bannerVer = '0', action = '/admin/banner', imgSrc = '/gym.jpg', back = '/checkin' } = {}) {
   const errMsg = err === 'big' ? 'That image is too large (max 14 MB).'
     : err === 'type' ? 'That file isn’t a supported image (JPG, PNG, or WebP).'
     : err === 'crop' ? 'Couldn’t read the crop area — try again.'
@@ -3662,9 +3663,9 @@ export function bannerPage({ err = '', bannerVer = '0' } = {}) {
     ${errMsg ? `<div class="notice bad">${errMsg}</div>` : ''}
 
     <div class="subhead">Current</div>
-    <div class="curframe"><img src="/gym.jpg?v=${esc(String(bannerVer))}" alt="Current banner"></div>
+    <div class="curframe"><img src="${imgSrc}?v=${esc(String(bannerVer))}" alt="Current banner"></div>
 
-    <form method="POST" action="/admin/banner" enctype="multipart/form-data" id="bform" class="card rail" style="margin-top:14px">
+    <form method="POST" action="${action}" enctype="multipart/form-data" id="bform" class="card rail" style="margin-top:14px">
       <input type="hidden" name="cx" id="bcx"><input type="hidden" name="cy" id="bcy">
       <input type="hidden" name="cw" id="bcw"><input type="hidden" name="ch" id="bch">
       <label class="btn ghost" for="bfile" style="cursor:pointer">📷 Choose a photo</label>
@@ -3678,7 +3679,7 @@ export function bannerPage({ err = '', bannerVer = '0' } = {}) {
       </div>
     </form>
     ${bannerCropScript()}
-    <div class="foot" style="margin-top:24px"><a href="/checkin">Back to check-in</a></div>
+    <div class="foot" style="margin-top:24px"><a href="${back}">← Back</a></div>
   ` + FOOT;
 }
 
