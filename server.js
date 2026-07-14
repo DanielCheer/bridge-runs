@@ -21,7 +21,7 @@ import {
 import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap,
-  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage,
+  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage, runsPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -962,7 +962,7 @@ function safeNextPath(next) {
   // Strict path allowlist: must start with a single "/" and contain ONLY URL-path-safe
   // characters. This blocks protocol-relative (`//evil`), backslash tricks, AND the
   // `"<>` that would otherwise let a crafted ?next= break out of the client-redirect shim.
-  return (typeof next === 'string' && /^\/(?!\/)[A-Za-z0-9/_\-?=&.%#!:@~+]*$/.test(next)) ? next : '/checkin';
+  return (typeof next === 'string' && /^\/(?!\/)[A-Za-z0-9/_\-?=&.%#!:@~+]*$/.test(next)) ? next : '/runs';
 }
 
 app.get('/login', (req, res) => {
@@ -972,7 +972,7 @@ app.get('/login', (req, res) => {
 
 app.post('/login', async (req, res) => {
   const em = String(req.body.email || '').trim().toLowerCase();
-  const next = req.body.next || '/checkin';
+  const next = req.body.next || '/runs';
   if (!em || !em.includes('@')) return res.send(loginPage({ error: 'Enter a valid email.' }));
 
   // Throttle magic-link sends: at most 3 per address / 5 min (stops bombing one
@@ -1041,7 +1041,7 @@ app.post('/auth', (req, res) => {
 app.post('/login/code', (req, res) => {
   const em = String(req.body.email || '').trim().toLowerCase();
   const codeIn = String(req.body.code || '').replace(/\D/g, '');
-  const next = req.body.next || '/checkin';
+  const next = req.body.next || '/runs';
   const fail = (msg) => res.send(loginPage({ sent: true, email: em, next, codeError: msg }));
 
   if (rateLimited('login-code', em, 10, 10 * 60 * 1000) ||
@@ -1173,7 +1173,7 @@ app.post('/invite/:token', async (req, res) => {
   if (prefilledMatch) {
     // Pre-approved AND the address is proven (admin pre-filled it) — sign them in.
     setSession(res, email);
-    return res.redirect('/checkin');
+    return res.redirect('/runs');
   }
 
   // No ownership proof — send a one-tap sign-in link to the submitted email and
@@ -1290,7 +1290,7 @@ app.post('/push/unsubscribe', requireLogin, express.json(), (req, res) => {
 app.get('/status', requireLogin, (req, res) => {
   const a = applicantByEmail(req.userEmail);
   const status = a?.status || 'none';
-  if (isAdmin(req.userEmail) || status === 'approved') return res.redirect('/checkin');
+  if (isAdmin(req.userEmail) || status === 'approved') return res.redirect('/runs');
   res.send(statusPage({ email: req.userEmail, status }));
 });
 
@@ -1556,6 +1556,50 @@ function mutedOut(gate, res, { json = false, back = '/chat' } = {}) {
   else res.redirect(back + (back.includes('?') ? '&' : '?') + 'err=suspended');
   return true;
 }
+
+// Runs hub — the launcher that lists every run the viewer can join, then hands off to
+// that run's own check-in page. Basketball is always listed; Pickleball appears for
+// admins always and for members only once it's published (active) — preserving the
+// hidden-until-live behaviour. Read-only aside from the no-op week rolls.
+app.get('/runs', requireLogin, (req, res) => {
+  const email = req.userEmail;
+  const gate = requirePlayer(req, res);
+  if (!gate) return;
+  const runs = [];
+
+  // Basketball (program 1) — always visible to approved players + admins.
+  const bb = loadRun(req);
+  runs.push({
+    key: 'basketball', emoji: '🏀', name: 'Basketball', href: '/checkin',
+    runDate: bb.runDate, dateLabel: runLabelFor(bb.runDate), timeLabel: runTimeRange(bb.runDate),
+    going: bb.inPlayers.length + bb.offeredPlayers.length, cap: CAP,
+    status: runIsCancelled(bb.runDate) ? 'cancelled' : (runIsOpen(bb.runDate) ? 'open' : 'closed'),
+    hidden: false,
+  });
+
+  // Pickleball (program 2) — admins always; members only when live.
+  if (gate.viewerIsAdmin || pkProgramActive()) {
+    pkEnsureWeek();
+    const rd = pkRunDate(), part = pkPartition(rd);
+    runs.push({
+      key: 'pickleball', emoji: '🥒', name: 'Pickleball', href: '/pickleball',
+      runDate: rd, dateLabel: runLabelFor(rd), timeLabel: '',
+      going: part.floor.length, cap: PK_CAP,
+      status: pkIsCancelled(rd) ? 'cancelled' : (pkIsOpen(rd) ? 'open' : 'closed'),
+      hidden: !pkProgramActive(),
+    });
+  }
+
+  res.send(runsPage({
+    email, runs,
+    isAdmin: gate.viewerIsAdmin,
+    canOperate: gate.viewerIsAdmin || !!(gate.a && gate.a.is_team),
+    dmUnread: unreadCount(email),
+    groupUnread: groupUnread(email),
+    groupMention: groupMentionUnread(email, gate.a ? gate.a.id : 0),
+    ann: annPanel(email),
+  }));
+});
 
 app.get('/checkin', requireLogin, (req, res) => {
   const email = req.userEmail;

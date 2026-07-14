@@ -246,12 +246,12 @@ window.__pollStop=function(){window.__pollPage=null;window.__pollOnChange=null;}
   }
   window.__go=go; // exposed so the team tour can drive a smooth router swap between pages
   document.addEventListener('pointerdown',function(e){
-    var a=e.target&&e.target.closest&&e.target.closest('.tabs a[href],.opsnav a[href]');
+    var a=e.target&&e.target.closest&&e.target.closest('.tabs a[href],.opsnav a[href],.rhcard[href],.backruns[href]');
     if(a)warm(a.getAttribute('href'));
   },{passive:true,capture:true});
   document.addEventListener('click',function(e){
     if(e.defaultPrevented||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;
-    var a=e.target&&e.target.closest&&e.target.closest('.tabs a[href],.opsnav a[href]');
+    var a=e.target&&e.target.closest&&e.target.closest('.tabs a[href],.opsnav a[href],.rhcard[href],.backruns[href]');
     if(!a)return;
     if(a.target&&a.target!==''&&a.target!=='_self')return;
     var href=a.getAttribute('href'); if(!href||href.charAt(0)==='#')return;
@@ -496,6 +496,7 @@ const roleWord = (p) => p.host ? 'Host' : p.team ? 'Team' : p.regular ? 'Core' :
 // approved player (admins too) on the player-facing pages. Operator pages keep
 // opsNav at the top instead.
 const ICON = {
+  runs: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="#8a8474" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/></svg>',
   checkin: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="#8a8474" stroke-width="2"><path d="M3 11l9-7 9 7"/><path d="M5 10v9h14v-9"/></svg>',
   chat: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="#8a8474" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4z"/><path d="M8.5 10.5h.01M12 10.5h.01M15.5 10.5h.01"/></svg>',
   profile: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="#8a8474" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>',
@@ -1148,7 +1149,7 @@ const tabNav = (current, { dm = 0, group = 0, groupMention = 0 } = {}) => {
     ? `<span class="tabbadge${mention > 0 ? ' mention' : ''}">${mention > 0 ? '@' : ''}${n > 9 ? '9+' : n}</span>`
     : '';
   return `<nav class="tabs"><div class="tabrow">
-    ${tab('/checkin', 'checkin', 'Check-in')}
+    ${tab('/runs', 'runs', 'Runs')}
     ${tab('/chat', 'chat', 'Chat', badge(group, groupMention))}
     ${tab('/profile', 'profile', 'Profile', badge(dm))}
   </div></nav>`;
@@ -1166,6 +1167,11 @@ const opsNav = (current, { isAdmin = false, isTeam = false } = {}) => {
     ${isAdmin ? item('/admin/people', 'People', 'people') : ''}
   </nav>`;
 };
+
+// Big orange "back to the Runs hub" button — sits top-left on each run's page so the
+// picker is one obvious tap away (in addition to the Runs tab). Inline styles so it
+// renders identically on the basketball + pickleball pages without page-specific CSS.
+const backToRuns = `<a href="/runs" class="backruns" aria-label="Back to all runs" style="display:inline-flex;align-items:center;gap:6px;background:#E86A33;color:#fff;font-weight:800;font-size:15px;line-height:1;padding:11px 18px 11px 15px;border-radius:13px;text-decoration:none;margin:14px 0 2px;box-shadow:0 3px 10px rgba(232,106,51,.32);-webkit-tap-highlight-color:transparent"><span style="font-size:22px;margin-top:-2px">‹</span>All runs</a>`;
 
 // Copy-to-clipboard button for a readonly <input>/<textarea> by id. Shows
 // "Copied ✓" briefly, then restores the label. Used on the people + share pages.
@@ -1263,16 +1269,17 @@ const firstRunTour = `
     // adm = admin only — filtered by whether the matching ops-nav link exists (deterministic
     // per user, so the step list + indices are identical on every page so resume aligns).
     var STEPS_ALL=[
-      {ttl:"Welcome to the run 👋",txt:"Here’s a quick tour of the app."},
-      {sel:'[data-tour="join"]',ttl:"Grab your spot",txt:"Tap “I’m in” each week to claim a spot. Spots are limited — first come, first served."},
-      {sel:'.tabs a[href="/chat"]',ttl:"Run chat",txt:"Chat with the whole run — photos, plans and @mentions. On the team? Press & hold a message to Pin it."},
-      {sel:'.tabs a[href="/profile"]',ttl:"Your profile",txt:"Your stats, photo and settings live here."},
-      {sel:'.bellbtn',ttl:"Announcements",txt:"Updates from the host show up here."},
-      {sel:'[data-tour="ops-run"]',op:1,ttl:"Run the check-in",txt:"Open or close check-in by hand (it auto-opens Wed and locks at 2 PM). Tap the scoreboard’s “Who’s going” to remove or bump players."},
-      {sel:'.hguest summary',op:1,ttl:"Add a guest",txt:"Drop in a last-minute walk-on by name — works even after the 2 PM lock."},
-      {sel:'.announce-compose summary',op:1,ttl:"Announce to everyone",txt:"Post an update that pushes to the whole run’s phones."},
-      {sel:'.arpill',op:1,ttl:"Your guaranteed spot",txt:"As team you’re auto-added each week. Toggle this to sit out a week — it never affects your standing."},
-      {ttl:"Turn on notifications",txt:"Get a ping for spot offers, announcements and @mentions — never miss out.",notif:1},
+      {path:'/runs',ttl:"Welcome 👋",txt:"Here’s a quick tour of the app."},
+      {path:'/runs',sel:'.rhcard',ttl:"Pick your run",txt:"These are your runs. Tap one to open its check-in — start with Basketball to grab a spot."},
+      {path:'/checkin',sel:'[data-tour="join"]',ttl:"Grab your spot",txt:"Tap “I’m in” each week to claim a spot. Spots are limited — first come, first served."},
+      {path:'/checkin',sel:'.tabs a[href="/chat"]',ttl:"Run chat",txt:"Chat with the whole run — photos, plans and @mentions. On the team? Press & hold a message to Pin it."},
+      {path:'/checkin',sel:'.tabs a[href="/profile"]',ttl:"Your profile",txt:"Your stats, photo and settings live here."},
+      {path:'/checkin',sel:'.bellbtn',ttl:"Announcements",txt:"Updates from the host show up here."},
+      {path:'/checkin',sel:'[data-tour="ops-run"]',op:1,ttl:"Run the check-in",txt:"Open or close check-in by hand (it auto-opens Wed and locks at 2 PM). Tap the scoreboard’s “Who’s going” to remove or bump players."},
+      {path:'/checkin',sel:'.hguest summary',op:1,ttl:"Add a guest",txt:"Drop in a last-minute walk-on by name — works even after the 2 PM lock."},
+      {path:'/checkin',sel:'.announce-compose summary',op:1,ttl:"Announce to everyone",txt:"Post an update that pushes to the whole run’s phones."},
+      {path:'/checkin',sel:'.arpill',op:1,ttl:"Your guaranteed spot",txt:"As team you’re auto-added each week. Toggle this to sit out a week — it never affects your standing."},
+      {path:'/checkin',ttl:"Turn on notifications",txt:"Get a ping for spot offers, announcements and @mentions — never miss out.",notif:1},
       {path:'/admin',op:1,sel:'[data-tour="council"]',ttl:"Vote players in",txt:"New applicants show up here — tap Approve or Reject on each. 3 approvals lets someone in; 3 rejects turns them away."},
       {path:'/admin/people',adm:1,sel:'[data-tour="people"]',ttl:"Manage people",txt:"Two quick links up top: Share the sign-up QR to invite players, and Export everyone to a CSV. Below, search anyone to suspend, remove, or change their role."}
     ];
@@ -1305,7 +1312,7 @@ const firstRunTour = `
     }
     function goToStep(idx){
       if(idx>=STEPS.length){ done(); return; }
-      var target=STEPS[idx].path||'/checkin';
+      var target=STEPS[idx].path||'/runs';
       if(target!==location.pathname){                 // step lives on another page → navigate, resume there
         try{ sessionStorage.setItem('__tourResume', String(idx)); }catch(e){}
         tour.hidden=true; document.body.style.overflow=''; running=0;
@@ -1339,11 +1346,17 @@ const firstRunTour = `
       var resume=-1;
       try{ var rs=sessionStorage.getItem('__tourResume'); if(rs!==null){ resume=parseInt(rs,10); sessionStorage.removeItem('__tourResume'); } }catch(e){}
       if(resume<0 && !force){
-        if(location.pathname!=='/checkin') return;
+        if(location.pathname!=='/runs') return;
         try{ if(localStorage.getItem(KEY)) return; }catch(e){}
       }
       running=1;
-      var isOp=!!document.querySelector('.opsnav a[href="/admin"]'), isAdm=!!document.querySelector('.opsnav a[href="/admin/people"]'), sup=supported();
+      // Operator role must be IDENTICAL on every tour page so step indices align across
+      // page hops. The Runs hub has no ops-nav, so pages set window.__tourRole server-side;
+      // fall back to detecting the ops-nav links where that global isn't present.
+      var role=window.__tourRole||null;
+      var isOp=role?!!role.op:!!document.querySelector('.opsnav a[href="/admin"]'),
+          isAdm=role?!!role.adm:!!document.querySelector('.opsnav a[href="/admin/people"]'),
+          sup=supported();
       setTimeout(function(){
         STEPS=STEPS_ALL.filter(function(s){ if(s.op&&!isOp)return false; if(s.adm&&!isAdm)return false; if(s.notif&&!sup)return false; return true; });
         if(!STEPS.length){ done(); return; }
@@ -1908,6 +1921,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
     </div>` : '';
 
   return HEAD(`${wdayFull(runDate)} Check-in — Adv Runs`, 'has-tabs') + header(`<b>CHECK-IN</b>${esc(email)}`, wdayShort(runDate), ann, hours) + WELCOME_MODAL + `
+    ${backToRuns}
     ${opsNav('checkin', { isAdmin: viewerIsAdmin, isTeam: iAmTeam })}
     ${canOperate ? `<div id="tgnudge" class="notice" style="margin-top:10px;display:flex;align-items:center;gap:10px;justify-content:space-between">
       <span>🏀 <b>You’re on the team</b> — you’ve got extra controls.</span>
@@ -2085,7 +2099,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
       if(!window.__claimBound){ window.__claimBound=true; setInterval(paintClaim,30000); }
     </script>
     ${firstRunTour}
-  ` + footWithTabs(tabNav('checkin', { dm: dmUnread, group: groupUnread, groupMention }));
+  ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention }));
 }
 
 // ---------- CLAIM RESULT (waitlist offer landing page) ----------
@@ -2227,6 +2241,78 @@ export function profilePage({ p, stats, isSelf = false, canContact = false, runD
   ` + footWithTabs(tabNav(isSelf ? 'profile' : '', { dm: dmUnread, group: groupUnread, groupMention }));
 }
 
+// Runs hub — the launcher that lists every run the viewer can see (Basketball always;
+// Pickleball for admins always, for members once it's published). Tapping a card opens
+// that run's check-in page. `runs` = [{ key, emoji, name, href, runDate, dateLabel,
+// timeLabel, going, cap, status:'open'|'closed'|'cancelled', hidden }]. Self-contained
+// styles (scoped .rh*) so it needs no new global CSS.
+export function runsPage({ email, runs = [], canOperate = false, isAdmin = false, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+  const pill = (r) => {
+    if (r.hidden) return `<span class="rhpill amber">Hidden</span>`;
+    if (r.status === 'cancelled') return `<span class="rhpill red">Cancelled</span>`;
+    if (r.status === 'open') return `<span class="rhpill green">Check-in open</span>`;
+    return `<span class="rhpill grey">Check-in closed</span>`;
+  };
+  const sub = (r) => {
+    const day = wdayFull(r.runDate);
+    const when = r.status === 'cancelled'
+      ? 'Off this week'
+      : [day && r.dateLabel ? `${day}, ${esc(r.dateLabel)}` : (day || 'No date set'), r.timeLabel ? esc(r.timeLabel) : ''].filter(Boolean).join(' · ');
+    return when;
+  };
+  const card = (r) => `<a class="rhcard" href="${r.href}">
+      <span class="rhemoji" aria-hidden="true">${r.emoji}</span>
+      <span class="rhbody">
+        <span class="rhname">${esc(r.name)}${r.hidden ? ' <span class="rhlock" title="Only admins can see this run">🔒</span>' : ''}</span>
+        <span class="rhsub">${sub(r)}</span>
+      </span>
+      <span class="rhmeta">
+        ${pill(r)}
+        <span class="rhcount">${r.going}<span class="rhslash">/${r.cap}</span></span>
+      </span>
+      <span class="rharrow" aria-hidden="true">›</span>
+    </a>`;
+  return HEAD('Runs — The Bridge', 'has-tabs') + header(`<b>RUNS</b>${esc(email)}`, '', ann) + WELCOME_MODAL + `
+    <script>window.__tourRole={op:${canOperate ? 1 : 0},adm:${isAdmin ? 1 : 0}};</script>
+    <style>
+      .rhead{margin:14px 2px 4px}
+      .rhead h1{font-size:26px;margin:0}
+      .rhead p{color:var(--muted);margin:3px 0 0;font-size:14px}
+      .rhlist{display:flex;flex-direction:column;gap:12px;margin-top:16px}
+      .rhcard{display:flex;align-items:center;gap:14px;padding:16px 14px;border:1px solid var(--line);border-radius:16px;background:var(--card);text-decoration:none;color:inherit;transition:transform .06s ease,border-color .12s ease}
+      .rhcard:active{transform:scale(.985)}
+      .rhcard:hover{border-color:var(--muted)}
+      .rhemoji{font-size:30px;line-height:1;width:46px;height:46px;display:flex;align-items:center;justify-content:center;border-radius:13px;background:var(--teal-tint,#e9efec);flex:none}
+      .rhbody{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+      .rhname{font-weight:800;font-size:17px;letter-spacing:-.01em}
+      .rhsub{color:var(--muted);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .rhmeta{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex:none}
+      .rhpill{font-size:11px;font-weight:700;letter-spacing:.02em;padding:3px 9px;border-radius:999px;white-space:nowrap}
+      .rhpill.green{background:#dcf0e2;color:#1f6b3a}
+      .rhpill.grey{background:#ececea;color:#6b6a63}
+      .rhpill.red{background:#f6dcdc;color:#a12c2c}
+      .rhpill.amber{background:#f7eccf;color:#8a6a1b}
+      .rhcount{font-weight:800;font-size:15px;font-variant-numeric:tabular-nums;color:var(--ink,#20211c)}
+      .rhslash{font-weight:500;color:var(--muted)}
+      .rharrow{font-size:24px;color:var(--muted);flex:none;margin-left:-2px}
+      @media (prefers-color-scheme:dark){
+        .rhpill.green{background:#183a25;color:#8fe0ab}
+        .rhpill.grey{background:#2a2a28;color:#b7b6ae}
+        .rhpill.red{background:#3d1e1e;color:#f0a3a3}
+        .rhpill.amber{background:#3a3016;color:#e7c766}
+      }
+    </style>
+    <div class="rhead">
+      <h1>Runs</h1>
+      <p>Pick a run to check in.</p>
+    </div>
+    <div class="rhlist">
+      ${runs.map(card).join('')}
+    </div>
+    ${firstRunTour}
+  ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention }));
+}
+
 // Pickleball run — a SEPARATE, hidden run on its own pk_* tables. Dedicated view (reuses the
 // shell + avatar + list styles); does not touch the basketball checkinPage. Native POST forms.
 export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', floorPlayers = [], waitPlayers = [], hidden = true, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
@@ -2244,6 +2330,7 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
   else action = `<form method="POST" action="/pickleball/join"><button class="btn primary" type="submit">I'm in</button></form>`;
   const runToggle = canOperate && !cancelled ? (isOpen ? `<form method="POST" action="/pickleball/close" style="margin:0"><button class="btn leave" type="submit">Close check-in</button></form>` : `<form method="POST" action="/pickleball/open" style="margin:0"><button class="btn primary" type="submit">Open check-in</button></form>`) : '';
   return HEAD('Pickleball — The Bridge', 'has-tabs') + header(`<b>PICKLEBALL</b>${esc(email)}`, '', ann, '') + `
+    ${backToRuns}
     <div class="rule"></div>
     ${hidden ? `<div class="notice" style="margin-top:10px">🔒 <b>Hidden run</b> — only admins can see this. Flip it live when it's ready.${isAdmin ? ` <form method="POST" action="/pickleball/publish" style="display:inline"><button class="btn sm" type="submit" style="margin-left:6px">Make it live</button></form>` : ''}</div>` : (isAdmin ? `<div class="notice good" style="margin-top:10px">✅ <b>Live</b> — members can join. <form method="POST" action="/pickleball/publish" style="display:inline"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit" style="margin-left:6px">Hide again</button></form></div>` : '')}
     <div class="phead"><h1>Pickleball 🥒</h1></div>
@@ -2257,7 +2344,7 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
     ${canOperate ? (cancelled
       ? `<form method="POST" action="/pickleball/cancel" style="margin-top:16px"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Restore this run</button></form>`
       : `<form method="POST" action="/pickleball/cancel" style="margin-top:16px" onsubmit="return confirm('Cancel this week\\'s pickleball?')"><button class="btn ghost sm" type="submit">🚫 Cancel this week</button></form>`) : ''}
-  ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention }));
+  ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention }));
 }
 
 // Season board — most runs this calendar year. Top 8 + the viewer's own row (if outside
