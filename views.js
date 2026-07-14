@@ -161,6 +161,12 @@ window.__swapWrap=function(html){
     if(doc.body&&doc.body.className!==document.body.className)document.body.className=doc.body.className;
     document.body.style.overflow='';   // any open overlay is destroyed by this swap; never leave scroll locked
     cur.innerHTML=nw.innerHTML;
+    // The tab bar now lives outside .wrap → swap it explicitly so its active tab / run-aware
+    // Chat href / badges track the new page. Absent on some pages (e.g. wall) → just leave it.
+    var ntb=doc.querySelector('.tabs'), ctb=document.querySelector('.tabs');
+    if(ntb&&ctb){ ctb.parentNode.replaceChild(ntb.cloneNode(true), ctb); }
+    else if(ntb&&!ctb){ document.body.appendChild(ntb.cloneNode(true)); }
+    else if(!ntb&&ctb){ ctb.parentNode.removeChild(ctb); }
     var s=cur.querySelectorAll('script');
     for(var i=0;i<s.length;i++){var ns=document.createElement('script');if(s[i].src)ns.src=s[i].src;else ns.textContent=s[i].textContent;s[i].parentNode.replaceChild(ns,s[i]);}
     return true;
@@ -432,7 +438,10 @@ const FOOT = `${FOOTER_LINKS}</div></body></html>`;
 // iOS Safari, in-flow content after a fixed bottom bar peeks out below it on overscroll (the
 // tabs looked like they "moved" at the bottom). Footer-then-tabs fixes that while keeping the
 // router's swap intact.
-const footWithTabs = (tabsHtml) => `${FOOTER_LINKS}${tabsHtml}</div></body></html>`;
+// The tab bar lives OUTSIDE .wrap (a direct <body> child) so no ancestor of .wrap can ever
+// become a containing block for its position:fixed (iOS WebKit was trapping it mid-page). The
+// SPA router swaps it explicitly (see __swapWrap). .wrap closes first, then the nav.
+const footWithTabs = (tabsHtml) => `${FOOTER_LINKS}</div>${tabsHtml}</body></html>`;
 
 // The scoreboard basketball mark — used in the masthead.
 const BALL = `<svg class="ball" viewBox="0 0 40 40" fill="none" aria-hidden="true"><circle cx="20" cy="20" r="18" fill="#22615A"/><path d="M20 2v36M2 20h36M7 7c7 5 7 21 0 26M33 7c-7 5-7 21 0 26" stroke="#F8F5EF" stroke-width="1.5" opacity=".85"/></svg>`;
@@ -2442,10 +2451,15 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
     ${hidden ? `<div class="notice" style="margin-top:10px">🔒 <b>Hidden run</b> — only admins can see this. Flip it live when it's ready.${isAdmin ? ` <form method="POST" action="/pickleball/publish" style="display:inline"><button class="btn sm" type="submit" style="margin-left:6px">Make it live</button></form>` : ''}</div>` : (isAdmin ? `<div class="notice good" style="margin-top:10px">✅ <b>Live</b> — members can join. <form method="POST" action="/pickleball/publish" style="display:inline"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit" style="margin-left:6px">Hide again</button></form></div>` : '')}
     <div class="phead"><h1>Pickleball 🥒</h1></div>
     <p class="psub" style="margin:-4px 0 8px;color:var(--muted)">${cancelled ? 'Cancelled this week' : (runLabel ? `Next: ${esc(wdayFull(runDate))}, ${esc(runLabel)}` : 'No date set')} · ${going}/${cap} in${waiting ? ` · ${waiting} waiting` : ''}</p>
-    ${cancelled || !runDate ? '' : `<div class="pkbanner">
-      <div class="l"><span>Next run</span><b>${esc(wdayFull(runDate))} · ${esc(runLabel)}</b></div>
-      <div class="r"><span>Starts in</span><b class="tick" data-tip="${tipoff}">${esc(fmtCountdown(tipoff))}</b></div>
-    </div>`}
+    <div class="gymbanner">
+      <img src="/gym.jpg?v=4" alt="The Bridge court" width="1160" height="580" fetchpriority="high">
+      <div class="gymcap">
+        ${cancelled
+          ? `<div class="l">This week<b>🚫 Run cancelled</b></div>`
+          : `<div class="l">Next run<b>${esc(wdayFull(runDate))} · ${esc(runLabel)} · 6 PM</b></div>
+        <div class="r"><span>Starts in</span><b class="tick" data-tip="${tipoff}">${esc(fmtCountdown(tipoff))}</b></div>`}
+      </div>
+    </div>
     ${announcement ? `<div class="notice" style="margin-top:10px;display:flex;align-items:flex-start;gap:8px;justify-content:space-between"><span>📣 <b>Announcement</b> · ${esc(announcement.body)}${announcement.author ? `<span style="color:var(--muted)"> — ${esc(announcement.author)}</span>` : ''}</span>${canOperate ? `<form method="POST" action="/pickleball/announce/retract" style="margin:0;flex-shrink:0"><button class="btn ghost sm" type="submit" title="Retract this announcement">Retract</button></form>` : ''}</div>` : ''}
     ${canOperate ? `<details class="announce-compose" style="margin-top:8px"><summary>📣 Post announcement</summary><form method="POST" action="/pickleball/announce"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all pickleball members (pushes to their phones)"></textarea><div style="height:8px"></div><button class="btn sm" type="submit">Post &amp; notify</button></form></details>` : ''}
     ${canOperate ? `<form method="POST" action="/pickleball/date" style="display:flex;gap:8px;align-items:center;margin:6px 0 4px"><input type="date" name="date" value="${esc(runDate)}" style="font-size:16px"><button class="btn ghost sm" type="submit">Set run date</button></form>` : ''}
@@ -2486,7 +2500,7 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
         if(window.fetch)fetch('/u/'+id+'/card',{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.ok?r.text():Promise.reject();}).then(function(h){if(b)b.innerHTML=h;}).catch(function(){if(b)b.innerHTML='<div class="pcload">Couldn\\u2019t load that profile.</div>';});};
       window.pvClose=function(){var w=document.getElementById('pvwrap');if(!w)return;w.classList.remove('open');document.body.style.overflow='';};
       // Countdown ticker for the next-run banner (mirrors the check-in tip-off ticker).
-      function pkTick(){var el=document.querySelector('.pkbanner .tick');if(!el)return;var tip=+el.getAttribute('data-tip');var diff=tip-Date.now();
+      function pkTick(){var el=document.querySelector('.gymbanner .tick');if(!el)return;var tip=+el.getAttribute('data-tip');var diff=tip-Date.now();
         if(diff<=0){el.textContent='NOW';return;}
         function pad(n){return String(n).padStart(2,'0');}
         var d=Math.floor(diff/86400000),h=Math.floor(diff%86400000/3600000),m=Math.floor(diff%3600000/60000);
