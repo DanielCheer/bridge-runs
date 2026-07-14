@@ -21,7 +21,7 @@ import {
 import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap,
-  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage, runsPage, pkChatPage, pkJoinPage,
+  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage, runsPage, pkChatPage, pkJoinPage, waiverPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1434,6 +1434,24 @@ app.get('/status', requireLogin, (req, res) => {
   res.send(statusPage({ email: req.userEmail, status }));
 });
 
+// One-time waiver gate — the join routes send a member here when waiver_ok is unset. They
+// confirm they've signed, we flip waiver_ok, and they're returned to the run to check in.
+app.get('/waiver', requireLogin, (req, res) => {
+  const a = applicantByEmail(req.userEmail);
+  const next = safeNextPath(req.query.next);
+  if (a && a.waiver_ok) return res.redirect(next); // already signed → nothing to do
+  res.send(waiverPage({ email: req.userEmail, next, err: req.query.err || '' }));
+});
+app.post('/waiver', requireLogin, (req, res) => {
+  const a = applicantByEmail(req.userEmail);
+  const next = safeNextPath(req.body.next);
+  if (!a) return res.redirect('/status');
+  if (!req.body.agree) return res.redirect('/waiver?next=' + encodeURIComponent(next) + '&err=' + encodeURIComponent('Please check the box to confirm you signed the waiver.'));
+  db.prepare('UPDATE applicants SET waiver_ok = 1 WHERE email = ?').run(a.email);
+  audit(req.userEmail, 'player', 'waiver:ack', '');
+  res.redirect(next);
+});
+
 // ---------- CHECK-IN ----------
 const stmtRunIsOpen = db.prepare('SELECT is_open FROM run_state WHERE run_date = ?');
 function runIsOpen(runDate) {
@@ -2675,6 +2693,7 @@ app.post('/checkin/join', requireLogin, (req, res) => {
   const a = applicantByEmail(email);
   if (!a || a.status !== 'approved') return res.redirect('/checkin');
   if (a.suspended) return res.redirect('/checkin'); // suspended → can't check in (page shows why)
+  if (!a.waiver_ok) return res.redirect('/waiver?next=/checkin'); // one-time waiver before first join
   const runDate = nextRunDate();
   if (runIsCancelled(runDate)) return res.redirect('/checkin'); // run cancelled → no check-in (page shows why)
   if (runIsLocked(runDate)) return res.redirect('/checkin'); // locked at 2 PM → no new self-joins (drops/waitlist still churn; host adds a +1)
@@ -2914,6 +2933,7 @@ app.post('/checkin/optin', requireLogin, (req, res) => {
   const runDate = nextRunDate();
   const me = applicantByEmail(req.userEmail);
   if (me && me.suspended) return res.redirect('/checkin'); // suspended → can't re-seat (matches /checkin/join)
+  if (me && !me.waiver_ok) return res.redirect('/waiver?next=/checkin'); // one-time waiver before seating
   if (runIsCancelled(runDate) || runIsLocked(runDate)) return res.redirect('/checkin'); // cancelled/locked → no re-seat (matches /checkin/join)
   db.prepare('DELETE FROM regular_optout WHERE run_date = ? AND email = ?').run(runDate, req.userEmail);
   // WIRING (autoJoinTeam is now rollover-gated in ensureWeek, not per-view): a team
@@ -3765,6 +3785,7 @@ app.get('/pickleball/run.ics', requireLogin, (req, res) => {
 app.post('/pickleball/join', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
   if (!g.a || g.a.suspended) return res.redirect('/pickleball'); // need a profile to join; suspended can't (matches basketball)
+  if (!g.a.waiver_ok) return res.redirect('/waiver?next=/pickleball'); // one-time waiver before first join
   pkEnsureWeek();
   const rd = pkRunDate();
   if (pkIsCancelled(rd) || !pkIsOpen(rd)) return res.redirect('/pickleball');

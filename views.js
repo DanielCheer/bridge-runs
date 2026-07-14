@@ -3656,6 +3656,26 @@ const bannerCropScript = () => `<script>
 })();
 </script>`;
 
+// One-time waiver gate — shown when a member without waiver_ok tries to join ANY run's
+// queue. They confirm they've signed, we set waiver_ok, and they're returned to the run.
+export function waiverPage({ email, next = '/checkin', err = '' } = {}) {
+  return HEAD('Waiver — The Bridge', '', { wall: false }) + header(`<b>WAIVER</b>${esc(email)}`, '') + `
+    <div class="rule"></div>
+    <span class="eyebrow">One-time — before your first check-in</span>
+    <h1>Sign the waiver first</h1>
+    <p class="lead">Before you join a run, you need to complete the waiver. It's a one-time step — sign it once and you won't be asked again. No waiver, no play.</p>
+    ${err ? `<div class="notice bad">${esc(err)}</div>` : ''}
+    ${qrBlock}
+    <form method="POST" action="/waiver" class="card rail" style="margin-top:14px">
+      <input type="hidden" name="next" value="${esc(next)}">
+      <label class="check"><input type="checkbox" name="agree" value="1" required><span>I've signed the waiver and agree to its terms.</span></label>
+      <div style="height:12px"></div>
+      <button class="btn primary" type="submit">Continue →</button>
+    </form>
+    <div class="foot" style="margin-top:20px"><a href="${esc(next)}">← Back</a></div>
+  ` + FOOT;
+}
+
 export function bannerPage({ err = '', bannerVer = '0', action = '/admin/banner', imgSrc = '/gym.jpg', back = '/checkin' } = {}) {
   const errMsg = err === 'big' ? 'That image is too large (max 14 MB).'
     : err === 'type' ? 'That file isn’t a supported image (JPG, PNG, or WebP).'
