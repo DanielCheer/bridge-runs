@@ -1927,7 +1927,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
     ${canOperate ? `<div id="tgnudge" class="notice" style="margin-top:10px;display:flex;align-items:center;gap:10px;justify-content:space-between">
       <span>🏀 <b>You’re on the team</b> — you’ve got extra controls.</span>
       <span style="display:flex;gap:8px;align-items:center;flex-shrink:0">
-        <button type="button" class="btn sm" onclick="try{localStorage.setItem('tgSeen1','1');}catch(e){}var n=document.getElementById('tgnudge');if(n)n.style.display='none';if(window.__startTour)window.__startTour(true);">Take the tour</button>
+        <button type="button" class="btn sm" onclick="try{localStorage.setItem('tgSeen1','1');localStorage.removeItem('bridgeTourV1');}catch(e){}location.href='/runs';">Take the tour</button>
         <button type="button" aria-label="Dismiss" onclick="try{localStorage.setItem('tgSeen1','1');}catch(e){}var n=document.getElementById('tgnudge');if(n)n.style.display='none';" style="border:0;background:none;font-size:20px;line-height:1;color:var(--muted);cursor:pointer;padding:0 4px">&times;</button>
       </span>
     </div>
@@ -2542,7 +2542,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
     ${inbox}
     ${annHistory}
     ${annSheet}
-    <div class="foot signout"><a href="/checkin" onclick="try{localStorage.removeItem('bridgeTourV1');}catch(e){}">↻ Replay app tour${canOperate ? ' (incl. team controls)' : ''}</a> · <a href="/logout">Sign out</a></div>
+    <div class="foot signout"><a href="/runs" onclick="try{localStorage.removeItem('bridgeTourV1');}catch(e){}">↻ Replay app tour${canOperate ? ' (incl. team controls)' : ''}</a> · <a href="/logout">Sign out</a></div>
     <script>
       (function(){
         // Surgical poll-and-patch (P0-1): patch the DM/group badges every tick; the

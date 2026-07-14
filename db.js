@@ -473,6 +473,43 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_pk_checkins_run ON pk_checkins(run_date);
 `);
 
+// --- Pickleball chat (2026-07, ISOLATED) — its own run chat on pk_group_* tables, a full
+// mirror of the basketball group_* chat (same columns incl. mentions/pins/voice/video/image)
+// so the check-in view + helpers clone cleanly. Nothing here touches basketball's chat data.
+// New tables → the whole shape is declared up front (no per-column migration guards needed).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS pk_group_messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_email TEXT NOT NULL,
+    body       TEXT NOT NULL DEFAULT '',
+    reply_to   INTEGER,
+    image      TEXT,
+    mentions   TEXT,
+    pinned_at  TEXT,
+    pinned_by  TEXT,
+    audio      TEXT,
+    audio_dur  INTEGER,
+    video      TEXT,
+    video_dur  INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_pk_group_messages_from ON pk_group_messages(from_email, created_at);
+  CREATE TABLE IF NOT EXISTS pk_group_reactions (
+    group_message_id INTEGER NOT NULL,
+    from_email       TEXT NOT NULL,
+    emoji            TEXT NOT NULL,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (group_message_id, from_email),
+    FOREIGN KEY (group_message_id) REFERENCES pk_group_messages(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_pk_group_reactions_msg ON pk_group_reactions(group_message_id);
+  CREATE TABLE IF NOT EXISTS pk_group_reads (
+    email        TEXT PRIMARY KEY,
+    last_read_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_read_id INTEGER NOT NULL DEFAULT 0
+  );
+`);
+
 // Prune stale magic-link tokens on startup. A token is dead once it's been used
 // OR has expired — keeping them forever just grows the table unbounded (a fresh
 // row is written on every /login). Unused-and-still-valid tokens are preserved
@@ -513,6 +550,10 @@ function rekeyEmail(oldEmail, newEmail) {
     db.prepare('UPDATE group_messages        SET pinned_by=?   WHERE pinned_by=?').run(newEmail, oldEmail);
     db.prepare('UPDATE group_reactions       SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE group_reads           SET email=?       WHERE email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE pk_group_messages     SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE pk_group_messages     SET pinned_by=?   WHERE pinned_by=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE pk_group_reactions    SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE pk_group_reads        SET email=?       WHERE email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE announcement_reads    SET email=?       WHERE email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE announcement_dismissals SET email=?     WHERE email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE push_subscriptions    SET email=?       WHERE email=?').run(newEmail, oldEmail);

@@ -627,6 +627,9 @@ function pruneOldMedia() {
     const g = db.prepare("SELECT id, image, audio, video FROM group_messages WHERE created_at < datetime('now','-1 year') AND (audio IS NOT NULL OR video IS NOT NULL OR image LIKE '/chat-media/%')").all();
     const gclr = db.prepare("UPDATE group_messages SET audio = NULL, video = NULL, image = CASE WHEN image LIKE '/chat-media/%' THEN NULL ELSE image END WHERE id = ?");
     for (const r of g) { safeUnlinkChatImage(r.image); safeUnlinkChatImage(r.audio); safeUnlinkChatImage(r.video); gclr.run(r.id); n++; }
+    const pg = db.prepare("SELECT id, image, audio, video FROM pk_group_messages WHERE created_at < datetime('now','-1 year') AND (audio IS NOT NULL OR video IS NOT NULL OR image LIKE '/chat-media/%')").all();
+    const pgclr = db.prepare("UPDATE pk_group_messages SET audio = NULL, video = NULL, image = CASE WHEN image LIKE '/chat-media/%' THEN NULL ELSE image END WHERE id = ?");
+    for (const r of pg) { safeUnlinkChatImage(r.image); safeUnlinkChatImage(r.audio); safeUnlinkChatImage(r.video); pgclr.run(r.id); n++; }
     const d = db.prepare("SELECT id, image FROM messages WHERE created_at < datetime('now','-1 year') AND image LIKE '/chat-media/%'").all();
     const dclr = db.prepare('UPDATE messages SET image = NULL WHERE id = ?');
     for (const r of d) { safeUnlinkChatImage(r.image); dclr.run(r.id); n++; }
@@ -860,6 +863,106 @@ const stmtMarkGroupRead = db.prepare(`INSERT INTO group_reads (email, last_read_
 function markGroupRead(me) {
   stmtMarkGroupRead.run(me);
 }
+
+// --- PICKLEBALL chat helpers (ISOLATED clone of the group_* helpers above, scoped to the
+// pk_group_* tables). Nothing here reads/writes basketball chat. Identity population is the
+// SAME approved-non-guest roster (pickleball is open-join). Kept a faithful mirror so the
+// chat view + routes clone cleanly; push notifications point at /pickleball/chat.
+const stmtPkGroupUnread = db.prepare(`
+  SELECT COUNT(*) n FROM pk_group_messages
+  WHERE id > COALESCE((SELECT last_read_id FROM pk_group_reads WHERE email = ?), 0)
+    AND from_email != ?`);
+function pkGroupUnread(email) { return email ? stmtPkGroupUnread.get(email, email).n : 0; }
+
+function hydratePkGroupMessages(me, msgs) {
+  const reactions = new Map(), parents = new Map(), senders = new Map();
+  if (msgs.length) {
+    const ids = msgs.map(m => m.id);
+    const ph = ids.map(() => '?').join(',');
+    for (const r of db.prepare(`
+      SELECT group_message_id AS mid, emoji, COUNT(*) AS cnt,
+             SUM(CASE WHEN from_email = ? THEN 1 ELSE 0 END) AS mine
+      FROM pk_group_reactions WHERE group_message_id IN (${ph})
+      GROUP BY group_message_id, emoji ORDER BY group_message_id, emoji`).all(me, ...ids)) {
+      if (!reactions.has(r.mid)) reactions.set(r.mid, []);
+      reactions.get(r.mid).push({ emoji: r.emoji, count: r.cnt, mine: r.mine > 0 });
+    }
+    const replyIds = [...new Set(msgs.map(m => m.reply_to).filter(Boolean))];
+    if (replyIds.length) {
+      const ph2 = replyIds.map(() => '?').join(',');
+      for (const pr of db.prepare(`SELECT id, from_email, body, image, audio, video FROM pk_group_messages WHERE id IN (${ph2})`).all(...replyIds))
+        parents.set(pr.id, pr);
+    }
+    const emails = [...new Set([...msgs.map(m => m.from_email), ...[...parents.values()].map(p => p.from_email)])];
+    const ph3 = emails.map(() => '?').join(',');
+    for (const s of db.prepare(`SELECT id, full_name, email, is_host FROM applicants WHERE email IN (${ph3})`).all(...emails))
+      senders.set(s.email, s);
+  }
+  const mentionNames = new Map();
+  const mentionIds = [...new Set(msgs.flatMap(m =>
+    (m.mentions ? String(m.mentions).split(',') : []).map(Number).filter(Boolean)))];
+  if (mentionIds.length) {
+    const phm = mentionIds.map(() => '?').join(',');
+    for (const r of db.prepare(`SELECT id, full_name FROM applicants WHERE id IN (${phm})`).all(...mentionIds))
+      mentionNames.set(r.id, r.full_name);
+  }
+  return { reactions, parents, senders, mentionNames };
+}
+function hasOlderPkGroup(id) {
+  return id ? !!db.prepare('SELECT 1 FROM pk_group_messages WHERE id < ? LIMIT 1').get(id) : false;
+}
+function loadPkGroupChat(me) {
+  const msgs = db.prepare(`SELECT * FROM (SELECT * FROM pk_group_messages ORDER BY id DESC LIMIT 200) ORDER BY id ASC`).all();
+  const maps = hydratePkGroupMessages(me, msgs);
+  const members = db.prepare(`
+    SELECT id, full_name, email, is_host, is_team, is_regular, avatar
+    FROM applicants
+    WHERE status = 'approved' AND email NOT LIKE '%@guest.local'
+    ORDER BY is_host DESC, is_team DESC, is_regular DESC, full_name COLLATE NOCASE`).all();
+  const pinned = db.prepare('SELECT * FROM pk_group_messages WHERE pinned_at IS NOT NULL ORDER BY pinned_at DESC LIMIT 5').all();
+  const pinnedNames = new Map();
+  if (pinned.length) {
+    const pe = [...new Set(pinned.map(p => p.from_email))];
+    const ph = pe.map(() => '?').join(',');
+    for (const s of db.prepare(`SELECT email, full_name FROM applicants WHERE email IN (${ph})`).all(...pe)) pinnedNames.set(s.email, s.full_name);
+  }
+  return { msgs, ...maps, members, memberCount: members.length, pinned, pinnedNames,
+           hasOlder: msgs.length ? hasOlderPkGroup(msgs[0].id) : false };
+}
+function loadPkGroupChatOlder(me, beforeId) {
+  const msgs = db.prepare(`SELECT * FROM (SELECT * FROM pk_group_messages WHERE id < ? ORDER BY id DESC LIMIT 200) ORDER BY id ASC`).all(beforeId);
+  const maps = hydratePkGroupMessages(me, msgs);
+  return { msgs, ...maps, hasOlder: msgs.length ? hasOlderPkGroup(msgs[0].id) : false };
+}
+function notifyPkMentions(fromEmail, body, mentions) {
+  if (!mentions) return;
+  const ids = String(mentions).split(',').map(Number).filter(Boolean);
+  if (!ids.length) return;
+  const ph = ids.map(() => '?').join(',');
+  const rows = db.prepare(`SELECT email FROM applicants WHERE id IN (${ph}) AND email NOT LIKE '%@guest.local'`).all(...ids);
+  const from = String(fromEmail).toLowerCase();
+  const emails = rows.map(r => r.email).filter(e => e.toLowerCase() !== from);
+  if (!emails.length) return;
+  const sender = applicantByEmail(fromEmail);
+  const name = sender ? sender.full_name : 'Someone';
+  setImmediate(() => sendPush(emails, { title: `${name} mentioned you`, body: (body || '').slice(0, 140), url: '/pickleball/chat', tag: 'pkmention' }));
+}
+const stmtPkGroupMentions = db.prepare(`
+    SELECT mentions FROM pk_group_messages
+    WHERE id > COALESCE((SELECT last_read_id FROM pk_group_reads WHERE email = ?), 0)
+      AND from_email != ? AND mentions IS NOT NULL AND mentions != ''`);
+function pkGroupMentionUnread(email, applicantId) {
+  if (!email || !applicantId) return 0;
+  const rows = stmtPkGroupMentions.all(email, email);
+  const idStr = String(applicantId);
+  let n = 0;
+  for (const r of rows) if (String(r.mentions).split(',').includes(idStr)) n++;
+  return n;
+}
+const stmtMarkPkGroupRead = db.prepare(`INSERT INTO pk_group_reads (email, last_read_id, last_read_at)
+              VALUES (?, (SELECT COALESCE(MAX(id),0) FROM pk_group_messages), datetime('now'))
+              ON CONFLICT(email) DO UPDATE SET last_read_id = excluded.last_read_id, last_read_at = excluded.last_read_at`);
+function markPkGroupRead(me) { stmtMarkPkGroupRead.run(me); }
 
 // The SINGLE authorization seam for messaging. Host-only in v1: a player may
 // message the host; the host may message any approved, non-guest player. To open
@@ -1366,6 +1469,10 @@ const stmtPollChat = db.prepare('SELECT COALESCE(MAX(id),0) mx FROM group_messag
 // propagate to other clients' feeds without a COUNT(*) scan (deletes/pins don't move MAX(id)).
 function bumpChatSeq() { setSetting('chat_seq', String((Number(getSetting('chat_seq')) || 0) + 1)); }
 const stmtPollChatReact = db.prepare('SELECT COUNT(*) c, MAX(created_at) mx FROM group_reactions');
+// Pickleball chat poll fingerprint (isolated mirror; own seq key in app_settings).
+const stmtPollPkChat = db.prepare('SELECT COALESCE(MAX(id),0) mx FROM pk_group_messages');
+const stmtPollPkChatReact = db.prepare('SELECT COUNT(*) c, MAX(created_at) mx FROM pk_group_reactions');
+function bumpPkChatSeq() { setSetting('pk_chat_seq', String((Number(getSetting('pk_chat_seq')) || 0) + 1)); }
 const stmtPollDM = db.prepare('SELECT MAX(id) mx, COUNT(*) c FROM messages WHERE from_email = ? OR to_email = ?');
 
 // Held late-regulars are released onto the floor from 4pm on the RUN DAY onward — keyed
