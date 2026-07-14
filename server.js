@@ -3011,6 +3011,8 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
     db.prepare('DELETE FROM votes WHERE applicant_id = ?').run(id);
     // hard-delete is the ONLY path that removes attendance history
     db.prepare('DELETE FROM attendance WHERE email = ?').run(a.email);
+    db.prepare('DELETE FROM pk_checkins WHERE email = ?').run(a.email);
+    db.prepare('DELETE FROM pk_attendance WHERE email = ?').run(a.email);
     // Best-effort: delete any chat photo FILES this person uploaded (DM + group) before
     // dropping the rows. Keyed by message id in the DB, so we collect the image paths
     // first, then unlink. Stickers (/stickers/*) are shared assets → safeUnlinkChatImage
@@ -3152,13 +3154,26 @@ function pkPartition(rd) {
 // Access gate: approved players + admins. HIDDEN while program 2 is inactive → admins only.
 function pkGate(req, res) {
   const a = applicantByEmail(req.userEmail);
-  if (!a || (a.status !== 'approved' && !isAdmin(req.userEmail))) { res.redirect('/status'); return null; }
   const admin = isAdmin(req.userEmail);
+  if (!admin && (!a || a.status !== 'approved')) { res.redirect('/status'); return null; } // row-less admins allowed (matches requirePlayer)
   if (!pkProgramActive() && !admin) { res.status(404).send('Not found'); return null; } // hidden from everyone but admins
   return { a, admin, canOperate: admin }; // pickleball operator = admin for now (Daniel)
 }
+// Lazy rollover (mirrors basketball's ensureWeek): once an EXPLICIT pk_run_date passes, archive
+// the floor into pk_attendance, purge past rows, and revert to the default (next basketball date).
+function pkEnsureWeek() {
+  const set = getSetting('pk_run_date');
+  if (!set || set >= ymdLocal()) return; // no explicit date, or still upcoming/today
+  const floor = db.prepare('SELECT email, name FROM pk_checkins WHERE run_date = ? ORDER BY sort_order ASC, id ASC LIMIT ?').all(set, PK_CAP);
+  const ins = db.prepare('INSERT OR IGNORE INTO pk_attendance (run_date, email, name) VALUES (?,?,?)');
+  for (const p of floor) if (!/@guest\.local$/.test(p.email)) ins.run(set, p.email, p.name);
+  db.prepare('DELETE FROM pk_checkins WHERE run_date <= ?').run(set);
+  db.prepare('DELETE FROM pk_run_state WHERE run_date <= ?').run(set);
+  db.prepare("DELETE FROM app_settings WHERE key = 'pk_run_date'").run();
+}
 app.get('/pickleball', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
+  pkEnsureWeek();
   const rd = pkRunDate(), part = pkPartition(rd);
   const mine = part.rows.find(p => p.email === req.userEmail);
   const myState = mine ? (part.floor.indexOf(mine) >= 0 ? 'in' : 'waitlist') : 'out';
@@ -3170,7 +3185,10 @@ app.get('/pickleball', requireLogin, (req, res) => {
   }));
 });
 app.post('/pickleball/join', requireLogin, (req, res) => {
-  const g = pkGate(req, res); if (!g) return; const rd = pkRunDate();
+  const g = pkGate(req, res); if (!g) return;
+  if (!g.a || g.a.suspended) return res.redirect('/pickleball'); // need a profile to join; suspended can't (matches basketball)
+  pkEnsureWeek();
+  const rd = pkRunDate();
   if (pkIsCancelled(rd) || !pkIsOpen(rd)) return res.redirect('/pickleball');
   const { rows } = pkPartition(rd);
   if (rows.length >= PK_CAP + PK_WAIT && !rows.find(p => p.email === req.userEmail)) return res.redirect('/pickleball'); // full
@@ -3190,15 +3208,22 @@ app.post('/pickleball/cancel', requireLogin, (req, res) => {
   pkSetState(rd, 'cancelled', on); if (on) { pkSetState(rd, 'is_open', 0); db.prepare('DELETE FROM pk_checkins WHERE run_date = ?').run(rd); }
   res.redirect('/pickleball');
 });
-app.post('/pickleball/date', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const d = String(req.body.date || '').trim(); if (/^\d{4}-\d{2}-\d{2}$/.test(d)) setSetting('pk_run_date', d); res.redirect('/pickleball'); });
+app.post('/pickleball/date', requireLogin, (req, res) => {
+  const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball');
+  const d = String(req.body.date || '').trim();
+  if (!d) db.prepare("DELETE FROM app_settings WHERE key = 'pk_run_date'").run();          // empty → back to the default (next basketball date)
+  else if (/^\d{4}-\d{2}-\d{2}$/.test(d) && d >= ymdLocal()) setSetting('pk_run_date', d);  // no past dates
+  res.redirect('/pickleball');
+});
 app.post('/pickleball/guest', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball');
-  const rd = pkRunDate(), name = (req.body.name || '').trim().slice(0, 60);
+  const rd = pkRunDate(); if (pkIsCancelled(rd)) return res.redirect('/pickleball');
+  const name = (req.body.name || '').trim().slice(0, 60);
   if (name) { const { rows } = pkPartition(rd); if (rows.length < PK_CAP + PK_WAIT) { const em = `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}@guest.local`; db.prepare('INSERT INTO pk_checkins (run_date, email, name) VALUES (?,?,?)').run(rd, em, name + ' (guest)'); } }
   res.redirect('/pickleball');
 });
 app.post('/pickleball/remove', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); db.prepare('DELETE FROM pk_checkins WHERE run_date = ? AND email = ?').run(pkRunDate(), String(req.body.email || '')); res.redirect('/pickleball'); });
-app.post('/pickleball/bump', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(); const row = db.prepare('SELECT MIN(sort_order) m FROM pk_checkins WHERE run_date = ?').get(rd); db.prepare('UPDATE pk_checkins SET sort_order = ? WHERE run_date = ? AND email = ?').run(((row && row.m) || 0) - 1, rd, String(req.body.email || '')); res.redirect('/pickleball'); });
+app.post('/pickleball/bump', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(); if (pkIsCancelled(rd)) return res.redirect('/pickleball'); const row = db.prepare('SELECT MIN(sort_order) m FROM pk_checkins WHERE run_date = ?').get(rd); db.prepare('UPDATE pk_checkins SET sort_order = ? WHERE run_date = ? AND email = ?').run(((row && row.m) || 0) - 1, rd, String(req.body.email || '')); res.redirect('/pickleball'); });
 app.post('/pickleball/publish', requireAdmin, (req, res) => { db.prepare('UPDATE program SET active = ? WHERE id = 2').run(req.body.on === '0' ? 0 : 1); audit(req.userEmail, 'admin', req.body.on === '0' ? 'pk:hide' : 'pk:publish', ''); res.redirect('/pickleball'); });
 
 // Terminal error handler — a sync throw (or a forwarded async reject via next(e)) in any route

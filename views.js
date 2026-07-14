@@ -439,7 +439,7 @@ const BALL = `<svg class="ball" viewBox="0 0 40 40" fill="none" aria-hidden="tru
 // `weekdayShort` reflects the current run's day (defaults to FRI for pages with no run
 // context). `ann` (optional) = the viewer's announcement state — when present the bell +
 // its bottom-sheet panel render; when omitted (public / non-approved pages) neither does.
-const header = (right = '', weekdayShort = '', ann = null, hours = '7–10 PM') => {
+const header = (right = '', weekdayShort = '', ann = null, hours = '') => { // hours passed only where there's a run context; blank on other pages
   const { btn, sheet } = annBell(ann);
   return `<div class="mast">
   <div class="bl">${BALL}<div class="wm"><b>THE BRIDGE</b><span>Adv Runs</span></div></div>
@@ -1265,7 +1265,7 @@ const firstRunTour = `
     var STEPS_ALL=[
       {ttl:"Welcome to the run 👋",txt:"Here’s a quick tour of the app."},
       {sel:'[data-tour="join"]',ttl:"Grab your spot",txt:"Tap “I’m in” each week to claim a spot. Spots are limited — first come, first served."},
-      {sel:'.tabs a[href="/chat"]',ttl:"Run chat",txt:"Chat with the whole run — photos, plans and @mentions. On the team? Press &amp; hold a message to Pin it."},
+      {sel:'.tabs a[href="/chat"]',ttl:"Run chat",txt:"Chat with the whole run — photos, plans and @mentions. On the team? Press & hold a message to Pin it."},
       {sel:'.tabs a[href="/profile"]',ttl:"Your profile",txt:"Your stats, photo and settings live here."},
       {sel:'.bellbtn',ttl:"Announcements",txt:"Updates from the host show up here."},
       {sel:'[data-tour="ops-run"]',op:1,ttl:"Run the check-in",txt:"Open or close check-in by hand (it auto-opens Wed and locks at 2 PM). Tap the scoreboard’s “Who’s going” to remove or bump players."},

@@ -502,6 +502,8 @@ function rekeyEmail(oldEmail, newEmail) {
   try {
     db.prepare('UPDATE checkins              SET email=?       WHERE email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE attendance            SET email=?       WHERE email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE pk_checkins           SET email=?       WHERE email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE pk_attendance         SET email=?       WHERE email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE regular_optout        SET email=?       WHERE email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE votes                 SET voter_email=? WHERE voter_email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE messages              SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
