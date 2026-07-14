@@ -405,7 +405,7 @@ const WALL_BODY = `<div id="installwall" role="dialog" aria-modal="true" aria-la
 })();</script>`;
 
 const HEAD = (title, bodyClass = '', { wall = true } = {}) => `<!doctype html><html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#F8F5EF">
 <link rel="icon" href="/favicon.ico?v=2" sizes="any">
 <link rel="icon" type="image/png" href="/icon-192.png?v=2">
@@ -2418,14 +2418,14 @@ export function pkJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, a
 
 // Pickleball run — a SEPARATE, hidden run on its own pk_* tables. Dedicated view (reuses the
 // shell + avatar + list styles); does not touch the basketball checkinPage. Native POST forms.
-export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', floorPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', floorPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, myConfirmed = false, iAutoRenew = false, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
   const full = going >= cap, totalFull = (going + waiting) >= (cap + waitlistCap);
   const rmForm = (p) => `<form method="POST" action="/pickleball/remove" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn leave sm" type="submit">Remove</button></form>`;
   // Tappable name → profile popup (reuses the shared pvOpen + /u/:id/card); guests (no
   // applicant_id) stay plain text. Role badge mirrors the basketball roster.
   const nameLink = (p, inner) => (p.applicant_id && !/@guest\.local$/.test(p.email)) ? `<a class="lrlink" href="/u/${p.applicant_id}" onclick="if(window.pvOpen){pvOpen(${p.applicant_id});return false;}">${inner}</a>` : inner;
   const pkRole = (p) => roleBadge({ host: !!p.is_host, team: !!p.is_team, regular: !!p.is_regular, guest: /@guest\.local$/.test(p.email) });
-  const rowFloor = (p, n) => `<div class="lr"><span class="ln">${n}</span>${nameLink(p, `<span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''}</span>`)}${pkRole(p)}${canOperate ? rmForm(p) : ''}</div>`;
+  const rowFloor = (p, n) => `<div class="lr"><span class="ln">${n}</span>${nameLink(p, `<span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''}${p.confirmed_at ? ' <span class="tag reg" title="Confirmed coming">✓</span>' : ''}</span>`)}${pkRole(p)}${canOperate ? rmForm(p) : ''}</div>`;
   const rowWait = (p, i) => `<div class="lr"><span class="ln">W${i}</span>${nameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}</span>`)}${canOperate ? `<form method="POST" action="/pickleball/bump" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn sm" type="submit">Bump in</button></form>${rmForm(p)}` : ''}</div>`;
   let action = '';
   if (cancelled) action = `<button class="btn" type="button" disabled>Run cancelled</button>`;
@@ -2450,7 +2450,18 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
     ${canOperate ? `<details class="announce-compose" style="margin-top:8px"><summary>📣 Post announcement</summary><form method="POST" action="/pickleball/announce"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all pickleball members (pushes to their phones)"></textarea><div style="height:8px"></div><button class="btn sm" type="submit">Post &amp; notify</button></form></details>` : ''}
     ${canOperate ? `<form method="POST" action="/pickleball/date" style="display:flex;gap:8px;align-items:center;margin:6px 0 4px"><input type="date" name="date" value="${esc(runDate)}" style="font-size:16px"><button class="btn ghost sm" type="submit">Set run date</button></form>` : ''}
     <div class="controls" style="margin-top:12px">${action}${runToggle}</div>
-    <a class="btn ghost sm" href="/pickleball/chat" style="margin-top:10px;display:inline-flex;align-items:center;gap:6px">💬 Pickleball chat</a>
+    ${myState === 'in' && !cancelled ? (myConfirmed
+      ? `<div class="notice good" style="margin-top:10px">✓ <b>You're confirmed</b> for this run — see you there!</div>`
+      : `<form method="POST" action="/pickleball/confirm" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming</button></form>`) : ''}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px">
+      <a class="btn ghost sm" href="/pickleball/chat" style="display:inline-flex;align-items:center;gap:6px">💬 Pickleball chat</a>
+      <a class="btn ghost sm" href="/pickleball/season" style="display:inline-flex;align-items:center;gap:6px">🏆 Season board</a>
+      ${cancelled ? '' : `<a href="/pickleball/run.ics" style="font-size:13px;color:var(--muted)">📅 Add to calendar</a>`}
+    </div>
+    <form method="POST" action="/pickleball/autorenew" style="margin-top:10px">
+      <input type="hidden" name="on" value="${iAutoRenew ? '0' : '1'}">
+      <button class="btn ghost sm arpill" type="submit" title="Auto-join the pickleball run each week">${iAutoRenew ? '🔁 Auto-renew · ON' : '🔁 Auto-renew · OFF'}</button>
+    </form>
     ${canOperate ? `<details class="hguest" style="margin-top:10px"><summary>+ Guest</summary><form method="POST" action="/pickleball/guest"><input name="name" required maxlength="60" placeholder="Guest name — last-minute add"><div style="height:8px"></div><button class="btn sm" type="submit">Add guest</button></form></details>` : ''}
     <div class="subhead" style="margin-top:18px">On the floor · ${going}/${cap}</div>
     <div class="mlist">${floorPlayers.length ? floorPlayers.map((p, i) => rowFloor(p, i + 1)).join('') : '<div class="subh">Nobody yet — be the first in.</div>'}
@@ -2488,7 +2499,7 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
 // Season board — most runs this calendar year. Top 8 + the viewer's own row (if outside
 // the top). Gentle by design: it celebrates the top and shows you yours, never ranks the
 // bottom. Self-contained inline styles so it needs no new CSS.
-export function seasonPage({ rows, email, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+export function seasonPage({ rows, email, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null, title = 'Season Board', subtitle = 'Most runs this calendar year 🏀', program = 1, emptyMsg = 'No runs logged yet this season — get out there 🏀' }) {
   const meRow = rows.find(r => r.me);
   const medal = (r) => r === 1 ? '🥇' : r === 2 ? '🥈' : r === 3 ? '🥉' : String(r);
   const rowHtml = (r) => `<div style="display:flex;align-items:center;gap:12px;padding:11px 14px;border:1px solid var(--line);border-radius:12px;margin-top:8px;background:${r.me ? 'var(--teal-tint,#e6efec)' : 'var(--card)'}">
@@ -2498,14 +2509,15 @@ export function seasonPage({ rows, email, dmUnread = 0, groupUnread = 0, groupMe
     </div>`;
   const list = rows.length
     ? rows.slice(0, 8).map(rowHtml).join('') + (meRow && meRow.rank > 8 ? `<div style="text-align:center;color:var(--muted);margin:6px 0 0">···</div>${rowHtml(meRow)}` : '')
-    : `<div class="foot" style="margin-top:14px">No runs logged yet this season — get out there 🏀</div>`;
-  return HEAD('Season Board — Adv Runs', 'has-tabs') + header(`<b>SEASON</b>${esc(email)}`, '', ann) + `
+    : `<div class="foot" style="margin-top:14px">${esc(emptyMsg)}</div>`;
+  return HEAD(`${esc(title)} — The Bridge`, 'has-tabs') + header(`<b>SEASON</b>${esc(email)}`, '', ann) + `
+    ${program === 2 ? backToRuns : ''}
     <div class="rule"></div>
-    <div class="phead"><h1>Season Board</h1></div>
-    <p class="psub" style="margin:-4px 0 6px;color:var(--muted)">Most runs this calendar year 🏀</p>
+    <div class="phead"><h1>${esc(title)}</h1></div>
+    <p class="psub" style="margin:-4px 0 6px;color:var(--muted)">${esc(subtitle)}</p>
     ${list}
-    <div class="foot" style="margin-top:18px"><a href="/profile">← Back to profile</a></div>
-  ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention }));
+    ${program === 2 ? '' : '<div class="foot" style="margin-top:18px"><a href="/profile">← Back to profile</a></div>'}
+  ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention, program }));
 }
 
 // Host DM inbox rows — reused on the host's profile tab (host DMs live in Profile

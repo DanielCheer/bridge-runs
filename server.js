@@ -3548,7 +3548,7 @@ function pkPartition(rd) {
   // Join applicants so the roster rows can open a profile popup + show role badges
   // (guests have no applicant row → applicant_id null → non-tappable, matches basketball).
   const rows = db.prepare(`
-    SELECT c.email, c.name, c.sort_order, c.id,
+    SELECT c.email, c.name, c.sort_order, c.id, c.confirmed_at,
            a.id AS applicant_id, a.is_host, a.is_team, a.is_regular
     FROM pk_checkins c LEFT JOIN applicants a ON a.email = c.email
     WHERE c.run_date = ? ORDER BY c.sort_order ASC, c.id ASC`).all(rd);
@@ -3598,9 +3598,14 @@ function pkAutoRunState() {
     setSetting('pk_autoopen_done', rd);
     if (!pkIsOpen(rd)) {
       pkSetState(rd, 'is_open', 1);
-      audit('system', 'system', 'pk:autoopen', rd);
+      // Auto-add members who opted into weekly auto-renew (INSERT OR IGNORE = idempotent).
+      const renewers = db.prepare(`SELECT pm.email, a.full_name FROM program_membership pm JOIN applicants a ON a.email = pm.email
+        WHERE pm.program_id = 2 AND pm.auto_renew = 1 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local' AND COALESCE(a.suspended,0) = 0`).all();
+      const insR = db.prepare('INSERT OR IGNORE INTO pk_checkins (run_date, email, name) VALUES (?,?,?)');
+      for (const r of renewers) insR.run(rd, r.email, r.full_name);
+      audit('system', 'system', 'pk:autoopen', `${rd} +${renewers.length} auto`);
       setImmediate(() => sendPush(pkMemberEmails(), { title: 'Pickleball check-in is open', body: `Check-in is open for ${runWeekday(rd)}, ${runLabelFor(rd)} pickleball — grab your spot 🥒`, url: '/pickleball', tag: 'pkqueueopen' }));
-      console.log(`[pk-autoopen] opened pickleball check-in for ${rd}`);
+      console.log(`[pk-autoopen] opened pickleball check-in for ${rd} (auto-added ${renewers.length})`);
     }
   }
   if (now >= lockAt && getSetting('pk_autolock_done') !== rd) {
@@ -3648,10 +3653,13 @@ app.get('/pickleball', requireLogin, (req, res) => {
   const rd = pkRunDate(), part = pkPartition(rd);
   const mine = part.rows.find(p => p.email === req.userEmail);
   const myState = mine ? (part.floor.indexOf(mine) >= 0 ? 'in' : 'waitlist') : 'out';
+  const myConfirmed = myState === 'in' && !!(mine && mine.confirmed_at);
+  const iAutoRenew = !!(db.prepare('SELECT auto_renew FROM program_membership WHERE program_id = 2 AND email = ?').get(req.userEmail)?.auto_renew);
   res.send(pickleballPage({
     email: req.userEmail, runDate: rd, runLabel: runLabelFor(rd), isOpen: pkIsOpen(rd), cancelled: pkIsCancelled(rd),
     cap: PK_CAP, waitlistCap: PK_WAIT, going: part.floor.length, waiting: part.wait.length,
     canOperate: g.canOperate, isAdmin: g.admin, myState, floorPlayers: part.floor, waitPlayers: part.wait, hidden: !pkProgramActive(),
+    myConfirmed, iAutoRenew,
     tipoff: pkStartEpoch(rd), announcement: latestPkAnnouncement(),
     dmUnread: unreadCount(req.userEmail), groupUnread: pkGroupUnread(req.userEmail), groupMention: pkGroupMentionUnread(req.userEmail, g.a ? g.a.id : 0), ann: null,
   }));
@@ -3663,6 +3671,57 @@ app.post('/pickleball/join-run', requireLogin, (req, res) => {
   pkJoinMembership(req.userEmail);
   setRunCookie(req, res, 2);
   res.redirect('/pickleball');
+});
+// "I'm coming" confirm — a floor player marks they're showing up (mirrors basketball).
+app.post('/pickleball/confirm', requireLogin, (req, res) => {
+  const g = pkGate(req, res); if (!g) return;
+  const rd = pkRunDate(), part = pkPartition(rd);
+  if (part.floor.some(p => p.email === req.userEmail)) {
+    db.prepare("UPDATE pk_checkins SET confirmed_at = datetime('now') WHERE run_date = ? AND email = ? AND confirmed_at IS NULL").run(rd, req.userEmail);
+  }
+  res.redirect('/pickleball');
+});
+// Auto-renew toggle — a member opts their spot in/out of the weekly auto-add (self-service).
+app.post('/pickleball/autorenew', requireLogin, (req, res) => {
+  const g = pkGate(req, res); if (!g) return;
+  if (!pkIsMember(req.userEmail)) return res.redirect('/pickleball');
+  const on = req.body.on === '1' ? 1 : 0;
+  db.prepare('UPDATE program_membership SET auto_renew = ? WHERE program_id = 2 AND email = ?').run(on, req.userEmail);
+  res.redirect('/pickleball');
+});
+// Pickleball season board — most pickleball runs this year, from pk_attendance. Member-gated.
+app.get('/pickleball/season', requireLogin, (req, res) => {
+  const g = pkChatGate(req, res); if (!g) return; // members only (same bar as the chat)
+  const me = req.userEmail;
+  const rows = db.prepare(`SELECT at.email, COUNT(*) n, ap.full_name FROM pk_attendance at
+    LEFT JOIN applicants ap ON ap.email = at.email
+    WHERE at.run_date >= strftime('%Y-01-01','now') AND at.email NOT LIKE '%@guest.local'
+    GROUP BY at.email ORDER BY n DESC, at.email ASC`).all();
+  const named = rows.map((r, i) => ({ rank: i + 1, name: r.full_name || r.email, n: r.n, me: r.email.toLowerCase() === me.toLowerCase() }));
+  const a = applicantByEmail(me);
+  res.send(seasonPage({
+    rows: named, email: me, program: 2,
+    title: 'Pickleball Season', subtitle: 'Most pickleball runs this calendar year 🥒',
+    emptyMsg: 'No pickleball runs logged yet this season — get out there 🥒',
+    dmUnread: unreadCount(me), groupUnread: pkGroupUnread(me), groupMention: pkGroupMentionUnread(me, a ? a.id : 0), ann: null,
+  }));
+});
+// Add the pickleball run to a calendar (.ics). Floating local time; 6–9 PM.
+app.get('/pickleball/run.ics', requireLogin, (req, res) => {
+  const g = pkGate(req, res); if (!g) return;
+  const rd = pkRunDate();
+  const dt = (hhmm) => rd.replace(/-/g, '') + 'T' + hhmm + '00';
+  const ics = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//The Bridge Adv Runs//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
+    'BEGIN:VEVENT', `UID:bridge-pk-${rd}@bridge`, `DTSTAMP:${ymdLocal().replace(/-/g, '')}T000000`,
+    `DTSTART:${dt('1800')}`, `DTEND:${dt('2100')}`,
+    'SUMMARY:The Bridge — Pickleball', 'LOCATION:The Bridge · Markham',
+    pkIsCancelled(rd) ? 'STATUS:CANCELLED' : 'STATUS:CONFIRMED',
+    'END:VEVENT', 'END:VCALENDAR',
+  ].join('\r\n');
+  res.set('Content-Type', 'text/calendar; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="bridge-pickleball-${rd}.ics"`);
+  res.send(ics);
 });
 app.post('/pickleball/join', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;

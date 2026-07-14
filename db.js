@@ -523,6 +523,12 @@ db.exec(`
 // `archived` (retract) — additive + guarded for an existing pk_announcements table.
 const pkaCols = db.prepare('PRAGMA table_info(pk_announcements)').all().map(c => c.name);
 if (pkaCols.length && !pkaCols.includes('archived')) db.exec('ALTER TABLE pk_announcements ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
+// pk_checkins.confirmed_at — the "I'm coming" confirmation timestamp (NULL = unconfirmed).
+const pkcCols = db.prepare('PRAGMA table_info(pk_checkins)').all().map(c => c.name);
+if (pkcCols.length && !pkcCols.includes('confirmed_at')) db.exec('ALTER TABLE pk_checkins ADD COLUMN confirmed_at TEXT');
+// program_membership.auto_renew — a pickleball member's self-service weekly auto-add flag.
+const pmCols = db.prepare('PRAGMA table_info(program_membership)').all().map(c => c.name);
+if (pmCols.length && !pmCols.includes('auto_renew')) db.exec('ALTER TABLE program_membership ADD COLUMN auto_renew INTEGER NOT NULL DEFAULT 0');
 
 // Prune stale magic-link tokens on startup. A token is dead once it's been used
 // OR has expired — keeping them forever just grows the table unbounded (a fresh
