@@ -3645,13 +3645,29 @@ app.get('/season', requireLogin, (req, res) => {
 const PK_CAP = Number(process.env.PK_CAP || 20), PK_WAIT = Number(process.env.PK_WAIT || 4);
 function pkProgramActive() { const r = db.prepare('SELECT active FROM program WHERE id = 2').get(); return !!(r && r.active); }
 // Pickleball's standing day = Tuesday (PK_DOW=2), DECOUPLED from basketball so moving the
-// basketball run (RUN_DOW) never drags pickleball's date along. The next Tuesday, local.
-const PK_DOW = 2;
+// basketball run (RUN_DOW) never drags pickleball's date along. Weekly auto-schedule:
+// check-in reopens right after the run ends (PK_END_H), the roster locks at start
+// (PK_START_H), and the floor gets a confirm ping the night before (PK_PING_H, day before).
+const PK_DOW = 2, PK_START_H = 18, PK_END_H = 21, PK_PING_H = 20, PK_PING_DOW_OFFSET = 1;
+// Season opener (YYYY-MM-DD) or null — same gate shape as basketball's seasonStart().
+function pkSeasonStart() { const s = getSetting('pk_season_start'); return (s && /^\d{4}-\d{2}-\d{2}$/.test(s)) ? s : null; }
+// The next standing Tuesday, local. Rolls to next week once the current run has ENDED
+// (>= PK_END_H on run day) so check-in reopens the same night. Season-gated: pre-season it
+// resolves to the first Tuesday on/after the opener (no phantom off-season runs).
 function pkDefaultDate() {
-  const r = new Date(); r.setDate(r.getDate() + ((PK_DOW - r.getDay() + 7) % 7));
-  return ymdLocal(r);
+  const now = new Date();
+  let add = (PK_DOW - now.getDay() + 7) % 7;
+  if (add === 0 && now.getHours() >= PK_END_H) add = 7;   // run's over tonight → next week
+  const r = new Date(now); r.setDate(r.getDate() + add);
+  let d = ymdLocal(r);
+  const opener = pkSeasonStart();
+  if (opener && d < opener) {   // pre-season → first standing day on/after the opener
+    const o = new Date(opener + 'T12:00:00'); o.setDate(o.getDate() + ((PK_DOW - o.getDay() + 7) % 7));
+    d = ymdLocal(o);
+  }
+  return d;
 }
-function pkRunDate() { return getSetting('pk_run_date') || pkDefaultDate(); } // admin-set date; defaults to the next standing pickleball day (Tue)
+function pkRunDate() { return getSetting('pk_run_date') || pkDefaultDate(); } // manual per-week override; else the weekly standing Tuesday
 function pkIsOpen(rd) { const r = db.prepare('SELECT is_open FROM pk_run_state WHERE run_date = ?').get(rd); return !!(r && r.is_open); }
 function pkIsCancelled(rd) { const r = db.prepare('SELECT cancelled FROM pk_run_state WHERE run_date = ?').get(rd); return !!(r && r.cancelled); }
 function pkSetState(rd, field, val) { db.prepare(`INSERT INTO pk_run_state (run_date, ${field}) VALUES (?, ?) ON CONFLICT(run_date) DO UPDATE SET ${field} = excluded.${field}`).run(rd, val ? 1 : 0); }
@@ -3692,9 +3708,6 @@ function pkEmailRecipients() {
   return db.prepare(`SELECT pm.email FROM program_membership pm JOIN applicants a ON a.email = pm.email
     WHERE pm.program_id = 2 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local' AND COALESCE(a.email_optout,0) = 0`).all().map(r => r.email);
 }
-// Auto open/close schedule for pickleball (runs on the shared 60s interval). Auto-opens
-// check-in at midnight on the run day and auto-locks at the run's start time — each once
-// per run, guarded by app_settings markers. Skipped while the run is hidden or cancelled.
 // Seat auto-renew members onto the floor for run `rd` (idempotent). Respects the total cap,
 // waiver, suspended. Shared by the scheduled auto-open AND the manual "Open check-in" so the
 // operator flow behaves like basketball's autoJoinTeam.
@@ -3715,16 +3728,25 @@ function pkSeatRenewers(rd) {
   }
   return added;
 }
+// Weekly auto open/lock/ping for pickleball (runs on the shared 60s interval), keyed to the
+// standing Tuesday (pkRunDate). Check-in OPENS the moment the prior run ends (PK_END_H the
+// previous Tuesday) so members re-queue the same night, the floor gets a CONFIRM PING the
+// night before (PK_PING_H, day before), and the roster LOCKS at start (PK_START_H). Each
+// fires once per cycle (app_settings markers keyed to rd). Season-gated + membership-scoped
+// (only opt-in pickleball members are pushed — never the whole club). Skipped while hidden
+// or cancelled. Manual open/close/date still work anytime.
 function pkAutoRunState() {
   if (!pkProgramActive()) return;
-  // Only auto open/close runs the operator EXPLICITLY scheduled — never the basketball
-  // fallback date. Otherwise every week at midnight the whole club would get a "pickleball
-  // check-in is open" push for a run nobody scheduled. Manual open/close still works anytime.
-  const rd = getSetting('pk_run_date');
+  const rd = pkRunDate();
   if (!rd || pkIsCancelled(rd)) return;
+  const opener = pkSeasonStart();
+  if (opener && rd < opener) return;   // never fire before the season opener (pkRunDate is gated, this is belt-and-suspenders)
   const now = Date.now();
-  const openAt = new Date(rd + 'T00:00:00').getTime();
-  const lockAt = pkStartEpoch(rd);
+  const hh = h => `T${String(h).padStart(2, '0')}:00:00`;
+  const openAt = new Date(shiftYmd(rd, -7) + hh(PK_END_H)).getTime();          // prior run's end (prev Tue 9 PM) → reopen
+  const pingAt = new Date(shiftYmd(rd, -PK_PING_DOW_OFFSET) + hh(PK_PING_H)).getTime(); // night before (Mon 8 PM)
+  const lockAt = new Date(rd + hh(PK_START_H)).getTime();                       // run start (Tue 6 PM)
+  // OPEN (once) — from the prior run's end through lock.
   if (now >= openAt && now < lockAt && getSetting('pk_autoopen_done') !== rd) {
     setSetting('pk_autoopen_done', rd);
     if (!pkIsOpen(rd)) {
@@ -3735,6 +3757,19 @@ function pkAutoRunState() {
       console.log(`[pk-autoopen] opened pickleball check-in for ${rd} (auto-added ${added})`);
     }
   }
+  // CONFIRM PING (once) — the night before, ping unconfirmed floor to confirm or drop.
+  if (now >= pingAt && now < lockAt && getSetting('pk_autoping_done') !== rd) {
+    setSetting('pk_autoping_done', rd);
+    if (pkIsOpen(rd) && !pkIsCancelled(rd)) {
+      const floor = pkPartition(rd).floor.filter(p => !/@guest\.local$/.test(p.email) && !p.confirmed_at).map(p => p.email);
+      if (floor.length) {
+        setImmediate(() => sendPush(floor, { title: 'Confirm your pickleball spot', body: `You're on the floor for ${runWeekday(rd)} pickleball. Tap to confirm — or leave to free your spot.`, url: '/pickleball', tag: 'pkconfirm' }));
+        audit('system', 'system', 'pk:autoping', String(floor.length));
+        console.log(`[pk-autoping] pinged ${floor.length} unconfirmed pickleball floor player(s) for ${rd}`);
+      }
+    }
+  }
+  // LOCK (once) — at run start.
   if (now >= lockAt && getSetting('pk_autolock_done') !== rd) {
     setSetting('pk_autolock_done', rd);
     if (pkIsOpen(rd)) { pkSetState(rd, 'is_open', 0); audit('system', 'system', 'pk:autolock', rd); }
@@ -3752,19 +3787,24 @@ function pkGate(req, res) {
 // the floor into pk_attendance, purge past rows, and revert to the default (next basketball date).
 function pkEnsureWeek() {
   const today = ymdLocal();
-  // Archive + purge ANY past pickleball run — explicit-date OR the basketball fallback date —
-  // so the floor is always recorded to pk_attendance and stale rows never accumulate.
-  const pastDates = db.prepare('SELECT DISTINCT run_date FROM pk_checkins WHERE run_date < ?').all(today).map(r => r.run_date);
+  const now = new Date();
+  // A run counts as OVER once its end time (PK_END_H) passes on run day — so today's run is
+  // archived that same night and the cycle rolls forward, letting check-in reopen at 9 PM.
+  const endedToday = now.getHours() >= PK_END_H ? today : null;
+  const isPast = rd => rd < today || rd === endedToday;
+  // Archive + purge ANY finished pickleball run so the floor is recorded to pk_attendance
+  // and stale rows never accumulate.
+  const pastDates = db.prepare('SELECT DISTINCT run_date FROM pk_checkins WHERE run_date <= ?').all(today).map(r => r.run_date).filter(isPast);
   const ins = db.prepare('INSERT OR IGNORE INTO pk_attendance (run_date, email, name) VALUES (?,?,?)');
+  const del = db.prepare('DELETE FROM pk_checkins WHERE run_date = ?'), delS = db.prepare('DELETE FROM pk_run_state WHERE run_date = ?');
   for (const rd of pastDates) {
     const floor = db.prepare('SELECT email, name FROM pk_checkins WHERE run_date = ? ORDER BY sort_order ASC, id ASC LIMIT ?').all(rd, PK_CAP);
     for (const p of floor) if (!/@guest\.local$/.test(p.email)) ins.run(rd, p.email, p.name);
+    del.run(rd); delS.run(rd);
   }
-  db.prepare('DELETE FROM pk_checkins WHERE run_date < ?').run(today);
-  db.prepare('DELETE FROM pk_run_state WHERE run_date < ?').run(today);
-  // Clear a passed explicit date back to the default (next standing pickleball day, Tue).
+  // Clear a passed explicit override back to the weekly standing day.
   const set = getSetting('pk_run_date');
-  if (set && set < today) db.prepare("DELETE FROM app_settings WHERE key = 'pk_run_date'").run();
+  if (set && isPast(set)) db.prepare("DELETE FROM app_settings WHERE key = 'pk_run_date'").run();
 }
 app.get('/pickleball', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
@@ -3783,6 +3823,7 @@ app.get('/pickleball', requireLogin, (req, res) => {
   const myState = mine ? (part.floor.indexOf(mine) >= 0 ? 'in' : 'waitlist') : 'out';
   const myConfirmed = myState === 'in' && !!(mine && mine.confirmed_at);
   const iAutoRenew = !!(db.prepare('SELECT auto_renew FROM program_membership WHERE program_id = 2 AND email = ?').get(req.userEmail)?.auto_renew);
+  const pkOpener = pkSeasonStart(), pkPre = !!pkOpener && ymdLocal() < pkOpener;
   res.send(pickleballPage({
     email: req.userEmail, runDate: rd, runLabel: runLabelFor(rd), isOpen: pkIsOpen(rd), cancelled: pkIsCancelled(rd),
     cap: PK_CAP, waitlistCap: PK_WAIT, going: part.floor.length, waiting: part.wait.length,
@@ -3790,8 +3831,26 @@ app.get('/pickleball', requireLogin, (req, res) => {
     myConfirmed, iAutoRenew,
     bannerSrc: pkBannerSrc(), bannerVer: pkBannerVersion(),
     tipoff: pkStartEpoch(rd), announcement: latestPkAnnouncement(),
+    season: pkOpener || '', seasonWeekday: pkOpener ? runWeekday(pkOpener) : '', seasonLabel: pkOpener ? runLabelFor(pkOpener) : '',
+    preseason: pkPre, today: ymdLocal(), seasonMax: shiftYmd(ymdLocal(), 365),
+    pkMsg: req.query.pkset ? String(req.query.pkset) : (req.query.pkerr || ''),
     dmUnread: unreadCount(req.userEmail), groupUnread: pkGroupUnread(req.userEmail), groupMention: pkGroupMentionUnread(req.userEmail, g.a ? g.a.id : 0), ann: null,
   }));
+});
+// Pickleball season-start gate control (operator = admin) — mirrors /admin/season. Sets/clears
+// app_settings 'pk_season_start'; before it, no weekly pickleball runs and nothing auto-fires.
+app.post('/pickleball/season', requireLogin, (req, res) => {
+  const g = pkGate(req, res); if (!g) return;
+  if (!g.canOperate) return res.redirect('/pickleball');
+  const raw = String(req.body.season || '').trim();
+  if (!raw) { db.prepare("DELETE FROM app_settings WHERE key = 'pk_season_start'").run(); audit(req.userEmail, 'admin', 'pk:season-clear', ''); return res.redirect('/pickleball?pkset=seasonoff'); }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || isNaN(new Date(raw + 'T12:00:00'))) return res.redirect('/pickleball?pkerr=seasonbad');
+  const today = ymdLocal();
+  if (raw < today) return res.redirect('/pickleball?pkerr=seasonpast');
+  const maxD = new Date(); maxD.setFullYear(maxD.getFullYear() + 1);
+  if (raw > ymdLocal(maxD)) return res.redirect('/pickleball?pkerr=seasonrange');
+  setSetting('pk_season_start', raw); audit(req.userEmail, 'admin', 'pk:season-set', raw);
+  res.redirect('/pickleball?pkset=season');
 });
 // Join the pickleball RUN (membership) — the opt-in from the join prompt. Distinct from the
 // per-week check-in below. Adds a program_membership row, then lands on the run.
