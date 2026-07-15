@@ -1703,16 +1703,28 @@ const COURT_SVG = `<svg class="court" viewBox="0 0 200 200" fill="none" aria-hid
 function runDayControls({ runDay, rdMsg = '' }) {
   if (!runDay) return '';
   const ti = 'font-size:16px;min-height:44px;padding:11px 13px;width:100%;box-sizing:border-box;max-width:100%;min-width:0';
-  const rdBanner = rdMsg === 'set' ? '<div class="notice good">Run day updated ✓</div>'
+  const rdBanner = (rdMsg === 'set' || rdMsg === '1') ? '<div class="notice good">Run day updated ✓</div>'
+    : rdMsg === 'season' ? '<div class="notice good">Season start set ✓</div>'
+    : rdMsg === 'seasonoff' ? '<div class="notice good">Season cleared — runs resume every week ✓</div>'
     : rdMsg === 'past' ? '<div class="notice bad">Pick a date that isn\'t in the past.</div>'
     : rdMsg === 'range' ? '<div class="notice bad">Pick a date within the next 30 days.</div>'
     : rdMsg === 'time' ? '<div class="notice bad">Check the times — end must be after start.</div>'
     : rdMsg === 'bad' ? '<div class="notice bad">That date didn\'t look right — try again.</div>'
+    : rdMsg === 'seasonpast' ? '<div class="notice bad">Pick a season start that isn\'t in the past.</div>'
+    : rdMsg === 'seasonrange' ? '<div class="notice bad">Pick a season start within the next year.</div>'
+    : rdMsg === 'seasonbad' ? '<div class="notice bad">That season date didn\'t look right — try again.</div>'
     : '';
-  return `<div class="infosec" style="margin-top:20px"><div class="card"><div class="clab">Operator tools</div>
-    ${rdBanner}
-    <p class="tally-note" style="margin:8px 0 10px">Next run: <b>${esc(runDay.weekday)}, ${esc(runDay.label)}, ${esc(runDay.timeLabel)}</b>${runDay.dateMoved ? ` — moved from the usual day (${esc(runDay.defaultLabel)}).` : (runDay.isOverride ? ' — usual day, custom time.' : ' (usual day & time).')} Change it — players get an announcement.</p>
-    <form method="POST" action="/admin/rundate" style="margin:0">
+
+  // "Next run" line — pre-season it's the season opener (not editable via the 30-day picker).
+  const nextLine = runDay.preseason
+    ? `<p class="tally-note" style="margin:8px 0 10px">Next run: <b>${esc(runDay.weekday)}, ${esc(runDay.label)}, ${esc(runDay.timeLabel)}</b> — season opener.</p>`
+    : `<p class="tally-note" style="margin:8px 0 10px">Next run: <b>${esc(runDay.weekday)}, ${esc(runDay.label)}, ${esc(runDay.timeLabel)}</b>${runDay.dateMoved ? ` — moved from the usual day (${esc(runDay.defaultLabel)}).` : (runDay.isOverride ? ' — usual day, custom time.' : ' (usual day & time).')} Change it — players get an announcement.</p>`;
+
+  // Weekly run-day + cancel controls — only meaningful once the season is underway. Pre-season
+  // the upcoming run is weeks out (beyond the 30-day picker), so hide them and show a note.
+  const weekSection = runDay.preseason
+    ? `<p class="tally-note" style="color:var(--muted);margin:8px 0 0">Weekly run-day &amp; cancel controls appear once the season starts (${esc(runDay.seasonWeekday)}, ${esc(runDay.seasonLabel)}).</p>`
+    : `<form method="POST" action="/admin/rundate" style="margin:0">
       <div class="field"><label>Run date</label><input type="date" name="date" value="${esc(runDay.runDate)}" min="${esc(runDay.today)}" max="${esc(runDay.maxDate)}" required style="${ti}"></div>
       <div style="display:flex;gap:10px;margin-top:8px">
         <div class="field" style="flex:1;margin:0"><label>Start</label><input type="time" name="start" value="${esc(runDay.start)}" required style="${ti}"></div>
@@ -1725,7 +1737,25 @@ function runDayControls({ runDay, rdMsg = '' }) {
     <div class="rule" style="margin:14px 0 12px"></div>
     ${runDay.cancelled
       ? `<div class="notice bad" style="margin:0 0 10px"><b>🚫 This run is cancelled.</b> Players were notified. Restore it to run check-in again.</div><form method="POST" action="/admin/run/cancel" style="margin:0"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Restore this run</button></form>`
-      : `<p class="tally-note" style="margin:0 0 8px">Something come up? Cancel this week's run — players get a "run cancelled" notification and check-in is blocked. (Only this week.)</p><form method="POST" action="/admin/run/cancel" style="margin:0" onsubmit="return confirm('Cancel this week\\'s run? Everyone will be notified it\\'s off.');"><input type="hidden" name="on" value="1"><button class="btn leave sm" type="submit">🚫 Cancel this week's run</button></form>`}
+      : `<p class="tally-note" style="margin:0 0 8px">Something come up? Cancel this week's run — players get a "run cancelled" notification and check-in is blocked. (Only this week.)</p><form method="POST" action="/admin/run/cancel" style="margin:0" onsubmit="return confirm('Cancel this week\\'s run? Everyone will be notified it\\'s off.');"><input type="hidden" name="on" value="1"><button class="btn leave sm" type="submit">🚫 Cancel this week's run</button></form>`}`;
+
+  // Season-start gate control — pause the weekly schedule until the season opens (or clear it).
+  const seasonSection = `<div class="rule" style="margin:14px 0 12px"></div>
+    <div class="clab" style="margin-bottom:2px">Season</div>
+    <p class="tally-note" style="margin:6px 0 10px">${runDay.season
+      ? `Season starts <b>${esc(runDay.seasonWeekday)}, ${esc(runDay.seasonLabel)}</b> — no runs and no auto check-in until ~2 days before.`
+      : `Runs every week. Set a season start to pause the schedule until the season opens.`}</p>
+    <form method="POST" action="/admin/season" style="margin:0">
+      <div class="field"><label>Season start</label><input type="date" name="season" value="${esc(runDay.season)}" min="${esc(runDay.today)}" max="${esc(runDay.seasonMax)}" style="${ti}"></div>
+      <button class="btn sm" type="submit" style="margin-top:8px">Set season start</button>
+    </form>
+    ${runDay.season ? `<form method="POST" action="/admin/season" style="margin-top:8px" onsubmit="return confirm('Clear the season start? Runs resume every week right away.');"><input type="hidden" name="season" value=""><button class="btn ghost sm" type="submit">Clear — run every week</button></form>` : ''}`;
+
+  return `<div class="infosec" style="margin-top:20px"><div class="card"><div class="clab">Operator tools</div>
+    ${rdBanner}
+    ${nextLine}
+    ${weekSection}
+    ${seasonSection}
   </div></div>`;
 }
 

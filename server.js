@@ -1792,12 +1792,18 @@ function runDayFor(req, gate) {
   const rdRunDate = nextRunDate();
   const rdBase = nearestRunDefault(new Date(rdRunDate + 'T12:00:00')); // base run day this run is keyed under
   const rdTimes = runTimesFor(rdRunDate);
+  const today = ymdLocal();
+  const opener = seasonStart();
+  const preseason = !!opener && today < opener;   // season set + hasn't started → no live weekly run yet
   return {
     runDate: rdRunDate, weekday: runWeekday(rdRunDate), label: runLabelFor(rdRunDate),
     isOverride: !!runOverrideRow(rdBase), dateMoved: rdRunDate !== rdBase,
     start: rdTimes.start, end: rdTimes.end, timeLabel: runTimeRange(rdRunDate),
     defaultDate: rdBase, defaultLabel: runLabelFor(rdBase),
-    today: ymdLocal(), maxDate: shiftYmd(ymdLocal(), 30), cancelled: runIsCancelled(rdRunDate),
+    today, maxDate: shiftYmd(today, 30), cancelled: runIsCancelled(rdRunDate),
+    // Season opener (the season-start gate): before it, only the season control shows.
+    season: opener || '', seasonWeekday: opener ? runWeekday(opener) : '', seasonLabel: opener ? runLabelFor(opener) : '',
+    preseason, seasonMax: shiftYmd(today, 365),
   };
 }
 app.get('/checkin', requireLogin, (req, res) => {
@@ -1865,7 +1871,7 @@ app.get('/checkin', requireLogin, (req, res) => {
     host: stmtHostCard.get() || null,
     // Operator run-day + cancel controls (HOST/ADMIN only) — moved here from the profile.
     runDay: runDayFor(req, gate),
-    rdMsg: req.query.rdset ? 'set' : (req.query.rderr || ''),
+    rdMsg: req.query.rdset ? String(req.query.rdset) : (req.query.rderr || ''),
     dmUnread: unreadCount(email),
     groupUnread: groupUnread(email),
     groupMention: groupMentionUnread(email, a ? a.id : 0),
@@ -3285,6 +3291,33 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
     });
   }
   res.redirect('/checkin?rdset=1');
+});
+
+// Season-start gate control (HOST/ADMIN) — sets/clears app_settings 'season_start'. Before
+// the opener there are no weekly runs and nothing auto-opens; clearing it resumes the weekly
+// schedule immediately. Silent (no announcement/push) — the operator sends their own season
+// kickoff message; this is config, not a player-facing event.
+app.post('/admin/season', requireLogin, (req, res) => {
+  const email = req.userEmail;
+  const a = applicantByEmail(email);
+  const admin = isAdmin(email);
+  const host = !!(a && a.is_host);
+  if (!admin && !host) return res.status(403).send('Only the host or an admin can set the season.');
+  const actorRole = admin ? 'admin' : 'host';
+  const raw = String(req.body.season || '').trim();
+  if (!raw) {   // clear → runs resume every week
+    db.prepare("DELETE FROM app_settings WHERE key = 'season_start'").run();
+    audit(email, actorRole, 'season:clear', '');
+    return res.redirect('/checkin?rdset=seasonoff');
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || isNaN(new Date(raw + 'T12:00:00'))) return res.redirect('/checkin?rderr=seasonbad');
+  const today = ymdLocal();
+  if (raw < today) return res.redirect('/checkin?rderr=seasonpast');
+  const maxD = new Date(); maxD.setFullYear(maxD.getFullYear() + 1);
+  if (raw > ymdLocal(maxD)) return res.redirect('/checkin?rderr=seasonrange');
+  setSetting('season_start', raw);
+  audit(email, actorRole, 'season:set', raw);
+  res.redirect('/checkin?rdset=season');
 });
 
 // Share page — a big scannable QR + tap-able link for the application form,
