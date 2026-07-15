@@ -3764,7 +3764,8 @@ function pkSeatRenewers(rd) {
   const renewers = db.prepare(`SELECT pm.email, a.full_name FROM program_membership pm JOIN applicants a ON a.email = pm.email
     WHERE pm.program_id = 2 AND pm.auto_renew = 1 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local'
       AND COALESCE(a.suspended,0) = 0 AND COALESCE(a.waiver_ok,0) = 1
-    ORDER BY a.id`).all();
+      AND NOT EXISTS (SELECT 1 FROM pk_optout o WHERE o.run_date = ? AND o.email = pm.email)
+    ORDER BY a.id`).all(rd);
   const insR = db.prepare('INSERT OR IGNORE INTO pk_checkins (run_date, email, name) VALUES (?,?,?)');
   let added = 0;
   for (const r of renewers) {
@@ -3850,6 +3851,7 @@ function pkEnsureWeek() {
   // Sweep stale run_state for past runs that had NO check-ins (a zero-join or cancelled week
   // never appears in pastDates above, so its is_open/cancelled row would leak forever).
   db.prepare('DELETE FROM pk_run_state WHERE run_date < ?').run(today);
+  db.prepare('DELETE FROM pk_optout WHERE run_date < ?').run(today);   // sit-outs are per-week → clear past ones so renewal resumes
   // Clear a passed explicit override back to the weekly standing day.
   const set = getSetting('pk_run_date');
   if (set && isPast(set)) db.prepare("DELETE FROM app_settings WHERE key = 'pk_run_date'").run();
@@ -3972,12 +3974,18 @@ app.post('/pickleball/join', requireLogin, (req, res) => {
   if (pkIsCancelled(rd) || !pkIsOpen(rd)) return res.redirect('/pickleball');
   const { rows } = pkPartition(rd);
   if (rows.length >= PK_CAP + PK_WAIT && !rows.find(p => p.email === req.userEmail)) return res.redirect('/pickleball'); // full
+  db.prepare('DELETE FROM pk_optout WHERE run_date = ? AND email = ?').run(rd, req.userEmail); // re-joining clears any sit-out
   db.prepare('INSERT OR IGNORE INTO pk_checkins (run_date, email, name) VALUES (?,?,?)').run(rd, req.userEmail, g.a.full_name);
   res.redirect('/pickleball');
 });
 app.post('/pickleball/leave', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
-  db.prepare('DELETE FROM pk_checkins WHERE run_date = ? AND email = ?').run(pkRunDate(), req.userEmail);
+  const rd = pkRunDate();
+  // Record a sit-out for THIS week so an auto-renew member who leaves isn't re-seated by a
+  // later pkSeatRenewers (manual re-open) — mirrors basketball's regular_optout. Cleared when
+  // they re-join, and purged on weekly rollover, so their standing renewal resumes next week.
+  db.prepare('INSERT OR IGNORE INTO pk_optout (run_date, email) VALUES (?, ?)').run(rd, req.userEmail);
+  db.prepare('DELETE FROM pk_checkins WHERE run_date = ? AND email = ?').run(rd, req.userEmail);
   res.redirect('/pickleball');
 });
 app.post('/pickleball/open', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(); pkSetState(rd, 'is_open', 1); pkSeatRenewers(rd); res.redirect('/pickleball'); });
@@ -4007,6 +4015,7 @@ app.post('/pickleball/date', requireLogin, (req, res) => {
     db.exec('BEGIN');
     try {
       db.prepare('UPDATE pk_checkins SET run_date = ? WHERE run_date = ?').run(d, oldRd);
+      db.prepare('UPDATE OR IGNORE pk_optout SET run_date = ? WHERE run_date = ?').run(d, oldRd);
       const st = db.prepare('SELECT is_open, cancelled FROM pk_run_state WHERE run_date = ?').get(oldRd);
       if (st) {
         db.prepare("INSERT INTO pk_run_state (run_date, is_open, cancelled) VALUES (?,?,?) ON CONFLICT(run_date) DO UPDATE SET is_open = excluded.is_open, cancelled = excluded.cancelled").run(d, st.is_open, st.cancelled);

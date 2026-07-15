@@ -463,6 +463,11 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(run_date, email)
   );
+  CREATE TABLE IF NOT EXISTS pk_optout (
+    run_date TEXT NOT NULL,
+    email    TEXT NOT NULL,
+    PRIMARY KEY (run_date, email)   -- an auto-renew member who sat THIS week out (mirrors regular_optout)
+  );
   CREATE TABLE IF NOT EXISTS pk_run_state (
     run_date TEXT PRIMARY KEY,
     is_open  INTEGER NOT NULL DEFAULT 0,
