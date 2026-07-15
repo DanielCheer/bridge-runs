@@ -3682,7 +3682,7 @@ function pkProgramActive() { const r = db.prepare('SELECT active FROM program WH
 // basketball run (RUN_DOW) never drags pickleball's date along. Weekly auto-schedule:
 // check-in reopens right after the run ends (PK_END_H), the roster locks at start
 // (PK_START_H), and the floor gets a confirm ping the night before (PK_PING_H, day before).
-const PK_DOW = 2, PK_START_H = 18, PK_END_H = 21, PK_PING_H = 20, PK_PING_DOW_OFFSET = 1;
+const PK_DOW = 2, PK_START_H = 18, PK_END_H = 21, PK_PING_H = 20, PK_PING_DOW_OFFSET = 1, PK_LOCK = '17:30';
 // Season opener (YYYY-MM-DD) or null — same gate shape as basketball's seasonStart().
 function pkSeasonStart() { const s = getSetting('pk_season_start'); return (s && /^\d{4}-\d{2}-\d{2}$/.test(s)) ? s : null; }
 // The standing weekday (dow) NEAREST a chosen date — the Tuesday a moved run replaces.
@@ -3758,20 +3758,29 @@ function pkEmailRecipients() {
 // operator flow behaves like basketball's autoJoinTeam.
 function pkSeatRenewers(rd) {
   if (!rd) return 0;
-  const existing = db.prepare('SELECT COUNT(*) n FROM pk_checkins WHERE run_date = ?').get(rd).n;
-  let room = (PK_CAP + PK_WAIT) - existing;
-  if (room <= 0) return 0;
-  const renewers = db.prepare(`SELECT pm.email, a.full_name FROM program_membership pm JOIN applicants a ON a.email = pm.email
+  // Eligible pickleball renewers = approved pk members with auto_renew, waiver, not suspended,
+  // not opted-out this week. TEAM members (applicants.is_team — the org team, shared with
+  // basketball) get TOP priority: seated first above the floor, bumping the newest non-team
+  // past the cap if needed — mirrors basketball's autoJoinTeam. No core tier (by design).
+  const renewers = db.prepare(`SELECT pm.email, a.full_name, COALESCE(a.is_team,0) AS is_team
+    FROM program_membership pm JOIN applicants a ON a.email = pm.email
     WHERE pm.program_id = 2 AND pm.auto_renew = 1 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local'
       AND COALESCE(a.suspended,0) = 0 AND COALESCE(a.waiver_ok,0) = 1
       AND NOT EXISTS (SELECT 1 FROM pk_optout o WHERE o.run_date = ? AND o.email = pm.email)
     ORDER BY a.id`).all(rd);
+  const insTeam = db.prepare('INSERT OR IGNORE INTO pk_checkins (run_date, email, name, sort_order) VALUES (?,?,?,?)');
   const insR = db.prepare('INSERT OR IGNORE INTO pk_checkins (run_date, email, name) VALUES (?,?,?)');
   let added = 0;
-  for (const r of renewers) {
-    if (room <= 0) break;
-    if (insR.run(rd, r.email, r.full_name).changes > 0) { room--; added++; }
-  }
+  // Team first, top priority — negative sort_order so they float above any first-come joiners.
+  let { m } = db.prepare('SELECT MIN(sort_order) m FROM pk_checkins WHERE run_date = ?').get(rd);
+  let order = (m ?? 0);
+  for (const r of renewers.filter(r => r.is_team)) { order -= 1; if (insTeam.run(rd, r.email, r.full_name, order).changes > 0) added++; }
+  // Non-team renewers fill the remaining room up to cap + waitlist.
+  let room = (PK_CAP + PK_WAIT) - db.prepare('SELECT COUNT(*) n FROM pk_checkins WHERE run_date = ?').get(rd).n;
+  for (const r of renewers.filter(r => !r.is_team)) { if (room <= 0) break; if (insR.run(rd, r.email, r.full_name).changes > 0) { room--; added++; } }
+  // Hard total cap: team priority may have pushed non-team past cap+wait — trim the lowest.
+  const rows = db.prepare('SELECT id FROM pk_checkins WHERE run_date = ? ORDER BY sort_order ASC, id ASC').all(rd);
+  if (rows.length > PK_CAP + PK_WAIT) { const del = db.prepare('DELETE FROM pk_checkins WHERE id = ?'); for (const r of rows.slice(PK_CAP + PK_WAIT)) del.run(r.id); }
   return added;
 }
 // When a FLOOR player leaves, the next waitlister silently crosses onto the floor (pkPartition
@@ -3789,7 +3798,7 @@ function pkNotifyPromotion(rd, leavingEmail) {
 // Weekly auto open/lock/ping for pickleball (runs on the shared 60s interval), keyed to the
 // standing Tuesday (pkRunDate). Check-in OPENS the moment the prior run ends (PK_END_H the
 // previous Tuesday) so members re-queue the same night, the floor gets a CONFIRM PING the
-// night before (PK_PING_H, day before), and the roster LOCKS at start (PK_START_H). Each
+// night before (PK_PING_H, day before), and the roster LOCKS 30 min before start (PK_LOCK). Each
 // fires once per cycle (app_settings markers keyed to rd). Season-gated + membership-scoped
 // (only opt-in pickleball members are pushed — never the whole club). Skipped while hidden
 // or cancelled. Manual open/close/date still work anytime.
@@ -3803,7 +3812,7 @@ function pkAutoRunState() {
   const hh = h => `T${String(h).padStart(2, '0')}:00:00`;
   const openAt = new Date(shiftYmd(rd, -7) + hh(PK_END_H)).getTime();          // prior run's end (prev Tue 9 PM) → reopen
   const pingAt = new Date(shiftYmd(rd, -PK_PING_DOW_OFFSET) + hh(PK_PING_H)).getTime(); // night before (Mon 8 PM)
-  const lockAt = new Date(rd + hh(PK_START_H)).getTime();                       // run start (Tue 6 PM)
+  const lockAt = new Date(rd + 'T' + PK_LOCK + ':00').getTime();                // roster locks 30 min before start (Tue 5:30 PM)
   // OPEN (once) — from the prior run's end through lock.
   if (now >= openAt && now < lockAt && getSetting('pk_autoopen_done') !== rd) {
     setSetting('pk_autoopen_done', rd);
