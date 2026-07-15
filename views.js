@@ -83,7 +83,7 @@ const SPLASH_BODY = `<div id="splash" aria-hidden="true">
     <div class="tt"><b>THE BRIDGE</b><span class="sb">Advanced Basketball Run</span><div class="rl"></div></div>
   </div>
   <div class="sp"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-  <div class="ft">Markham · 7–10 PM</div>
+  <div class="ft">Markham · 8:30–10:30 PM</div>
 </div>
 <script>(function(){var s=document.getElementById('splash');if(!s)return;if(document.documentElement.classList.contains('splashed'))return;var done=function(){s.classList.add('hide');try{sessionStorage.setItem('splashed','1');}catch(e){}setTimeout(function(){if(s&&s.parentNode)s.parentNode.removeChild(s);},600);};var r=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches;setTimeout(done,r?500:1500);window.addEventListener('load',function(){setTimeout(done,900);});})();</script>`;
 
@@ -431,7 +431,7 @@ ${wall ? WALL_HEAD : ''}
 <link rel="stylesheet" href="/styles.css?v=${CSS_VER}">
 </head><body class="${bodyClass}">${SPLASH_BODY}${wall ? WALL_BODY : ''}<div class="wrap">`;
 
-const FOOTER_LINKS = `<div class="foot">The Bridge Adv Runs · Markham · 7–10PM</div><div class="foot legalfoot"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/conduct">Conduct</a></div>`;
+const FOOTER_LINKS = `<div class="foot">The Bridge Adv Runs · Markham · 8:30–10:30PM</div><div class="foot legalfoot"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/conduct">Conduct</a></div>`;
 const FOOT = `${FOOTER_LINKS}</div></body></html>`;
 // Tab-bar pages: render the fixed bottom tab bar as the LAST child of `.wrap`, with the footer
 // text BEFORE it. It must stay inside `.wrap` (the client router swaps `.wrap` — the active-tab
@@ -1297,7 +1297,7 @@ const firstRunTour = `
       {path:'/checkin',sel:'.tabs a[href="/chat"]',ttl:"Run chat",txt:"Chat with the whole run — photos, plans and @mentions. On the team? Press & hold a message to Pin it."},
       {path:'/checkin',sel:'.tabs a[href="/profile"]',ttl:"Your profile",txt:"Your stats, photo and settings live here."},
       {path:'/checkin',sel:'.bellbtn',ttl:"Announcements",txt:"Updates from the host show up here."},
-      {path:'/checkin',sel:'[data-tour="ops-run"]',op:1,ttl:"Run the check-in",txt:"Open or close check-in by hand (it auto-opens Wed and locks at 2 PM). Tap the scoreboard’s “Who’s going” to remove or bump players."},
+      {path:'/checkin',sel:'[data-tour="ops-run"]',op:1,ttl:"Run the check-in",txt:"Open or close check-in by hand (it auto-opens Monday and locks at 2 PM on run day). Tap the scoreboard’s “Who’s going” to remove or bump players."},
       {path:'/checkin',sel:'.hguest summary',op:1,ttl:"Add a guest",txt:"Drop in a last-minute walk-on by name — works even after the 2 PM lock."},
       {path:'/checkin',sel:'.announce-compose summary',op:1,ttl:"Announce to everyone",txt:"Post an update that pushes to the whole run’s phones."},
       {path:'/checkin',sel:'.arpill',op:1,ttl:"Your guaranteed spot",txt:"As team you’re auto-added each week. Toggle this to sit out a week — it never affects your standing."},
@@ -1721,7 +1721,7 @@ function runDayControls({ runDay, rdMsg = '' }) {
       <label class="lvl" style="margin:10px 0 8px;display:block"><input type="checkbox" name="email_everyone" checked> Also email everyone</label>
       <button class="btn sm" type="submit">Set run day &amp; time</button>
     </form>
-    ${runDay.isOverride ? `<form method="POST" action="/admin/rundate" style="margin-top:8px"><input type="hidden" name="date" value="${esc(runDay.defaultFriday)}"><input type="hidden" name="email_everyone" value="1"><button class="btn ghost sm" type="submit">Reset to the usual day &amp; time (${esc(runDay.defaultLabel)})</button></form>` : ''}
+    ${runDay.isOverride ? `<form method="POST" action="/admin/rundate" style="margin-top:8px"><input type="hidden" name="date" value="${esc(runDay.defaultDate)}"><input type="hidden" name="email_everyone" value="1"><button class="btn ghost sm" type="submit">Reset to the usual day &amp; time (${esc(runDay.defaultLabel)})</button></form>` : ''}
     <div class="rule" style="margin:14px 0 12px"></div>
     ${runDay.cancelled
       ? `<div class="notice bad" style="margin:0 0 10px"><b>🚫 This run is cancelled.</b> Players were notified. Restore it to run check-in again.</div><form method="POST" action="/admin/run/cancel" style="margin:0"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Restore this run</button></form>`
@@ -1729,7 +1729,7 @@ function runDayControls({ runDay, rdMsg = '' }) {
   </div></div>`;
 }
 
-export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 PM', startLabel = '7 PM', tipoff = 0, cap, waitlistCap, going, waiting, full, runFull, isOpen, canSeeCount, regularSlotsFull,
+export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–10:30 PM', startLabel = '8:30 PM', tipoff = 0, cap, waitlistCap, going, waiting, full, runFull, isOpen, canSeeCount, regularSlotsFull,
                              myState, myWaitPos, myOffer = null, offerWindowHours = 3, iAmTeam, iAmRegular, iOptedOut, iAutoRenew,
                              viewerIsAdmin, canOperate, canSeeRoster, suspended = false, suspendReason = '', myConfirmed = false, msg = '', bannerVer = '4', cancelled = false, locked = false, announcement = null, announcementLog = [], inPlayers, offeredPlayers = [], waitPlayers, host = null, runDay = null, rdMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
 
@@ -2174,7 +2174,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '7–10 
 // ---------- CLAIM RESULT (waitlist offer landing page) ----------
 // Shown after tapping a spot-offer claim link (from the email or the in-app banner).
 // ok=true → they're in for Friday; ok=false → the offer expired / was already claimed.
-export function claimResultPage({ ok = false, runLabel = '', runDate = '', startLabel = '7 PM' } = {}) {
+export function claimResultPage({ ok = false, runLabel = '', runDate = '', startLabel = '8:30 PM' } = {}) {
   if (ok) {
     return HEAD("You're in — Adv Runs", '', { wall: false }) + header('', wdayShort(runDate)) + `
       <div class="rule"></div>
@@ -2205,7 +2205,7 @@ const fmtMonthYear = (s) => {
 // section header) + the shared chatFragment (feed + pinned composer + reload/scroll
 // script). body.has-chat reserves room for the composer sitting just above the
 // bottom tab bar. Mark-read happens in the GET /chat route.
-export function chatPage({ me, chat, runDate = '', hours = '7–10 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+export function chatPage({ me, chat, runDate = '', hours = '8:30–10:30 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
   const members = chat.members || [];
   // Member row → tappable link to their profile. Role flags map to the shared roleBadge.
   const memRow = (p) => {
@@ -2316,7 +2316,7 @@ export function profileCard({ p, stats, canContact = false, isSelf = false }) {
     <div class="pcbtns">${isSelf ? `<a class="btn ghost sm" href="/profile">Edit profile</a>` : `<a class="btn primary sm" href="/messages/${p.id}">Message</a>`}<a class="btn ghost sm" href="/u/${p.id}">Full profile →</a></div>`;
 }
 
-export function profilePage({ p, stats, isSelf = false, canContact = false, runDate = '', hours = '7–10 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+export function profilePage({ p, stats, isSelf = false, canContact = false, runDate = '', hours = '8:30–10:30 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
   const badges = [
     p.is_host ? '<span class="bdg host">★ Host</span>' : '',
     p.is_team ? '<span class="bdg team">◆ Team</span>' : (p.is_regular ? '<span class="bdg core">★ Core</span>' : ''),
@@ -3398,7 +3398,7 @@ ${mentionAutocompleteJS()}
 }
 
 // ---------- ADMIN / COUNCIL ----------
-export function adminPage({ applicants, runLabel, runDate = '', hours = '7–10 PM', checkedInCount, cap,
+export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–10:30 PM', checkedInCount, cap,
                            waitlistCap = 5, preregCap = 10, msg = '',
                            viewerIsAdmin = true, viewerIsTeam = false, viewerIsHost = false, viewerEmail = '', log = [],
                            filter = 'all', counts = {}, teamMembers = [], ann = null,

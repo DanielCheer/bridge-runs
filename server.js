@@ -361,17 +361,21 @@ app.get('/manifest.webmanifest', (req, res) => {
 });
 
 // ---- helpers ----
-function nextFriday(d = new Date()) {
+// The standing weekly run day: 0=Sun … 6=Sat. 3 = Wednesday. The whole basketball
+// schedule (next run, overrides, auto open/lock) keys off this — change it here to
+// move the standing run to another weekday.
+const RUN_DOW = 3;
+function nextRunDefault(d = new Date()) {
   const r = new Date(d);
-  const day = r.getDay();            // 0 Sun … 5 Fri
-  const add = (5 - day + 7) % 7;
-  // Stays on this Friday all day; at Saturday 00:00 it rolls to next Friday —
-  // so the queue resets at midnight and regulars can re-queue right away.
+  const day = r.getDay();            // 0 Sun … 6 Sat
+  const add = (RUN_DOW - day + 7) % 7;
+  // Stays on the run day all day; at the following local midnight it rolls to next
+  // week — so the queue resets at midnight and regulars can re-queue right away.
   r.setDate(r.getDate() + add);
   // Format from LOCAL components — NOT toISOString(), which is UTC. On Eastern,
-  // toISOString() at Fri 8PM EDT / 7PM EST already reads "Saturday" in UTC and
-  // would roll to NEXT Friday mid-run, purging the current roster. The rollover
-  // must happen at LOCAL midnight, so derive Y-M-D from the local date parts.
+  // an evening run's toISOString() already reads the NEXT calendar day in UTC and
+  // would roll to next week mid-run, purging the current roster. The rollover must
+  // happen at LOCAL midnight, so derive Y-M-D from the local date parts.
   const ymd = x => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
   return ymd(r); // YYYY-MM-DD (local)
 }
@@ -381,33 +385,34 @@ function runLabelFor(dateStr) {
 }
 
 // --- Host-configurable run day ---------------------------------------------
-// The run defaults to a weekly Friday. A host can move the NEAREST run to ANY nearby
-// date — earlier OR later than that Friday. An override REPLACES the default Friday
-// closest to the chosen date; it is keyed by that Friday (nearestFriday(chosen)) and
-// stores the host-chosen actual run_date. nextRunDate() resolves the ACTUAL upcoming
-// run date that EVERYTHING keys off (checkins, run_state, attendance, offers, admin).
+// The run defaults to a weekly run day (RUN_DOW = Wednesday). A host can move the
+// NEAREST run to ANY nearby date — earlier OR later than that Wednesday. An override
+// REPLACES the default run day closest to the chosen date; it is keyed by that day
+// (nearestRunDefault(chosen)) and stores the host-chosen actual run_date. nextRunDate()
+// resolves the ACTUAL upcoming run date that EVERYTHING keys off (checkins, run_state,
+// attendance, offers, admin).
 //
-// Because a run can move LATER (e.g. Fri→Sat), the run date can fall AFTER its key
-// Friday. So nextRunDate() cannot just look at this week's Friday — it scans a
-// 3-Friday window [thisFriday-7, thisFriday, thisFriday+7], resolves each Friday's
-// actual run date (override or the Friday itself), keeps those on-or-after today, and
-// returns the soonest. The -7 arm is what keeps a Friday→Saturday run resolving to the
-// Saturday on the run day itself (when nextFriday has already flipped to next week),
-// instead of leaking forward to next Friday. See ensureWeek() for the matching rollover.
+// Because a run can move LATER (e.g. Wed→Thu), the run date can fall AFTER its key
+// run day. So nextRunDate() cannot just look at this week's run day — it scans a
+// 3-week window [thisRunDay-7, thisRunDay, thisRunDay+7], resolves each week's actual
+// run date (override or the day itself), keeps those on-or-after today, and returns the
+// soonest. The -7 arm is what keeps a Wed→Thu run resolving to the Thursday on the run
+// day itself (when nextRunDefault has already flipped to next week), instead of leaking
+// forward to next week. See ensureWeek() for the matching rollover.
 const stmtRunOverride = db.prepare('SELECT run_date, run_time, run_end FROM run_overrides WHERE default_date = ?');
 function runOverrideRow(fridayKey) { return stmtRunOverride.get(fridayKey) || null; }
 function runOverrideFor(fridayKey) {
   const row = stmtRunOverride.get(fridayKey);
   return row ? row.run_date : null;
 }
-// Default run window — 7 PM to 10 PM, server-local (Eastern). The host can override
+// Default run window — 8:30 PM to 10:30 PM, server-local (Eastern). The host can override
 // per week via run_overrides.run_time / run_end (HH:MM). NULL columns fall back here.
-const DEFAULT_START = '19:00', DEFAULT_END = '22:00';
+const DEFAULT_START = '20:30', DEFAULT_END = '22:30';
 // The {start,end} HH:MM for the run on a given date — from that week's override (keyed
-// by its nearest Friday) or the defaults. Time-only overrides (run_date === default)
+// by its nearest run day) or the defaults. Time-only overrides (run_date === default)
 // still carry run_time/run_end, so this resolves them even when the day didn't move.
 function runTimesFor(runDate) {
-  const row = runOverrideRow(nearestFriday(new Date(runDate + 'T12:00:00')));
+  const row = runOverrideRow(nearestRunDefault(new Date(runDate + 'T12:00:00')));
   return { start: (row && row.run_time) || DEFAULT_START, end: (row && row.run_end) || DEFAULT_END };
 }
 // "7 PM" / "7:30 PM" from HH:MM.
@@ -432,27 +437,36 @@ function shiftYmd(ymdStr, days) {
   r.setDate(r.getDate() + days);
   return ymdLocal(r);
 }
-// The default run day (Friday) NEAREST a chosen date (ties → the earlier Friday). Every
-// date is ≤3 days from a Friday, so this is unambiguous. This is the override KEY: moving
-// the run to D replaces the default Friday closest to D.
-function nearestFriday(d = new Date()) {
+// The default run day (RUN_DOW) NEAREST a chosen date (ties → the earlier one). Every
+// date is ≤3 days from the run day, so this is unambiguous. This is the override KEY:
+// moving the run to D replaces the default run day closest to D.
+function nearestRunDefault(d = new Date()) {
   const r = new Date(d);
-  const fwd = (5 - r.getDay() + 7) % 7;    // 0..6 days forward to the next Friday
-  const delta = fwd <= 3 ? fwd : fwd - 7;  // forward if ≤3, else the earlier (backward) Friday
+  const fwd = (RUN_DOW - r.getDay() + 7) % 7;  // 0..6 days forward to the next run day
+  const delta = fwd <= 3 ? fwd : fwd - 7;      // forward if ≤3, else the earlier (backward) run day
   r.setDate(r.getDate() + delta);
   return ymdLocal(r);
 }
+// Season opener (YYYY-MM-DD) or null. Before it, there are NO weekly runs — the next run
+// is the first run day on/after the opener, and nothing auto-opens until ~2 days before it.
+// This keeps the standing weekly schedule from conjuring phantom off-season runs.
+function seasonStart() { const s = getSetting('season_start'); return (s && /^\d{4}-\d{2}-\d{2}$/.test(s)) ? s : null; }
 function nextRunDate(d = new Date()) {
   const today = ymdLocal(d);
-  const F = nextFriday(d);
+  const opener = seasonStart();
+  const preseason = opener && today < opener;
+  // Pre-season: resolve the first run day on/after the opener (never earlier than it).
+  const from = preseason ? new Date(opener + 'T12:00:00') : d;
+  const lo = preseason ? opener : today;   // floor: no run before the opener (or before today, in-season)
+  const F = nextRunDefault(from);
   const cands = [];
-  for (const bf of [shiftYmd(F, -7), F, shiftYmd(F, 7)]) {  // last / this / next Friday
-    const rd = runOverrideFor(bf) || bf;                    // that Friday's actual run date
-    if (rd >= today) cands.push(rd);                        // only runs still upcoming
+  for (const bf of [shiftYmd(F, -7), F, shiftYmd(F, 7)]) {  // last / this / next week's run day
+    const rd = runOverrideFor(bf) || bf;                    // that week's actual run date
+    if (rd >= lo) cands.push(rd);                           // only runs still upcoming (and in-season)
   }
-  // F itself is always ≥ today, so cands is non-empty unless F is overridden into the
-  // past — in which case F+7 (never overridable into the past) still qualifies. Guarded
-  // with a fallback to F regardless. YYYY-MM-DD compares lexicographically = chronologically.
+  // F itself is always ≥ lo, so cands is non-empty unless F is overridden into the past —
+  // in which case F+7 (never overridable into the past) still qualifies. Guarded with a
+  // fallback to F regardless. YYYY-MM-DD compares lexicographically = chronologically.
   return cands.length ? cands.reduce((a, b) => (a < b ? a : b)) : F;
 }
 // Dynamic day labels — the whole app's "Friday" wording follows the actual run day.
@@ -460,7 +474,7 @@ const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frida
 const WEEKDAYS_SHORT = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 function runWeekday(dateStr) { return WEEKDAYS[new Date(dateStr + 'T12:00:00').getDay()]; }
 function runWeekdayShort(dateStr) { return WEEKDAYS_SHORT[new Date(dateStr + 'T12:00:00').getDay()]; }
-// Local YYYY-MM-DD (matches nextFriday's local-parts formatting).
+// Local YYYY-MM-DD (matches nextRunDefault's local-parts formatting).
 function ymdLocal(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
@@ -1776,13 +1790,13 @@ function runDayFor(req, gate) {
   const canSetRunDay = gate.viewerIsAdmin || !!(gate.a && gate.a.is_host);
   if (!canSetRunDay) return null;
   const rdRunDate = nextRunDate();
-  const rdBase = nearestFriday(new Date(rdRunDate + 'T12:00:00')); // base Friday this run is keyed under
+  const rdBase = nearestRunDefault(new Date(rdRunDate + 'T12:00:00')); // base run day this run is keyed under
   const rdTimes = runTimesFor(rdRunDate);
   return {
     runDate: rdRunDate, weekday: runWeekday(rdRunDate), label: runLabelFor(rdRunDate),
     isOverride: !!runOverrideRow(rdBase), dateMoved: rdRunDate !== rdBase,
     start: rdTimes.start, end: rdTimes.end, timeLabel: runTimeRange(rdRunDate),
-    defaultFriday: rdBase, defaultLabel: runLabelFor(rdBase),
+    defaultDate: rdBase, defaultLabel: runLabelFor(rdBase),
     today: ymdLocal(), maxDate: shiftYmd(ymdLocal(), 30), cancelled: runIsCancelled(rdRunDate),
   };
 }
@@ -3189,9 +3203,9 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
   const end = rawEnd || DEFAULT_END;
   if (end <= start) return res.redirect('/checkin?rderr=time');
 
-  // Key the override by the default Friday NEAREST the chosen date — an override
-  // REPLACES that Friday's run. Reset (default day + default time) clears any override.
-  const base = nearestFriday(new Date(raw + 'T12:00:00'));
+  // Key the override by the default run day NEAREST the chosen date — an override
+  // REPLACES that day's run. Reset (default day + default time) clears any override.
+  const base = nearestRunDefault(new Date(raw + 'T12:00:00'));
   const timeCustom = start !== DEFAULT_START || end !== DEFAULT_END;
   const dateMoved = raw !== base;
   const storeTime = timeCustom ? start : null;   // NULL cols = "use defaults"
@@ -3503,17 +3517,14 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
 // rollover and drop/cascade any expired holds. req=null → createOffer's link falls
 // back to PUBLIC_URL (kept set in .env), so offer emails carry the real Funnel URL.
 // Auto open/close the check-in queue, keyed to the ACTUAL run day so it stays correct
-// when the host moves the run. Opens at 5 PM the WEDNESDAY of the run's week, locks +
-// auto-pings at 2 PM ON the run day. Each fires ONCE per cycle (a per-run flag), never
-// fights a manual host toggle, and the OPEN ping goes ONLY to no-early-access regulars
-// (Core/Team/Host already have early access).
+// when the host moves the run. Opens at 5 PM TWO DAYS BEFORE the run (Mon for a Wed
+// run), locks + auto-pings at 2 PM ON the run day. Each fires ONCE per cycle (a per-run
+// flag), never fights a manual host toggle, and the OPEN ping goes ONLY to no-early-access
+// regulars (Core/Team/Host already have early access).
 function runStateSchedule() {
   const rd = nextRunDate();
-  const runD = new Date(rd + 'T12:00:00');
-  const closeAt = new Date(rd + 'T14:00:00').getTime();          // run day 2 PM — queue locks + auto-ping
-  const back = ((runD.getDay() - 3) + 7) % 7;                    // days from run day back to its Wednesday
-  const wed = new Date(runD); wed.setDate(wed.getDate() - back);
-  const openAt = new Date(ymdLocal(wed) + 'T17:00:00').getTime(); // Wednesday 5 PM
+  const closeAt = new Date(rd + 'T14:00:00').getTime();            // run day 2 PM — queue locks + auto-ping
+  const openAt = new Date(shiftYmd(rd, -2) + 'T17:00:00').getTime(); // 2 days before, 5 PM
   return { rd, openAt, closeAt };
 }
 function autoRunState() {
@@ -3600,7 +3611,14 @@ app.get('/season', requireLogin, (req, res) => {
 // ---------- PICKLEBALL (separate, hidden run — ISOLATED pk_* tables, no basketball impact) ----------
 const PK_CAP = Number(process.env.PK_CAP || 20), PK_WAIT = Number(process.env.PK_WAIT || 4);
 function pkProgramActive() { const r = db.prepare('SELECT active FROM program WHERE id = 2').get(); return !!(r && r.active); }
-function pkRunDate() { return getSetting('pk_run_date') || nextRunDate(); } // admin-set date; defaults to the next basketball run date
+// Pickleball's standing day = Tuesday (PK_DOW=2), DECOUPLED from basketball so moving the
+// basketball run (RUN_DOW) never drags pickleball's date along. The next Tuesday, local.
+const PK_DOW = 2;
+function pkDefaultDate() {
+  const r = new Date(); r.setDate(r.getDate() + ((PK_DOW - r.getDay() + 7) % 7));
+  return ymdLocal(r);
+}
+function pkRunDate() { return getSetting('pk_run_date') || pkDefaultDate(); } // admin-set date; defaults to the next standing pickleball day (Tue)
 function pkIsOpen(rd) { const r = db.prepare('SELECT is_open FROM pk_run_state WHERE run_date = ?').get(rd); return !!(r && r.is_open); }
 function pkIsCancelled(rd) { const r = db.prepare('SELECT cancelled FROM pk_run_state WHERE run_date = ?').get(rd); return !!(r && r.cancelled); }
 function pkSetState(rd, field, val) { db.prepare(`INSERT INTO pk_run_state (run_date, ${field}) VALUES (?, ?) ON CONFLICT(run_date) DO UPDATE SET ${field} = excluded.${field}`).run(rd, val ? 1 : 0); }
@@ -3711,7 +3729,7 @@ function pkEnsureWeek() {
   }
   db.prepare('DELETE FROM pk_checkins WHERE run_date < ?').run(today);
   db.prepare('DELETE FROM pk_run_state WHERE run_date < ?').run(today);
-  // Clear a passed explicit date back to the default (next basketball date).
+  // Clear a passed explicit date back to the default (next standing pickleball day, Tue).
   const set = getSetting('pk_run_date');
   if (set && set < today) db.prepare("DELETE FROM app_settings WHERE key = 'pk_run_date'").run();
 }
