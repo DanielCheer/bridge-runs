@@ -3774,6 +3774,18 @@ function pkSeatRenewers(rd) {
   }
   return added;
 }
+// When a FLOOR player leaves, the next waitlister silently crosses onto the floor (pkPartition
+// re-slices by order — pickleball has no offer/claim window, it's immediate first-come). Push
+// that person so they actually know a spot opened. CALL THIS BEFORE deleting the leaver, passing
+// their email — returns nothing, just notifies the promoted waitlister (if any, non-guest).
+function pkNotifyPromotion(rd, leavingEmail) {
+  const part = pkPartition(rd);
+  if (!part.floor.some(p => p.email === leavingEmail)) return; // leaver was on the waitlist → no floor spot frees
+  const next = part.wait[0];                                   // first waitlister → promoted once the leaver goes
+  if (!next || /@guest\.local$/.test(next.email)) return;
+  setImmediate(() => sendPush([next.email], { title: "You're in for pickleball 🥒", body: `A spot opened — you're on the floor for ${runWeekday(rd)}, ${runLabelFor(rd)} pickleball.`, url: '/pickleball', tag: 'pkpromo' }));
+  audit('system', 'system', 'pk:promote', next.email);
+}
 // Weekly auto open/lock/ping for pickleball (runs on the shared 60s interval), keyed to the
 // standing Tuesday (pkRunDate). Check-in OPENS the moment the prior run ends (PK_END_H the
 // previous Tuesday) so members re-queue the same night, the floor gets a CONFIRM PING the
@@ -3874,13 +3886,14 @@ app.get('/pickleball', requireLogin, (req, res) => {
   const rd = pkRunDate(), part = pkPartition(rd);
   const mine = part.rows.find(p => p.email === req.userEmail);
   const myState = mine ? (part.floor.indexOf(mine) >= 0 ? 'in' : 'waitlist') : 'out';
+  const myWaitPos = myState === 'waitlist' ? part.wait.findIndex(p => p.email === req.userEmail) + 1 : 0;
   const myConfirmed = myState === 'in' && !!(mine && mine.confirmed_at);
   const iAutoRenew = !!(db.prepare('SELECT auto_renew FROM program_membership WHERE program_id = 2 AND email = ?').get(req.userEmail)?.auto_renew);
   const pkOpener = pkSeasonStart(), pkPre = !!pkOpener && ymdLocal() < pkOpener;
   res.send(pickleballPage({
     email: req.userEmail, runDate: rd, runLabel: runLabelFor(rd), isOpen: pkIsOpen(rd), cancelled: pkIsCancelled(rd),
     cap: PK_CAP, waitlistCap: PK_WAIT, going: part.floor.length, waiting: part.wait.length,
-    canOperate: g.canOperate, isAdmin: g.admin, myState, floorPlayers: part.floor, waitPlayers: part.wait, hidden: !pkProgramActive(),
+    canOperate: g.canOperate, isAdmin: g.admin, myState, myWaitPos, floorPlayers: part.floor, waitPlayers: part.wait, hidden: !pkProgramActive(),
     myConfirmed, iAutoRenew,
     bannerSrc: pkBannerSrc(), bannerVer: pkBannerVersion(),
     tipoff: pkStartEpoch(rd), announcement: latestPkAnnouncement(),
@@ -3981,6 +3994,7 @@ app.post('/pickleball/join', requireLogin, (req, res) => {
 app.post('/pickleball/leave', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
   const rd = pkRunDate();
+  pkNotifyPromotion(rd, req.userEmail); // tell the next waitlister they're in (before the row goes)
   // Record a sit-out for THIS week so an auto-renew member who leaves isn't re-seated by a
   // later pkSeatRenewers (manual re-open) — mirrors basketball's regular_optout. Cleared when
   // they re-join, and purged on weekly rollover, so their standing renewal resumes next week.
@@ -4036,7 +4050,7 @@ app.post('/pickleball/guest', requireLogin, (req, res) => {
   if (name) { const { rows } = pkPartition(rd); if (rows.length < PK_CAP + PK_WAIT) { const em = `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}@guest.local`; db.prepare('INSERT INTO pk_checkins (run_date, email, name) VALUES (?,?,?)').run(rd, em, name + ' (guest)'); } }
   res.redirect('/pickleball');
 });
-app.post('/pickleball/remove', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); db.prepare('DELETE FROM pk_checkins WHERE run_date = ? AND email = ?').run(pkRunDate(), String(req.body.email || '')); res.redirect('/pickleball'); });
+app.post('/pickleball/remove', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(), em = String(req.body.email || ''); pkNotifyPromotion(rd, em); db.prepare('DELETE FROM pk_checkins WHERE run_date = ? AND email = ?').run(rd, em); res.redirect('/pickleball'); });
 app.post('/pickleball/bump', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(); if (pkIsCancelled(rd)) return res.redirect('/pickleball'); const row = db.prepare('SELECT MIN(sort_order) m FROM pk_checkins WHERE run_date = ?').get(rd); db.prepare('UPDATE pk_checkins SET sort_order = ? WHERE run_date = ? AND email = ?').run(((row && row.m) || 0) - 1, rd, String(req.body.email || '')); res.redirect('/pickleball'); });
 app.post('/pickleball/publish', requireAdmin, (req, res) => { db.prepare('UPDATE program SET active = ? WHERE id = 2').run(req.body.on === '0' ? 0 : 1); audit(req.userEmail, 'admin', req.body.on === '0' ? 'pk:hide' : 'pk:publish', ''); res.redirect('/pickleball'); });
 // Post a pickleball announcement — operator only. Stored on the isolated pk_announcements

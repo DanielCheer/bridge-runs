@@ -2493,7 +2493,7 @@ export function pkJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, g
 
 // Pickleball run — a SEPARATE, hidden run on its own pk_* tables. Dedicated view (reuses the
 // shell + avatar + list styles); does not touch the basketball checkinPage. Native POST forms.
-export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', floorPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, myConfirmed = false, iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, myConfirmed = false, iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
   const full = going >= cap, totalFull = (going + waiting) >= (cap + waitlistCap);
   const rmForm = (p) => `<form method="POST" action="/pickleball/remove" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn leave sm" type="submit">Remove</button></form>`;
   // Tappable name → profile popup (reuses the shared pvOpen + /u/:id/card); guests (no
@@ -2505,7 +2505,7 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
   let action = '';
   if (cancelled) action = `<button class="btn" type="button" disabled>Run cancelled</button>`;
   else if (myState === 'in') action = `<form method="POST" action="/pickleball/leave"><button class="btn ghost" type="submit">Sit out</button></form>`;
-  else if (myState === 'waitlist') action = `<form method="POST" action="/pickleball/leave"><button class="btn ghost" type="submit">Leave waitlist (#${waiting})</button></form>`;
+  else if (myState === 'waitlist') action = `<form method="POST" action="/pickleball/leave"><button class="btn ghost" type="submit">Leave waitlist (#${myWaitPos})</button></form>`;
   else if (!isOpen) action = `<button class="btn" type="button" disabled>Check-in closed</button>`;
   else if (totalFull) action = `<button class="btn" type="button" disabled>Run &amp; waitlist full</button>`;
   else if (full) action = `<form method="POST" action="/pickleball/join"><button class="btn primary" type="submit">Join waitlist (${waiting}/${waitlistCap})</button></form>`;
@@ -2596,6 +2596,7 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
     ${myState === 'in' && !cancelled ? (myConfirmed
       ? `<div class="notice good" style="margin-top:10px">✓ <b>You're confirmed</b> for this run — see you there!</div>`
       : `<form method="POST" action="/pickleball/confirm" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming</button></form>`) : ''}
+    ${myState === 'waitlist' && !cancelled ? `<div class="notice warn" style="margin-top:10px">You're <b>#${myWaitPos}</b> on the waitlist. If a spot opens you'll get a notification and move onto the floor — no need to re-check.</div>` : ''}
     ${cancelled ? '' : `<div style="margin-top:12px"><a href="/pickleball/run.ics" style="font-size:13px;color:var(--muted)">📅 Add this run to your calendar</a></div>`}
     ${qrBlock}
     <div style="height:28px"></div>
