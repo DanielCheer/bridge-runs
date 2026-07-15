@@ -1713,6 +1713,7 @@ function runDayControls({ runDay, rdMsg = '' }) {
     : rdMsg === 'seasonpast' ? '<div class="notice bad">Pick a season start that isn\'t in the past.</div>'
     : rdMsg === 'seasonrange' ? '<div class="notice bad">Pick a season start within the next year.</div>'
     : rdMsg === 'seasonbad' ? '<div class="notice bad">That season date didn\'t look right — try again.</div>'
+    : rdMsg === 'preseason' ? '<div class="notice bad">The season hasn\'t started yet — set the opener with the Season control below.</div>'
     : '';
 
   // "Next run" line — pre-season it's the season opener (not editable via the 30-day picker).
@@ -1895,7 +1896,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
   // ----- announcement compose (operators only; folded into the teal hero) -----
   const annCompose = canOperate
     ? `<details class="announce-compose"><summary>Send announcement</summary>
-        <form method="POST" action="/announce" style="margin-top:10px">
+        <form method="POST" action="/announce" style="margin-top:10px" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Posting…';">
           <textarea name="body" required maxlength="500" placeholder="e.g. No run this week — gym's booked. Back next week."></textarea>
           <div style="height:8px"></div>
           <label class="lvl" style="margin:0 0 8px"><input type="checkbox" name="email_everyone" checked> Also email everyone</label>
@@ -2602,9 +2603,13 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
     ${canOperate ? `<div class="infosec" style="margin-top:20px"><div class="card"><div class="clab">Operator tools</div>
       ${(pkMsg === 'season') ? '<div class="notice good">Season start set ✓</div>'
         : (pkMsg === 'seasonoff') ? '<div class="notice good">Season cleared — runs resume every week ✓</div>'
+        : (pkMsg === 'date') ? '<div class="notice good">Run date updated ✓</div>'
         : (pkMsg === 'seasonpast') ? '<div class="notice bad">Pick a season start that is not in the past.</div>'
         : (pkMsg === 'seasonrange') ? '<div class="notice bad">Pick a season start within the next year.</div>'
-        : (pkMsg === 'seasonbad') ? '<div class="notice bad">That season date did not look right — try again.</div>' : ''}
+        : (pkMsg === 'seasonbad') ? '<div class="notice bad">That season date did not look right — try again.</div>'
+        : (pkMsg === 'datepast') ? '<div class="notice bad">Pick a run date that is not in the past.</div>'
+        : (pkMsg === 'daterange') ? '<div class="notice bad">Pick a run date within the next 60 days.</div>'
+        : (pkMsg === 'datebad') ? '<div class="notice bad">That run date did not look right — try again.</div>' : ''}
       ${preseason
         ? `<p class="tally-note" style="color:var(--muted);margin:8px 0 0">Runs Tuesdays. Weekly run-date &amp; cancel controls appear once the season starts (${esc(seasonWeekday)}, ${esc(seasonLabel)}).</p>`
         : `<form method="POST" action="/pickleball/date" style="display:flex;gap:8px;align-items:center;margin:8px 0 0"><input type="date" name="date" value="${esc(runDate)}" style="font-size:16px"><button class="btn ghost sm" type="submit">Set run date</button></form>

@@ -133,8 +133,13 @@ function queueOpenEmailRecipients() {
 // ---- Web Push: load-or-generate the VAPID keypair (persisted in app_settings so it
 // survives restarts + rides the db backup — never in .env) and a fire-and-forget send
 // helper that prunes dead subscriptions on 404/410. ----
-const getSetting = (k) => db.prepare('SELECT value FROM app_settings WHERE key = ?').get(k)?.value;
-const setSetting = (k, v) => db.prepare('INSERT OR REPLACE INTO app_settings (key,value) VALUES (?,?)').run(k, String(v));
+// Hoisted — settings sit on the hottest path (seasonStart/pkSeasonStart inside nextRunDate,
+// chat_seq every /poll tick, bumpChatSeq on every send). node:sqlite has no stmt cache, so
+// re-preparing per call recompiles the SQL each time; prepare once, reuse.
+const stmtGetSetting = db.prepare('SELECT value FROM app_settings WHERE key = ?');
+const stmtSetSetting = db.prepare('INSERT OR REPLACE INTO app_settings (key,value) VALUES (?,?)');
+const getSetting = (k) => stmtGetSetting.get(k)?.value;
+const setSetting = (k, v) => stmtSetSetting.run(k, String(v));
 // Apply any host-saved capacity overrides (app_settings) over the env defaults. Called
 // once at startup and again whenever the host saves settings, so live edits need no
 // restart. A missing / non-positive stored value falls back to the env default.
@@ -1304,12 +1309,13 @@ app.post('/invite/:token', async (req, res) => {
       db.prepare('UPDATE applicants SET status=?, is_team=?, is_regular=?, full_name=?, phone=? WHERE email=?')
         .run('approved', isTeam, isRegular, full_name, phone, email);
     } else {
-      // Unverified submitter (no ownership proof yet — magic link verifies below). Only
-      // ever UPGRADE the existing record: never downgrade a team/core member to a blank
-      // invite's role, never un-reject someone, never touch is_host. This stops a griefer
-      // from claiming a blank invite with another player's email to strip their role.
-      db.prepare("UPDATE applicants SET status = CASE WHEN status = 'rejected' THEN 'rejected' ELSE 'approved' END, is_team = MAX(is_team, ?), is_regular = MAX(is_regular, ?) WHERE email = ?")
-        .run(isTeam, isRegular, email);
+      // Unverified submitter (email doesn't match the invite's prefill → no ownership proof).
+      // Only ever un-hold their status to approved; NEVER change roles here. Granting is_team/
+      // is_regular would let anyone holding a role-carrying invite type a VICTIM's email and
+      // promote that victim (e.g. into the Team voting pool) with no proof they own it. A real
+      // role upgrade goes through the prefilled-match branch (verified) or /admin/people/edit.
+      db.prepare("UPDATE applicants SET status = CASE WHEN status = 'rejected' THEN 'rejected' ELSE 'approved' END WHERE email = ?")
+        .run(email);
     }
   } else {
     db.prepare(`INSERT INTO applicants (full_name,email,phone,experience,waiver_ok,status,is_team,is_regular)
@@ -1352,7 +1358,11 @@ app.post('/invite/:token', async (req, res) => {
 // Posting a new one archives the current live one (kept in history, not lost).
 app.post('/announce', requireApprover, (req, res) => {
   const body = (req.body.body || '').trim().slice(0, 500);
-  if (body) {
+  // Double-submit guard: a fast double-tap (the compose form isn't router-intercepted) would
+  // otherwise insert two rows AND fire push + email twice (a real Gmail-quota hit). Skip a
+  // repeat of the same body by the same author within 10s.
+  const dup = body && db.prepare("SELECT 1 FROM announcements WHERE body = ? AND author = ? AND at >= datetime('now','-10 seconds') LIMIT 1").get(body, req.userEmail);
+  if (body && !dup) {
     db.prepare("UPDATE announcements SET archived = 1, archived_at = datetime('now') WHERE archived = 0").run();
     db.prepare('INSERT INTO announcements (body,author) VALUES (?,?)').run(body, req.userEmail);
     audit(req.userEmail, req.actorRole, 'announce:post', body.slice(0, 60));
@@ -1414,7 +1424,12 @@ app.post('/announcements/:id/dismiss', requireLogin, (req, res) => {
   }
   const wantsJson = (req.headers['x-requested-with'] || '') === 'fetch';
   if (wantsJson) return res.status(204).end();
-  res.redirect(req.get('referer') || '/checkin');
+  // Bounce back to wherever they were, but only ever to a SAME-ORIGIN path — strip the
+  // host/scheme off the Referer so a spoofed header can't funnel an off-site URL into the
+  // redirect shim (the shim escapes it anyway, but keep this consistent with safeNextPath).
+  let back = '/checkin';
+  try { const u = new URL(req.get('referer')); back = (u.pathname || '/') + (u.search || ''); } catch {}
+  res.redirect(back);
 });
 
 // ---- Web Push subscription endpoints. Subscription objects are nested JSON, so parse
@@ -1684,12 +1699,19 @@ const stmtPurgeSpentOverrides = db.prepare('DELETE FROM run_overrides WHERE run_
 let lastRunDate = null;
 function ensureWeek(runDate = nextRunDate()) {
   if (runDate === lastRunDate) return; // no-op until the soonest run date advances (rollover)
-  stmtArchiveAttendance.run(runDate, CAP);  // archive the final floor of every run before cur
-  stmtPurgeCheckins.run(runDate);           // then purge those now-past runs' checkins…
-  stmtPurgeOptouts.run(runDate);            // …opt-outs…
-  stmtPurgeRunState.run(runDate);           // …and stale open/closed state
-  { const t = ymdLocal(); stmtPurgeSpentOverrides.run(t, t); }  // drop fully-past overrides
-  autoJoinTeam(runDate);                    // re-seat auto-renew team onto the new run
+  // Archive/purge cutoff = TODAY, never `runDate` (cur). cur is the soonest UPCOMING run and is
+  // always ≥ today; under normal weekly rollover today and cur select the same past runs. But if
+  // cur JUMPS FORWARD past a future run that still has check-ins (e.g. a season-start gate is set,
+  // or a run is moved weeks out), a cur-based cutoff would archive that FUTURE run's roster as
+  // attendance and purge it — corrupting the season board + losing the roster. Cutting off at
+  // today archives only runs that have actually ended.
+  const t = ymdLocal();
+  stmtArchiveAttendance.run(t, CAP);  // archive the final floor of every run that has ended
+  stmtPurgeCheckins.run(t);           // then purge those now-past runs' checkins…
+  stmtPurgeOptouts.run(t);            // …opt-outs…
+  stmtPurgeRunState.run(t);           // …and stale open/closed state
+  stmtPurgeSpentOverrides.run(t, t);  // drop fully-past overrides
+  autoJoinTeam(runDate);              // re-seat auto-renew team onto the new run
   lastRunDate = runDate;
 }
 
@@ -3188,6 +3210,10 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
   const host = !!(a && a.is_host);
   if (!admin && !host) return res.status(403).send('Only the host or an admin can set the run day.');
   const actorRole = admin ? 'admin' : 'host';
+  // Pre-season the weekly run doesn't exist yet — the form is hidden, but reject a stale-tab /
+  // direct POST so it can't create a dead override AND blast a phantom "the run is now …"
+  // announcement + push to every member. Set the season via the Season control instead.
+  { const opener = seasonStart(); if (opener && ymdLocal() < opener) return res.redirect('/checkin?rderr=preseason'); }
 
   const raw = String(req.body.date || '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || isNaN(new Date(raw + 'T12:00:00')))
@@ -3252,9 +3278,17 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
     try {
       const st = stmtRunIsOpen.get(oldRunDate);
       if (st) { setRunOpen(newRunDate, st.is_open); db.prepare('DELETE FROM run_state WHERE run_date = ?').run(oldRunDate); }
-      // Carry the once-per-run auto-open/close markers to the new date — otherwise moving a
-      // run the host already closed re-arms auto-open under the new (unmarked) date key.
-      for (const k of ['autoopen_done', 'autoclose_done']) if (getSetting(k) === oldRunDate) setSetting(k, newRunDate);
+      // Carry the once-per-run auto-open marker to the new date — otherwise moving a run the
+      // host already closed re-arms auto-open under the new (unmarked) date key.
+      if (getSetting('autoopen_done') === oldRunDate) setSetting('autoopen_done', newRunDate);
+      // The auto-CLOSE/confirm-ping marker only carries if the new date's 2 PM lock has ALREADY
+      // passed; if the new run day is still ahead, RESET it so the new day still auto-locks +
+      // pings (carrying it blindly would skip the confirm ping when moving a run to a later day).
+      if (getSetting('autoclose_done') === oldRunDate) {
+        const newClose = new Date(newRunDate + 'T14:00:00').getTime();
+        if (Date.now() >= newClose) setSetting('autoclose_done', newRunDate);
+        else db.prepare("DELETE FROM app_settings WHERE key = 'autoclose_done'").run();
+      }
       db.prepare('UPDATE checkins SET run_date = ? WHERE run_date = ?').run(newRunDate, oldRunDate);
       db.prepare('UPDATE regular_optout SET run_date = ? WHERE run_date = ?').run(newRunDate, oldRunDate);
       db.exec('COMMIT');
@@ -3651,6 +3685,13 @@ function pkProgramActive() { const r = db.prepare('SELECT active FROM program WH
 const PK_DOW = 2, PK_START_H = 18, PK_END_H = 21, PK_PING_H = 20, PK_PING_DOW_OFFSET = 1;
 // Season opener (YYYY-MM-DD) or null — same gate shape as basketball's seasonStart().
 function pkSeasonStart() { const s = getSetting('pk_season_start'); return (s && /^\d{4}-\d{2}-\d{2}$/.test(s)) ? s : null; }
+// The standing weekday (dow) NEAREST a chosen date — the Tuesday a moved run replaces.
+function pkNearestDow(dateStr, dow) {
+  const r = new Date(dateStr + 'T12:00:00');
+  const fwd = (dow - r.getDay() + 7) % 7;
+  r.setDate(r.getDate() + (fwd <= 3 ? fwd : fwd - 7));
+  return ymdLocal(r);
+}
 // The next standing Tuesday, local. Rolls to next week once the current run has ENDED
 // (>= PK_END_H on run day) so check-in reopens the same night. Season-gated: pre-season it
 // resolves to the first Tuesday on/after the opener (no phantom off-season runs).
@@ -3660,6 +3701,10 @@ function pkDefaultDate() {
   if (add === 0 && now.getHours() >= PK_END_H) add = 7;   // run's over tonight → next week
   const r = new Date(now); r.setDate(r.getDate() + add);
   let d = ymdLocal(r);
+  // Skip a standing Tuesday whose run was MOVED to another day this week (pk_run_base) — else
+  // once the moved run passes, this would resurrect that Tuesday as a phantom run (open+ping).
+  const skip = getSetting('pk_run_base');
+  if (skip && d === skip) { const s = new Date(d + 'T12:00:00'); s.setDate(s.getDate() + 7); d = ymdLocal(s); }
   const opener = pkSeasonStart();
   if (opener && d < opener) {   // pre-season → first standing day on/after the opener
     const o = new Date(opener + 'T12:00:00'); o.setDate(o.getDate() + ((PK_DOW - o.getDay() + 7) % 7));
@@ -3683,7 +3728,7 @@ function pkPartition(rd) {
 }
 // Pickleball run start epoch — the run date at 6 PM local. Drives the countdown banner
 // AND the auto-lock time (check-in closes at start).
-function pkStartEpoch(rd) { return rd ? new Date(rd + 'T18:00:00').getTime() : 0; }
+function pkStartEpoch(rd) { return rd ? new Date(rd + `T${String(PK_START_H).padStart(2, '0')}:00:00`).getTime() : 0; }
 // Latest LIVE pickleball announcement (own pk_announcements table; retracted ones archived).
 function latestPkAnnouncement() { return db.prepare('SELECT id, body, author, created_at FROM pk_announcements WHERE COALESCE(archived,0) = 0 ORDER BY id DESC LIMIT 1').get() || null; }
 // Pickleball MEMBERSHIP: you become a pickleball member by opening the run (GET /pickleball) —
@@ -3802,9 +3847,15 @@ function pkEnsureWeek() {
     for (const p of floor) if (!/@guest\.local$/.test(p.email)) ins.run(rd, p.email, p.name);
     del.run(rd); delS.run(rd);
   }
+  // Sweep stale run_state for past runs that had NO check-ins (a zero-join or cancelled week
+  // never appears in pastDates above, so its is_open/cancelled row would leak forever).
+  db.prepare('DELETE FROM pk_run_state WHERE run_date < ?').run(today);
   // Clear a passed explicit override back to the weekly standing day.
   const set = getSetting('pk_run_date');
   if (set && isPast(set)) db.prepare("DELETE FROM app_settings WHERE key = 'pk_run_date'").run();
+  // Clear a consumed standing-Tuesday skip once that Tuesday is itself past (see /pickleball/date).
+  const base = getSetting('pk_run_base');
+  if (base && base < today) db.prepare("DELETE FROM app_settings WHERE key = 'pk_run_base'").run();
 }
 app.get('/pickleball', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
@@ -3903,7 +3954,7 @@ app.get('/pickleball/run.ics', requireLogin, (req, res) => {
   const ics = [
     'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//The Bridge Adv Runs//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
     'BEGIN:VEVENT', `UID:bridge-pk-${rd}@bridge`, `DTSTAMP:${ymdLocal().replace(/-/g, '')}T000000`,
-    `DTSTART:${dt('1800')}`, `DTEND:${dt('2100')}`,
+    `DTSTART:${dt(String(PK_START_H).padStart(2, '0') + '00')}`, `DTEND:${dt(String(PK_END_H).padStart(2, '0') + '00')}`,
     'SUMMARY:The Bridge — Pickleball', 'LOCATION:The Bridge · Markham',
     pkIsCancelled(rd) ? 'STATUS:CANCELLED' : 'STATUS:CONFIRMED',
     'END:VEVENT', 'END:VCALENDAR',
@@ -3940,9 +3991,34 @@ app.post('/pickleball/cancel', requireLogin, (req, res) => {
 app.post('/pickleball/date', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball');
   const d = String(req.body.date || '').trim();
-  if (!d) db.prepare("DELETE FROM app_settings WHERE key = 'pk_run_date'").run();          // empty → back to the default (next basketball date)
-  else if (/^\d{4}-\d{2}-\d{2}$/.test(d) && d >= ymdLocal()) setSetting('pk_run_date', d);  // no past dates
-  res.redirect('/pickleball');
+  const oldRd = pkRunDate();
+  if (!d) {   // clear → back to the weekly standing Tuesday
+    db.prepare("DELETE FROM app_settings WHERE key IN ('pk_run_date','pk_run_base')").run();
+    return res.redirect('/pickleball?pkset=date');
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || isNaN(new Date(d + 'T12:00:00'))) return res.redirect('/pickleball?pkerr=datebad');
+  const today = ymdLocal();
+  if (d < today || (d === today && new Date().getHours() >= PK_END_H)) return res.redirect('/pickleball?pkerr=datepast'); // no past / already-ended today
+  const maxD = new Date(); maxD.setDate(maxD.getDate() + 60);
+  if (d > ymdLocal(maxD)) return res.redirect('/pickleball?pkerr=daterange');
+  if (d !== oldRd) {
+    // Migrate the roster + state + once-per-cycle markers old→new (like basketball's /admin/rundate),
+    // and record the standing Tuesday this move consumes so it isn't resurrected as a phantom run.
+    db.exec('BEGIN');
+    try {
+      db.prepare('UPDATE pk_checkins SET run_date = ? WHERE run_date = ?').run(d, oldRd);
+      const st = db.prepare('SELECT is_open, cancelled FROM pk_run_state WHERE run_date = ?').get(oldRd);
+      if (st) {
+        db.prepare("INSERT INTO pk_run_state (run_date, is_open, cancelled) VALUES (?,?,?) ON CONFLICT(run_date) DO UPDATE SET is_open = excluded.is_open, cancelled = excluded.cancelled").run(d, st.is_open, st.cancelled);
+        db.prepare('DELETE FROM pk_run_state WHERE run_date = ?').run(oldRd);
+      }
+      for (const k of ['pk_autoopen_done', 'pk_autoping_done', 'pk_autolock_done']) if (getSetting(k) === oldRd) setSetting(k, d);
+      setSetting('pk_run_date', d);
+      setSetting('pk_run_base', pkNearestDow(d, PK_DOW));
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); console.error(`[pk-date] move FAILED: ${e.message}`); throw e; }
+  }
+  res.redirect('/pickleball?pkset=date');
 });
 app.post('/pickleball/guest', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball');
