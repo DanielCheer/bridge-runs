@@ -1899,7 +1899,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
         <form method="POST" action="/announce" style="margin-top:10px" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Posting…';">
           <textarea name="body" required maxlength="500" placeholder="e.g. No run this week — gym's booked. Back next week."></textarea>
           <div style="height:8px"></div>
-          <label class="lvl" style="margin:0 0 8px"><input type="checkbox" name="email_everyone" checked> Also email everyone</label>
+          <label class="lvl" style="margin:0 0 8px"><input type="checkbox" name="email_everyone"> Also email everyone</label>
           <button class="btn sm" type="submit">Post to all players</button>
         </form>
       </details>`
@@ -2532,7 +2532,7 @@ export function pickleballPage({ email, runDate = '', runLabel = '', hours = '6�
   // ----- hero footer (INSIDE the card, like basketball): Post announcement (operators,
   //       LEFT) + Auto-renew pill (members, RIGHT) -----
   const annCompose = canOperate
-    ? `<details class="announce-compose"><summary>📣 Post announcement</summary><form method="POST" action="/pickleball/announce" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Posting…';"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all pickleball members (pushes to their phones)"></textarea><div style="height:8px"></div><button class="btn sm" type="submit">Post &amp; notify</button></form></details>`
+    ? `<details class="announce-compose"><summary>📣 Post announcement</summary><form method="POST" action="/pickleball/announce" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Posting…';"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all pickleball members (pushes to their phones)"></textarea><div style="height:8px"></div><label class="lvl" style="margin:0 0 8px"><input type="checkbox" name="email_everyone"> Also email everyone</label><button class="btn sm" type="submit">Post &amp; notify</button></form></details>`
     : '';
   const autoRenewPill = cancelled ? '' : `<form method="POST" action="/pickleball/autorenew" style="margin:0"><input type="hidden" name="on" value="${iAutoRenew ? '0' : '1'}"><button class="arpill${iAutoRenew ? ' on' : ''}" type="submit" title="Auto-join the pickleball run each week">🔁 Auto-renew${iAutoRenew ? ' · ON' : ' · OFF'}</button></form>`;
   const heroFooter = (annCompose || autoRenewPill)

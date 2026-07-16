@@ -4201,12 +4201,16 @@ app.post('/pickleball/announce', requireLogin, (req, res) => {
     return res.redirect('/pickleball');
   db.prepare('INSERT INTO pk_announcements (body, author) VALUES (?,?)').run(body, author);
   audit(req.userEmail, 'admin', 'pk:announce', body.slice(0, 60));
-  setImmediate(() => {
-    sendPush(pkMemberEmails(), { title: 'Pickleball announcement', body: body.slice(0, 140), url: '/pickleball', tag: 'pkann' });
-    // Email audience honours email_optout (announcementRecipients already filters it); push
-    // ignores it, matching the basketball convention.
-    if (emailConfigured) { const r = pkEmailRecipients(); if (r.length) sendAnnouncement(r, body, author).catch(e => console.error(`[pk-announce] email FAILED: ${e.message}`)); }
-  });
+  // Push is the always-on app-native channel (every pk member's phone), independent of email.
+  setImmediate(() => sendPush(pkMemberEmails(), { title: 'Pickleball announcement', body: body.slice(0, 140), url: '/pickleball', tag: 'pkann' }));
+  // Email is OPT-IN per post (default off) — the operator ticks "Also email everyone", exactly
+  // like basketball's /announce. Recipients still honour the per-player email opt-out.
+  if (req.body.email_everyone && emailConfigured) {
+    setImmediate(() => {
+      try { const r = pkEmailRecipients(); if (r.length) sendAnnouncement(r, body, author).catch(e => console.error(`[pk-announce] email FAILED: ${e.message}`)); }
+      catch (e) { console.error(`[pk-announce] email prep FAILED: ${e.message}`); }
+    });
+  }
   res.redirect('/pickleball');
 });
 // Retract the current pickleball announcement — operator only. Archives it so it stops
