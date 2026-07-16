@@ -322,6 +322,66 @@ if(!window.__ovEscBound){window.__ovEscBound=1;
     else if(id==='memwrap'&&window.memClose)window.memClose();
     else if(id==='annwrap'&&window.annClose)window.annClose();
   });
+}
+// Swipe DOWN to dismiss any bottom-sheet (who's-going, run members, announcements, profile) —
+// the touch-native equivalent of the X / Esc. Reuses each sheet's own close fn so focus-restore
+// and scroll-lock stay correct. Only arms when the sheet body is scrolled to the TOP (so a
+// downward swipe over scrollable content still scrolls) and the drag is clearly VERTICAL (so it
+// never hijacks the announcement rows' horizontal swipe-to-clear). Bound once; survives swaps.
+if(!window.__ovSwipeBound){window.__ovSwipeBound=1;
+  var dS=null,dW=null,dBody=null,dScrim=null,y0=0,x0=0,dy=0,drag=false;
+  function topSheet(){var pv=document.getElementById('pvwrap');if(pv&&pv.classList.contains('open'))return pv;return document.querySelector('.wgwrap.open');}
+  function closeFor(w){var id=w&&w.id;
+    if(id==='pvwrap'&&window.pvClose)window.pvClose();
+    else if(id==='wgwrap'&&window.wgClose)window.wgClose();
+    else if(id==='memwrap'&&window.memClose)window.memClose();
+    else if(id==='annwrap'&&window.annClose)window.annClose();}
+  function clr(sh){if(sh){sh.style.transition='';sh.style.transform='';sh.style.animation='';}}
+  document.addEventListener('touchstart',function(e){
+    if(!e.touches||e.touches.length!==1)return;
+    var w=topSheet();if(!w)return;
+    if(!e.target.closest||!e.target.closest('.wgsheet'))return; // started on the scrim → its onclick handles it
+    var sh=w.querySelector('.wgsheet');if(!sh)return;
+    dBody=sh.querySelector('.wgsheet-b');
+    if(dBody&&dBody.scrollTop>2){dS=null;return;}            // content scrolled → leave it to scroll
+    dS=sh;dW=w;dScrim=w.querySelector('.wgscrim');y0=e.touches[0].clientY;x0=e.touches[0].clientX;dy=0;drag=false;
+  },{passive:false});
+  document.addEventListener('touchmove',function(e){
+    if(!dS)return;
+    dy=e.touches[0].clientY-y0;var dx=e.touches[0].clientX-x0;
+    if(!drag){                                               // decide direction on the first meaningful move
+      if(dy<=3&&Math.abs(dx)<10&&dy>-3)return;               // too small yet
+      if(dy<=0||Math.abs(dx)>dy){dS=null;return;}            // upward or horizontal → not a dismiss
+      if(dBody&&dBody.scrollTop>2){dS=null;return;}
+      drag=true;
+    }
+    if(dy<0)dy=0;
+    e.preventDefault();
+    dS.style.transition='none';dS.style.transform='translateY('+dy+'px)';
+    if(dScrim)dScrim.style.opacity=String(Math.max(0.12,0.55*(1-dy/600)));
+  },{passive:false});
+  document.addEventListener('touchend',function(){
+    if(!dS)return;
+    var sh=dS,w=dW,scrim=dScrim,px=dy,h=sh.offsetHeight||500;
+    dS=null;dW=null;dBody=null;dScrim=null;
+    var still=document.documentElement.classList.contains('noanim')||(window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches);
+    if(drag&&px>Math.min(150,h*0.28)){                       // past threshold → dismiss
+      drag=false;
+      if(still){clr(sh);closeFor(w);return;}
+      sh.style.animation='none';                             // suppress the close fn's own wgdown; we slide it out here
+      sh.style.transition='transform .2s ease-out';
+      requestAnimationFrame(function(){sh.style.transform='translateY('+(h+48)+'px)';if(scrim)scrim.style.opacity='0';});
+      var fired=false,fin=function(){if(fired)return;fired=true;closeFor(w);setTimeout(function(){clr(sh);if(scrim)scrim.style.opacity='';},220);};
+      sh.addEventListener('transitionend',fin,{once:true});
+      setTimeout(fin,260);
+    }else{                                                   // not far enough → snap back
+      drag=false;
+      sh.style.transition='transform .2s cubic-bezier(.2,.7,.2,1)';
+      sh.style.transform='';
+      if(scrim)scrim.style.opacity='';
+      setTimeout(function(){clr(sh);},220);
+    }
+  });
 }`;
 // Tiny inline HEAD bootstrap: sets the build version (the ONLY server-interpolated value)
 // and the pre-paint no-animation flag BEFORE the engine loads, then pulls the cached engine
