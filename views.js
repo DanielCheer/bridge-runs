@@ -1760,7 +1760,7 @@ function runDayControls({ runDay, rdMsg = '' }) {
   </div></div>`;
 }
 
-export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–10:30 PM', startLabel = '8:30 PM', tipoff = 0, cap, waitlistCap, going, waiting, full, runFull, isOpen, canSeeCount, regularSlotsFull,
+export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–10:30 PM', startLabel = '8:30 PM', tipoff = 0, openDay = 'Monday', openTime = '5 PM', cap, waitlistCap, going, waiting, full, runFull, isOpen, canSeeCount, regularSlotsFull,
                              myState, myWaitPos, myOffer = null, offerWindowHours = 3, iAmTeam, iAmRegular, iOptedOut, iAutoRenew,
                              viewerIsAdmin, canOperate, canSeeRoster, suspended = false, suspendReason = '', myConfirmed = false, msg = '', bannerVer = '4', cancelled = false, locked = false, announcement = null, announcementLog = [], inPlayers, offeredPlayers = [], waitPlayers, host = null, runDay = null, rdMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
 
@@ -1860,7 +1860,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
   } else if (iAmRegular && !isOpen && myState === 'out') {
     mine = '';  // regulars just get the join button — no role wording
   } else if (!isOpen && myState === 'out') {
-    mine = `<div class="notice warn">Registration opens <b>Wednesday night</b> for approved players — spots are capped at ${cap}, so get in early once it's live. The organizer opens it manually and will announce it.</div>`;
+    mine = `<div class="notice warn">Registration opens <b>${openDay} at ${openTime}</b> for approved players — spots are capped at ${cap}, so get in early once it's live. It opens automatically and you'll get a notification.</div>`;
   } else if (myState === 'in') {
     mine = '';  // "You're on the floor for Friday ✓" removed per owner — redundant with the Sit-out button
   } else if (myState === 'waitlist') {
@@ -1986,7 +1986,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
       </div>
       ${scoreBlock}
       ${canSeeCount ? `<div class="hbar"><div>${going}<span>Checked in</span></div><div>${waiting}<span>Waitlist</span></div>${addGuest}</div>` : ''}
-      <div class="hsub"><span class="hdate">${cancelled ? 'cancelled' : locked ? 'roster locked' : isOpen ? 'registration live' : (iAmRegular || iAmTeam ? '' : 'queue opens wed')}</span></div>
+      <div class="hsub"><span class="hdate">${cancelled ? 'cancelled' : locked ? 'roster locked' : isOpen ? 'registration live' : (iAmRegular || iAmTeam ? '' : `queue opens ${openDay.slice(0, 3).toLowerCase()}`)}</span></div>
       ${heroFooter}
     </div>`;
 
@@ -2493,7 +2493,7 @@ export function pkJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, g
 
 // Pickleball run — a SEPARATE, hidden run on its own pk_* tables. Dedicated view (reuses the
 // shell + avatar + list styles); does not touch the basketball checkinPage. Native POST forms.
-export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, myConfirmed = false, iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+export function pickleballPage({ email, runDate = '', runLabel = '', hours = '6–9 PM', startLabel = '6 PM', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, myConfirmed = false, iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
   const full = going >= cap, totalFull = (going + waiting) >= (cap + waitlistCap);
   const rmForm = (p) => `<form method="POST" action="/pickleball/remove" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn leave sm" type="submit">Remove</button></form>`;
   // Tappable name → profile popup (reuses the shared pvOpen + /u/:id/card); guests (no
@@ -2522,7 +2522,7 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
   const addGuest = canOperate
     ? `<details class="hguest">
         <summary>+ Guest</summary>
-        <form method="POST" action="/pickleball/guest">
+        <form method="POST" action="/pickleball/guest" onsubmit="var b=this.querySelector('button');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Adding…';">
           <input name="name" required maxlength="60" placeholder="Guest name — last-minute add">
           <div style="height:8px"></div>
           <button class="btn sm" type="submit">Add guest to the run</button>
@@ -2532,7 +2532,7 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
   // ----- hero footer (INSIDE the card, like basketball): Post announcement (operators,
   //       LEFT) + Auto-renew pill (members, RIGHT) -----
   const annCompose = canOperate
-    ? `<details class="announce-compose"><summary>📣 Post announcement</summary><form method="POST" action="/pickleball/announce"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all pickleball members (pushes to their phones)"></textarea><div style="height:8px"></div><button class="btn sm" type="submit">Post &amp; notify</button></form></details>`
+    ? `<details class="announce-compose"><summary>📣 Post announcement</summary><form method="POST" action="/pickleball/announce" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Posting…';"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all pickleball members (pushes to their phones)"></textarea><div style="height:8px"></div><button class="btn sm" type="submit">Post &amp; notify</button></form></details>`
     : '';
   const autoRenewPill = cancelled ? '' : `<form method="POST" action="/pickleball/autorenew" style="margin:0"><input type="hidden" name="on" value="${iAutoRenew ? '0' : '1'}"><button class="arpill${iAutoRenew ? ' on' : ''}" type="submit" title="Auto-join the pickleball run each week">🔁 Auto-renew${iAutoRenew ? ' · ON' : ' · OFF'}</button></form>`;
   const heroFooter = (annCompose || autoRenewPill)
@@ -2574,7 +2574,7 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
       </div>
     </div>`;
 
-  return HEAD('Pickleball — The Bridge', 'has-tabs pk') + header(`<b>PICKLEBALL</b>${esc(email)}`, '', ann, '') + `
+  return HEAD('Pickleball — The Bridge', 'has-tabs pk') + header(`<b>PICKLEBALL</b>${esc(email)}`, wdayShort(runDate), ann, hours) + `
     ${backToRuns}
     <div class="rule"></div>
     ${hidden ? `<div class="notice" style="margin-top:10px">🔒 <b>Hidden run</b> — only admins can see this. Flip it live when it's ready.${isAdmin ? ` <form method="POST" action="/pickleball/publish" style="display:inline"><button class="btn sm" type="submit" style="margin-left:6px">Make it live</button></form>` : ''}</div>` : (isAdmin ? `<div class="notice good" style="margin-top:10px">✅ <b>Live</b> — members can join. <form method="POST" action="/pickleball/publish" style="display:inline"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit" style="margin-left:6px">Hide again</button></form></div>` : '')}
@@ -2585,7 +2585,7 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
       <div class="gymcap">
         ${cancelled
           ? `<div class="l">This week<b>🚫 Run cancelled</b></div>`
-          : `<div class="l">Next run<b>${esc(wdayFull(runDate))} · ${esc(runLabel)} · 6 PM</b></div>
+          : `<div class="l">Next run<b>${esc(wdayFull(runDate))} · ${esc(runLabel)} · ${esc(startLabel)}</b></div>
         <div class="r"><span>Starts in</span><b class="tick" data-tip="${tipoff}">${esc(fmtCountdown(tipoff))}</b></div>`}
       </div>
       ${canOperate ? `<a class="bannedit" href="/pickleball/banner" aria-label="Change banner photo">🖼 Change</a>` : ''}
@@ -2650,7 +2650,7 @@ export function pickleballPage({ email, runDate = '', runLabel = '', isOpen = fa
       window.pvClose=function(){var w=document.getElementById('pvwrap');if(!w)return;w.classList.remove('open');var wg=document.getElementById('wgwrap');if(!(wg&&wg.classList.contains('open')))document.body.style.overflow='';};
       // Countdown ticker for the next-run banner (mirrors the check-in tip-off ticker).
       function pkTick(){var el=document.querySelector('.gymbanner .tick');if(!el)return;var tip=+el.getAttribute('data-tip');var diff=tip-Date.now();
-        if(diff<=0){el.textContent='NOW';return;}
+        if(diff<=0){el.textContent="IT'S GAME TIME";return;}
         function pad(n){return String(n).padStart(2,'0');}
         var d=Math.floor(diff/86400000),h=Math.floor(diff%86400000/3600000),m=Math.floor(diff%3600000/60000);
         el.textContent=d+'D '+pad(h)+':'+pad(m);}
@@ -2711,7 +2711,7 @@ function inboxRows(me, threads) {
 }
 
 // ---------- PROFILE (own editable tab) ----------
-export function profileTabPage({ a, stats, saved = false, error = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, canOperate = false, announcementLog = [], iAmHost = false, threads = [], runDay = null, rdMsg = '', photoMsg = '', ann = null }) {
+export function profileTabPage({ a, stats, saved = false, error = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, canOperate = false, announcementLog = [], iAmHost = false, threads = [], photoMsg = '', ann = null }) {
   // The own-profile tab is a chromeless editor (its own .bar, no masthead), so the
   // global announcements bell lives in the .bar rather than the .mast here. Same
   // button + panel + JS as every other page (one shared affordance, one live dot).

@@ -10,7 +10,7 @@ import multer from 'multer';
 import sharp from 'sharp';
 import { fileURLToPath } from 'url';
 
-import db, { rekeyEmail } from './db.js';
+import db, { rekeyEmailTx, transact } from './db.js';
 import { startBackups } from './backup.js';
 import { sendMagicLink, sendAnnouncement, sendSpotOffer, emailConfigured } from './mailer.js';
 import webpush from 'web-push';
@@ -48,9 +48,22 @@ const requireApprover = makeRequireApprover(db);
 // Prepared once at module scope — node:sqlite has no statement cache, so re-preparing
 // this INSERT on every audited action (every check-in, vote, edit…) is pure waste.
 const stmtAudit = db.prepare('INSERT INTO audit_log (actor,actor_role,action,target) VALUES (?,?,?,?)');
+const stmtAnnouncementExists = db.prepare('SELECT 1 FROM announcements WHERE id = ?');
 function audit(actor, actorRole, action, target) {
   stmtAudit.run(actor, actorRole, action, target || '');
 }
+
+// ---- email validation ----
+// The ONLY gate between a typed address and nodemailer's `to:`/`bcc:`. An `includes('@')`
+// check is not enough: nodemailer parses `to:` as an RFC-5322 ADDRESS LIST, so a string like
+// "a@b.com, victim@x.org, …" is a hundred recipients in one field — a relay that also sails
+// past the per-address rate limit (which keys on the whole string, so every list is a fresh
+// bucket). Quoted/grouped/commented forms are refused for the same reason: what we validate
+// must be what the mailer sends. Local part therefore excludes the list/group/comment/quote
+// metacharacters entirely, and the domain must be dotted labels (so `@guest.local`
+// placeholders still pass). Lengths are the RFC-5321 maximums.
+const EMAIL_RE = /^[^\s@,;:<>"'\\()[\]]{1,64}@[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$/;
+const isValidEmail = (e) => typeof e === 'string' && e.length <= 254 && EMAIL_RE.test(e);
 
 // ---- in-memory rate limiter ----
 // Guards the two unauthenticated POSTs (/login, /apply). /login fires a real
@@ -259,6 +272,7 @@ function recomputeStatus(id) {
       const offeree = offereeForFloorLeave(runDate, app.email);
       db.prepare('DELETE FROM checkins WHERE email = ?').run(app.email);
       if (offeree) createOffer(runDate, offeree, null);
+      dropFromPickleball(app.email);   // a rejected player leaves BOTH programs' floors
     }
   }
   return status;
@@ -338,7 +352,7 @@ app.get('/app.js', (req, res) => {
 });
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: '7d', immutable: false }));
 
-// Sliding session: any request carrying a valid cookie gets its 180-day window
+// Sliding session: any request carrying a valid cookie gets its ~10-year window
 // pushed forward, so a player who keeps showing up never has to sign in again.
 // Static assets are served above and never reach this.
 app.use((req, res, next) => {
@@ -370,6 +384,14 @@ app.get('/manifest.webmanifest', (req, res) => {
 // schedule (next run, overrides, auto open/lock) keys off this — change it here to
 // move the standing run to another weekday.
 const RUN_DOW = 3;
+// Check-in auto-opens this many days before the run, at this hour (local). SINGLE source of
+// truth: runStateSchedule fires off these AND the player-facing "registration opens…" copy is
+// derived from them, so the two can never drift the way a hardcoded weekday does.
+const OPEN_DAYS_BEFORE = 2, OPEN_H = 17;
+// "T17:00:00" — the local-time suffix for an hour. Shared by both programs' schedules.
+const hhLocal = h => `T${String(h).padStart(2, '0')}:00:00`;
+// The date check-in opens for run `rd`.
+const openDateFor = (rd) => shiftYmd(rd, -OPEN_DAYS_BEFORE);
 function nextRunDefault(d = new Date()) {
   const r = new Date(d);
   const day = r.getDay();            // 0 Sun … 6 Sat
@@ -428,11 +450,16 @@ function fmtClockLabel(hhmm) {
 }
 // "7–10 PM" (drops the shared AM/PM on the start when it matches the end); the tip-off
 // time alone as "7 PM". Used in the masthead + move announcement.
-function runTimeRange(runDate) {
-  const { start, end } = runTimesFor(runDate);
+// "6–9 PM" from two HH:MM strings. Shared by both programs — basketball resolves its window
+// from per-week overrides, pickleball derives it from PK_START_H/PK_END_H.
+function fmtClockRange(start, end) {
   const s = fmtClockLabel(start), e = fmtClockLabel(end);
   const sap = s.slice(-2), eap = e.slice(-2);
   return sap === eap ? `${s.slice(0, -3)}–${e}` : `${s}–${e}`;
+}
+function runTimeRange(runDate) {
+  const { start, end } = runTimesFor(runDate);
+  return fmtClockRange(start, end);
 }
 function runStartLabel(runDate) { return fmtClockLabel(runTimesFor(runDate).start); }
 // Shift a local YYYY-MM-DD by whole days (DST-safe: anchored at local noon so a ±1h
@@ -613,9 +640,9 @@ async function writeChatVideo(buf, msgId, ext) {
 }
 
 // ---- Check-in banner (host-uploaded, cropped in-app) ----------------------
-// The 3:1 hero photo on the check-in page. A host uploads a photo and frames it in the
-// browser (pan/zoom in a 3:1 window); the client sends the source-pixel crop rect and we
-// sharp-crop to the final 2320×774. BANNER_PATH is env-overridable (tests point elsewhere).
+// The 2:1 hero photo on the check-in page. A host uploads a photo and frames it in the
+// browser (pan/zoom in a 2:1 window); the client sends the source-pixel crop rect and we
+// sharp-crop to the final 2320×1160. BANNER_PATH is env-overridable (tests point elsewhere).
 const BANNER_PATH = process.env.BANNER_PATH || path.join(__dirname, 'public', 'gym.jpg');
 const uploadBanner = multer({ storage: multer.memoryStorage(), limits: { fileSize: 14 * 1024 * 1024, files: 1 } }).single('photo');
 // Cache-bust token = the banner file's mtime, so an upload busts the <img> the moment it's
@@ -1072,6 +1099,9 @@ app.post('/apply', (req, res) => {
     return res.send(intakePage({ error: 'Please fill in name, phone, email, and at least one level.' }));
   }
   const em = String(email).trim().toLowerCase();
+  // A stored address is later a nodemailer recipient (announcement BCC, spot offers), so it
+  // has to survive the same gate as /login rather than entering the DB unchecked.
+  if (!isValidEmail(em)) return res.send(intakePage({ error: 'That email doesn’t look right — check it and try again.' }));
   try {
     const existing = applicantByEmail(em);
     // Anyone with a player's email could otherwise rename/rehome them via the
@@ -1132,7 +1162,7 @@ app.get('/login', (req, res) => {
 app.post('/login', async (req, res) => {
   const em = String(req.body.email || '').trim().toLowerCase();
   const next = req.body.next || '/runs';
-  if (!em || !em.includes('@')) return res.send(loginPage({ error: 'Enter a valid email.' }));
+  if (!isValidEmail(em)) return res.send(loginPage({ error: 'Enter a valid email.' }));
 
   // Throttle magic-link sends: at most 3 per address / 5 min (stops bombing one
   // inbox) and 20 per IP / 10 min (stops cycling through many addresses). Both
@@ -1282,7 +1312,7 @@ app.post('/invite/:token', async (req, res) => {
   const phone = (req.body.phone || iv.phone || '').trim();
   const email = (req.body.email || iv.email || '').trim().toLowerCase();
   const waiverOk = req.body.waiver_ok ? 1 : 0;
-  if (!full_name || !phone || !email || !email.includes('@') || !waiverOk) {
+  if (!full_name || !phone || !isValidEmail(email) || !waiverOk) {
     return res.send(invitePage({
       token: iv.token, full_name, phone, email,
       error: !waiverOk ? 'Please confirm the waiver to continue.' : 'Fill in your name, phone, and a valid email.',
@@ -1418,7 +1448,10 @@ app.post('/announcements/seen', requireLogin, (req, res) => {
 app.post('/announcements/:id/dismiss', requireLogin, (req, res) => {
   if (rateLimited('ann-dismiss', req.userEmail, 60, 60 * 1000)) return res.status(429).end();
   const id = Number(req.params.id) || 0;
-  if (id) {
+  // Only dismiss an announcement that EXISTS — the id is caller-supplied, and without this
+  // the table takes an unbounded stream of junk ids (nothing prunes dismissals for
+  // announcements that never existed).
+  if (id && stmtAnnouncementExists.get(id)) {
     db.prepare('INSERT OR IGNORE INTO announcement_dismissals (email, announcement_id) VALUES (?, ?)')
       .run(req.userEmail.toLowerCase(), id);
   }
@@ -1528,13 +1561,18 @@ const stmtRun = db.prepare(`
 // was never claimed must NOT earn an attendance credit (a claim clears offered_at, so
 // claimed offerees ARE credited). Otherwise an offer that expired after rollover would
 // permanently credit someone who never confirmed.
+// Number ALL rows, then drop the offered ones — matching partitionRun, where a pending offer
+// RESERVES its floor slot (floorCapForReal = CAP - offered.length). Filtering offered rows out
+// BEFORE numbering (the old shape) collapses that reserved slot, so the first waitlister slides
+// into it and earns a permanent attendance row for a run they spent on the bench. An unclaimed
+// offer is still excluded from the insert — nobody played on it.
 const stmtArchiveAttendance = db.prepare(`
   INSERT OR IGNORE INTO attendance (run_date, email, name)
   SELECT run_date, email, name FROM (
-    SELECT run_date, email, name,
+    SELECT run_date, email, name, offered_at,
            ROW_NUMBER() OVER (PARTITION BY run_date ORDER BY sort_order ASC, id ASC) AS pos
-    FROM checkins WHERE run_date < ? AND offered_at IS NULL
-  ) WHERE pos <= ?`);
+    FROM checkins WHERE run_date < ?
+  ) WHERE pos <= ? AND offered_at IS NULL`);
 
 // Hot-path lookups rendered on the check-in page (and reused by the join guard) —
 // prepared once at module scope (node:sqlite has no statement cache).
@@ -1785,7 +1823,7 @@ app.get('/runs', requireLogin, (req, res) => {
     const rd = pkRunDate(), part = pkPartition(rd);
     runs.push({
       key: 'pickleball', emoji: '🥒', name: 'Pickleball', href: '/pickleball',
-      runDate: rd, dateLabel: runLabelFor(rd), timeLabel: '',
+      runDate: rd, dateLabel: runLabelFor(rd), timeLabel: pkTimeRange(),
       going: part.floor.length, cap: PK_CAP,
       status: pkIsCancelled(rd) ? 'cancelled' : (pkIsOpen(rd) ? 'open' : 'closed'),
       hidden: !pkProgramActive(),
@@ -1869,6 +1907,10 @@ app.get('/checkin', requireLogin, (req, res) => {
     runLabel: runLabelFor(runDate), runDate,
     hours: runTimeRange(runDate),
     startLabel: runStartLabel(runDate),
+    // When check-in actually auto-opens, derived from the schedule — the copy used to hardcode
+    // "Wednesday night" + "opens it manually", both wrong since the move to a Wednesday run.
+    openDay: runWeekday(openDateFor(runDate)),
+    openTime: fmtClockLabel(`${OPEN_H}:00`),
     tipoff: runStartEpoch(runDate),
     cap: CAP, waitlistCap: WAITLIST_CAP,
     going,
@@ -1917,10 +1959,13 @@ app.get('/poll', requireLogin, (req, res) => {
     const part = partitionRun(runDate);
     // Canonical sort order + per-row offered(o)/held(h) flags → catches join, leave,
     // promote/reorder at equal counts, offer-sent, and hold-state changes. Plus the
-    // Friday-4pm held-release boundary and the live announcement id.
+    // held-release boundary, the live announcement id, and the cancelled flag — cancelling
+    // a CLOSED, empty run changes nothing else in here (is_open stays 0, the roster delete
+    // is a no-op), so without `cancelled` open clients never swap in the "Run cancelled"
+    // banner. Pickleball's fingerprint already carries it.
     const order = part.rows.map(r => `${r.id}${r.offered_at != null ? 'o' : ''}${r.held ? 'h' : ''}${r.confirmed_at ? 'c' : ''}`).join(',');
     const ann = latestAnnouncement();
-    f = `${runDate}:${runIsOpen(runDate) ? 1 : 0}:${heldReleased(runDate) ? 1 : 0}:${order}:${ann ? ann.id : 0}`;
+    f = `${runDate}:${runIsOpen(runDate) ? 1 : 0}:${runIsCancelled(runDate) ? 1 : 0}:${heldReleased(runDate) ? 1 : 0}:${order}:${ann ? ann.id : 0}`;
   } else if (page === 'chat') {
     const g = stmtPollChat.get(), rx = stmtPollChatReact.get();
     f = `${g.mx || 0}:${getSetting('chat_seq') || 0}:${rx.c || 0}:${rx.mx || ''}`;
@@ -2078,7 +2123,7 @@ app.post('/profile', requireLogin, (req, res) => {
     a, stats, dmUnread: unreadCount(a.email), groupUnread: groupUnread(a.email), groupMention: groupMentionUnread(a.email, a.id),
     canOperate, iAmHost, announcementLog: canOperate ? announcementHistory() : [], threads: loadInbox(a.email), ann: annPanel(a.email),
   };
-  if (!full_name || !phone || !email.includes('@'))
+  if (!full_name || !phone || !isValidEmail(email))
     return res.send(profileTabPage({ ...errProps, error: 'Name, phone, and a valid email are required.' }));
   if (email !== a.email && db.prepare('SELECT 1 FROM applicants WHERE email = ? AND id != ?').get(email, a.id))
     return res.send(profileTabPage({ ...errProps, error: 'That email is already in use by another player.' }));
@@ -2086,15 +2131,26 @@ app.post('/profile', requireLogin, (req, res) => {
   // ADMINS env set keyed by email, so changing INTO an admin address = takeover.
   if (email !== a.email && ADMINS.includes(email))
     return res.send(profileTabPage({ ...errProps, error: 'That email can’t be used. Pick another.' }));
-  db.prepare('UPDATE applicants SET full_name=?, phone=?, email=?, position=?, email_optout=? WHERE id=?')
-    .run(full_name, phone, email, position, email_optout, a.id);
-  // If the email changed, atomically carry EVERY per-user row (checkins, attendance,
-  // votes, DMs, Run Chat, reads, push subs, opt-outs…) to the new address. See
-  // rekeyEmail in db.js — single source of truth for the cascade.
-  if (email !== a.email) rekeyEmail(a.email, email);
-  // Name can change without the email changing — sync the denormalised name on
-  // check-in rows (now keyed to the new email if it moved).
-  db.prepare('UPDATE checkins SET name=? WHERE email=?').run(full_name, email);
+  // The identity row and its rekey cascade commit together or not at all — committing the
+  // applicants row first would leave every history row (checkins, votes, DMs, chat, push subs)
+  // stranded on the old address if the cascade failed, orphaning the account.
+  try {
+    transact(() => {
+      db.prepare('UPDATE applicants SET full_name=?, phone=?, email=?, position=?, email_optout=? WHERE id=?')
+        .run(full_name, phone, email, position, email_optout, a.id);
+      // Carry EVERY per-user row (checkins, attendance, votes, DMs, Run Chat, reads, push
+      // subs, opt-outs…) onto the new address. rekeyEmailTx in db.js is the single source
+      // of truth for the cascade.
+      if (email !== a.email) rekeyEmailTx(a.email, email);
+      // Name can change without the email changing — sync the denormalised name on BOTH
+      // programs' check-in rows (now keyed to the new email if it moved).
+      db.prepare('UPDATE checkins SET name=? WHERE email=?').run(full_name, email);
+      db.prepare('UPDATE pk_checkins SET name=? WHERE email=?').run(full_name, email);
+    });
+  } catch (e) {
+    console.error(`[profile] identity edit FAILED for ${a.email}: ${e.message}`);
+    return res.send(profileTabPage({ ...errProps, error: 'Couldn’t save that — your details are unchanged. Try again.' }));
+  }
   audit(req.userEmail, 'player', 'profile:edit', email);
   if (email !== a.email) { setSession(res, email); refreshAvatarMap(); } // cookie IS the email — re-sign it; re-key the avatar map
   res.redirect('/profile?saved=1');
@@ -2987,8 +3043,14 @@ app.post('/checkin/optin', requireLogin, (req, res) => {
   if (runIsOpen(runDate)) {
     const a = applicantByEmail(req.userEmail);
     if (a && a.status === 'approved') {
-      db.prepare('INSERT OR IGNORE INTO checkins (run_date,email,name) VALUES (?,?,?)')
-        .run(runDate, req.userEmail, a.full_name);
+      // Same hard cap as /checkin/join. Without it this seats row #21, which waitPlayers
+      // slices off — an invisible ghost that still counts toward runFull.
+      const already = db.prepare('SELECT 1 FROM checkins WHERE run_date=? AND email=?').get(runDate, req.userEmail);
+      const { n } = db.prepare('SELECT COUNT(*) n FROM checkins WHERE run_date=?').get(runDate);
+      if (already || n < TOTAL_CAP) {
+        db.prepare('INSERT OR IGNORE INTO checkins (run_date,email,name) VALUES (?,?,?)')
+          .run(runDate, req.userEmail, a.full_name);
+      }
     }
   }
   res.redirect('/checkin');
@@ -3057,7 +3119,7 @@ app.post('/admin/settings', requireAdmin, (req, res) => {
 });
 
 // Check-in banner tool (operators). GET renders the pick + pan/zoom cropper; POST takes the
-// photo + the source-pixel crop rect the browser computed and writes the final 2320×774 JPEG.
+// photo + the source-pixel crop rect the browser computed and writes the final 2320×1160 JPEG.
 app.get('/admin/banner', requireApprover, (req, res) => {
   res.send(bannerPage({ err: req.query.err || '', bannerVer: bannerVersion() }));
 });
@@ -3196,7 +3258,7 @@ app.post('/admin/role', requireAdmin, (req, res) => {
 // ---------- RUN DAY (host-configurable) ----------
 // Move a given week's run to a different weekday. HOST or ADMIN only (team members,
 // who vote on applicants, do NOT get to move the run) — so this can't use
-// requireApprover. The chosen date is validated (not past, within 120 days), keyed
+// requireApprover. The chosen date is validated (not past, within 30 days), keyed
 // to that date's default Friday, and upserted as an override (or the override is
 // cleared when the host picks the default Friday itself). The CURRENT week's live
 // rows (checkins / run_state / opt-outs) are migrated old→new run date atomically so
@@ -3223,7 +3285,7 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
   const maxDate = new Date(); maxDate.setDate(maxDate.getDate() + 30);
   if (raw > ymdLocal(maxDate)) return res.redirect('/checkin?rderr=range');
 
-  // Optional start/end time (HH:MM). Blank/absent → the default 19:00–22:00. End must
+  // Optional start/end time (HH:MM). Blank/absent → DEFAULT_START–DEFAULT_END. End must
   // be after start. A time that differs from default is stored even when the DAY didn't
   // move (a time-only override), so the row must persist in that case too.
   const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -3480,9 +3542,9 @@ app.post('/admin/people/edit', requireAdmin, (req, res) => {
   const cur = db.prepare('SELECT email FROM applicants WHERE id = ?').get(id);
   if (!cur) return res.redirect('/admin/people');
   // Validate before writing — a blank name/phone or an invalid email would otherwise be
-  // saved AND (if email changed) rekey every per-user row onto '' via rekeyEmail. Mirrors
+  // saved AND (if email changed) rekey every per-user row onto '' via rekeyEmailTx. Mirrors
   // the self-service /profile validation.
-  if (!full_name || !phone || !email.includes('@'))
+  if (!full_name || !phone || !isValidEmail(email))
     return res.redirect('/admin/people?msg=' + encodeURIComponent('Name, phone, and a valid email are required.'));
   // if email changed, make sure it doesn't collide
   if (email !== cur.email) {
@@ -3492,13 +3554,23 @@ app.post('/admin/people/edit', requireAdmin, (req, res) => {
     // env set keyed by email, so this would silently grant them admin.
     if (ADMINS.includes(email)) return res.redirect('/admin/people?msg=' + encodeURIComponent('That email is reserved and can’t be assigned.'));
   }
-  db.prepare('UPDATE applicants SET full_name=?, email=?, phone=? WHERE id=?')
-    .run(full_name, email, phone, id);
-  // If the email changed, atomically carry EVERY per-user row to the new address
-  // (single source of truth: rekeyEmail in db.js).
-  if (email !== cur.email) { rekeyEmail(cur.email, email); refreshAvatarMap(); } // avatar file follows the id; re-key its email in the map
-  // keep the denormalised check-in name in sync (name can change without email)
-  db.prepare('UPDATE checkins SET name=? WHERE email=?').run(full_name, email);
+  // Identity row + rekey cascade commit together or not at all — see the same guard on
+  // /profile. A partial commit strands the player's history on the old address.
+  try {
+    transact(() => {
+      db.prepare('UPDATE applicants SET full_name=?, email=?, phone=? WHERE id=?')
+        .run(full_name, email, phone, id);
+      // Carry EVERY per-user row to the new address (single source of truth: rekeyEmailTx in db.js).
+      if (email !== cur.email) rekeyEmailTx(cur.email, email);
+      // keep the denormalised check-in name in sync on BOTH programs (name can change without email)
+      db.prepare('UPDATE checkins SET name=? WHERE email=?').run(full_name, email);
+      db.prepare('UPDATE pk_checkins SET name=? WHERE email=?').run(full_name, email);
+    });
+  } catch (e) {
+    console.error(`[admin] identity edit FAILED for ${cur.email}: ${e.message}`);
+    return res.redirect('/admin/people?msg=' + encodeURIComponent('Couldn’t save that — nothing was changed.'));
+  }
+  if (email !== cur.email) refreshAvatarMap(); // avatar file follows the id; re-key its email in the map
   audit(req.userEmail, 'admin', 'people:edit', email);
   res.redirect('/admin/people?msg=Saved');
 });
@@ -3519,6 +3591,10 @@ app.post('/admin/people/suspend', requireAdmin, (req, res) => {
     const offeree = offereeForFloorLeave(runDate, cur.email);
     db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ?').run(runDate, cur.email);
     if (offeree) createOffer(runDate, offeree, req);
+    // Suspension has to clear BOTH programs' floors. pkGate only blocks NEW pickleball
+    // actions, so without this a suspended player keeps their seat all week and the
+    // waitlist never promotes behind them.
+    dropFromPickleball(cur.email);
   }
   audit(req.userEmail, 'admin', on ? 'people:suspend' : 'people:unsuspend', cur.email);
   res.redirect('/admin/people?msg=' + encodeURIComponent(on ? 'Suspended' : 'Unsuspended'));
@@ -3572,6 +3648,15 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
     db.prepare('DELETE FROM pk_group_reads WHERE email = ?').run(a.email);
     db.prepare('DELETE FROM program_membership WHERE email = ?').run(a.email); // drop all per-program memberships
     db.prepare('DELETE FROM push_subscriptions WHERE email = ?').run(a.email);
+    // Per-week sit-outs + announcement read/dismiss markers. These outlived the delete, which
+    // both leaked rows forever and left a live PK-collision trap for anyone later rekeyed ONTO
+    // this address (see rekeyEmailTx). Any unused sign-in link is revoked too — a delete the
+    // admin just performed shouldn't leave a working magic link in an inbox.
+    db.prepare('DELETE FROM regular_optout WHERE email = ?').run(a.email);
+    db.prepare('DELETE FROM pk_optout WHERE email = ?').run(a.email);
+    db.prepare('DELETE FROM announcement_reads WHERE email = ?').run(a.email);
+    db.prepare('DELETE FROM announcement_dismissals WHERE email = ?').run(a.email);
+    db.prepare('DELETE FROM login_tokens WHERE email = ?').run(a.email);
     refreshAvatarMap(); // drop them from the email→photo registry
     audit(req.userEmail, 'admin', 'people:delete', a.email);
   }
@@ -3591,7 +3676,7 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
 function runStateSchedule() {
   const rd = nextRunDate();
   const closeAt = new Date(rd + 'T14:00:00').getTime();            // run day 2 PM — queue locks + auto-ping
-  const openAt = new Date(shiftYmd(rd, -2) + 'T17:00:00').getTime(); // 2 days before, 5 PM
+  const openAt = new Date(openDateFor(rd) + hhLocal(OPEN_H)).getTime();
   return { rd, openAt, closeAt };
 }
 function autoRunState() {
@@ -3677,7 +3762,19 @@ app.get('/season', requireLogin, (req, res) => {
 
 // ---------- PICKLEBALL (separate, hidden run — ISOLATED pk_* tables, no basketball impact) ----------
 const PK_CAP = Number(process.env.PK_CAP || 20), PK_WAIT = Number(process.env.PK_WAIT || 4);
-function pkProgramActive() { const r = db.prepare('SELECT active FROM program WHERE id = 2').get(); return !!(r && r.active); }
+// Hoisted like their basketball twins (stmtRunIsOpen / stmtRun / stmtLatestAnnouncement) —
+// node:sqlite has NO statement cache, so these re-compiled SQL on EVERY /poll tick for every
+// signed-in viewer (pkProgramActive also runs on every /runs and /profile render).
+const stmtPkActive = db.prepare('SELECT active FROM program WHERE id = 2');
+const stmtPkIsOpen = db.prepare('SELECT is_open FROM pk_run_state WHERE run_date = ?');
+const stmtPkIsCancelled = db.prepare('SELECT cancelled FROM pk_run_state WHERE run_date = ?');
+const stmtPkRoster = db.prepare(`
+    SELECT c.email, c.name, c.sort_order, c.id, c.confirmed_at,
+           a.id AS applicant_id, a.is_host, a.is_team, a.is_regular
+    FROM pk_checkins c LEFT JOIN applicants a ON a.email = c.email
+    WHERE c.run_date = ? ORDER BY c.sort_order ASC, c.id ASC`);
+const stmtLatestPkAnnouncement = db.prepare('SELECT id, body, author, created_at FROM pk_announcements WHERE COALESCE(archived,0) = 0 ORDER BY id DESC LIMIT 1');
+function pkProgramActive() { const r = stmtPkActive.get(); return !!(r && r.active); }
 // Pickleball's standing day = Tuesday (PK_DOW=2), DECOUPLED from basketball so moving the
 // basketball run (RUN_DOW) never drags pickleball's date along. Weekly auto-schedule:
 // check-in reopens right after the run ends (PK_END_H), the roster locks at start
@@ -3685,6 +3782,10 @@ function pkProgramActive() { const r = db.prepare('SELECT active FROM program WH
 const PK_DOW = 2, PK_START_H = 18, PK_END_H = 21, PK_PING_H = 20, PK_PING_DOW_OFFSET = 1, PK_LOCK = '17:30';
 // Season opener (YYYY-MM-DD) or null — same gate shape as basketball's seasonStart().
 function pkSeasonStart() { const s = getSetting('pk_season_start'); return (s && /^\d{4}-\d{2}-\d{2}$/.test(s)) ? s : null; }
+// "6–9 PM" / "6 PM" — derived from the schedule constants, never written as a literal, so the
+// masthead, the runs hub and the banner caption can't drift from the real hours.
+const pkTimeRange = () => fmtClockRange(`${PK_START_H}:00`, `${PK_END_H}:00`);
+const pkStartLabel = () => fmtClockLabel(`${PK_START_H}:00`);
 // The standing weekday (dow) NEAREST a chosen date — the Tuesday a moved run replaces.
 function pkNearestDow(dateStr, dow) {
   const r = new Date(dateStr + 'T12:00:00');
@@ -3713,24 +3814,20 @@ function pkDefaultDate() {
   return d;
 }
 function pkRunDate() { return getSetting('pk_run_date') || pkDefaultDate(); } // manual per-week override; else the weekly standing Tuesday
-function pkIsOpen(rd) { const r = db.prepare('SELECT is_open FROM pk_run_state WHERE run_date = ?').get(rd); return !!(r && r.is_open); }
-function pkIsCancelled(rd) { const r = db.prepare('SELECT cancelled FROM pk_run_state WHERE run_date = ?').get(rd); return !!(r && r.cancelled); }
+function pkIsOpen(rd) { const r = stmtPkIsOpen.get(rd); return !!(r && r.is_open); }
+function pkIsCancelled(rd) { const r = stmtPkIsCancelled.get(rd); return !!(r && r.cancelled); }
 function pkSetState(rd, field, val) { db.prepare(`INSERT INTO pk_run_state (run_date, ${field}) VALUES (?, ?) ON CONFLICT(run_date) DO UPDATE SET ${field} = excluded.${field}`).run(rd, val ? 1 : 0); }
 function pkPartition(rd) {
   // Join applicants so the roster rows can open a profile popup + show role badges
   // (guests have no applicant row → applicant_id null → non-tappable, matches basketball).
-  const rows = db.prepare(`
-    SELECT c.email, c.name, c.sort_order, c.id, c.confirmed_at,
-           a.id AS applicant_id, a.is_host, a.is_team, a.is_regular
-    FROM pk_checkins c LEFT JOIN applicants a ON a.email = c.email
-    WHERE c.run_date = ? ORDER BY c.sort_order ASC, c.id ASC`).all(rd);
+  const rows = stmtPkRoster.all(rd);
   return { floor: rows.slice(0, PK_CAP), wait: rows.slice(PK_CAP), rows };
 }
 // Pickleball run start epoch — the run date at 6 PM local. Drives the countdown banner
 // AND the auto-lock time (check-in closes at start).
 function pkStartEpoch(rd) { return rd ? new Date(rd + `T${String(PK_START_H).padStart(2, '0')}:00:00`).getTime() : 0; }
 // Latest LIVE pickleball announcement (own pk_announcements table; retracted ones archived).
-function latestPkAnnouncement() { return db.prepare('SELECT id, body, author, created_at FROM pk_announcements WHERE COALESCE(archived,0) = 0 ORDER BY id DESC LIMIT 1').get() || null; }
+function latestPkAnnouncement() { return stmtLatestPkAnnouncement.get() || null; }
 // Pickleball MEMBERSHIP: you become a pickleball member by opening the run (GET /pickleball) —
 // tracked in program_membership (program 2). Chat access, the members list, and the push
 // audience all read from this, so being an approved BASKETBALL player alone doesn't grant it.
@@ -3795,6 +3892,16 @@ function pkNotifyPromotion(rd, leavingEmail) {
   setImmediate(() => sendPush([next.email], { title: "You're in for pickleball 🥒", body: `A spot opened — you're on the floor for ${runWeekday(rd)}, ${runLabelFor(rd)} pickleball.`, url: '/pickleball', tag: 'pkpromo' }));
   audit('system', 'system', 'pk:promote', next.email);
 }
+// Pull someone off the pickleball floor for THIS cycle, promoting the waitlist behind them —
+// the pickleball twin of the checkins delete + offer-onward that suspend/reject already do for
+// basketball. Notify first: once the row is gone, pkNotifyPromotion can't tell a floor leaver
+// from a waitlist leaver. Safe to call for someone who isn't on the roster (no-op).
+function dropFromPickleball(email) {
+  if (!email) return;
+  const rd = pkRunDate();
+  pkNotifyPromotion(rd, email);
+  db.prepare('DELETE FROM pk_checkins WHERE run_date = ? AND email = ?').run(rd, email);
+}
 // Weekly auto open/lock/ping for pickleball (runs on the shared 60s interval), keyed to the
 // standing Tuesday (pkRunDate). Check-in OPENS the moment the prior run ends (PK_END_H the
 // previous Tuesday) so members re-queue the same night, the floor gets a CONFIRM PING the
@@ -3809,7 +3916,7 @@ function pkAutoRunState() {
   const opener = pkSeasonStart();
   if (opener && rd < opener) return;   // never fire before the season opener (pkRunDate is gated, this is belt-and-suspenders)
   const now = Date.now();
-  const hh = h => `T${String(h).padStart(2, '0')}:00:00`;
+  const hh = hhLocal;
   const openAt = new Date(shiftYmd(rd, -7) + hh(PK_END_H)).getTime();          // prior run's end (prev Tue 9 PM) → reopen
   const pingAt = new Date(shiftYmd(rd, -PK_PING_DOW_OFFSET) + hh(PK_PING_H)).getTime(); // night before (Mon 8 PM)
   const lockAt = new Date(rd + 'T' + PK_LOCK + ':00').getTime();                // roster locks 30 min before start (Tue 5:30 PM)
@@ -3901,6 +4008,7 @@ app.get('/pickleball', requireLogin, (req, res) => {
   const pkOpener = pkSeasonStart(), pkPre = !!pkOpener && ymdLocal() < pkOpener;
   res.send(pickleballPage({
     email: req.userEmail, runDate: rd, runLabel: runLabelFor(rd), isOpen: pkIsOpen(rd), cancelled: pkIsCancelled(rd),
+    hours: pkTimeRange(), startLabel: pkStartLabel(),   // masthead + caption, derived like basketball's
     cap: PK_CAP, waitlistCap: PK_WAIT, going: part.floor.length, waiting: part.wait.length,
     canOperate: g.canOperate, isAdmin: g.admin, myState, myWaitPos, floorPlayers: part.floor, waitPlayers: part.wait, hidden: !pkProgramActive(),
     myConfirmed, iAutoRenew,
@@ -4011,7 +4119,7 @@ app.post('/pickleball/leave', requireLogin, (req, res) => {
   db.prepare('DELETE FROM pk_checkins WHERE run_date = ? AND email = ?').run(rd, req.userEmail);
   res.redirect('/pickleball');
 });
-app.post('/pickleball/open', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(); pkSetState(rd, 'is_open', 1); pkSeatRenewers(rd); res.redirect('/pickleball'); });
+app.post('/pickleball/open', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(); if (pkIsCancelled(rd)) return res.redirect('/pickleball'); /* un-cancel first — matches /checkin/open */ pkSetState(rd, 'is_open', 1); pkSeatRenewers(rd); res.redirect('/pickleball'); });
 app.post('/pickleball/close', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); pkSetState(pkRunDate(), 'is_open', 0); res.redirect('/pickleball'); });
 app.post('/pickleball/cancel', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball');
@@ -4046,7 +4154,11 @@ app.post('/pickleball/date', requireLogin, (req, res) => {
       }
       for (const k of ['pk_autoopen_done', 'pk_autoping_done', 'pk_autolock_done']) if (getSetting(k) === oldRd) setSetting(k, d);
       setSetting('pk_run_date', d);
-      setSetting('pk_run_base', pkNearestDow(d, PK_DOW));
+      // The consumed standing Tuesday is the base of the cycle being MOVED — never the Tuesday
+      // nearest the destination. Keying off `d` breaks whenever the run moves to a day AFTER its
+      // Tuesday (e.g. Tue 09-08 → Sat 09-12 resolves to 09-15), which marks the NEXT week's run
+      // consumed and silently deletes it. Once moved, the base is already recorded — keep it.
+      setSetting('pk_run_base', getSetting('pk_run_base') || pkNearestDow(oldRd, PK_DOW));
       db.exec('COMMIT');
     } catch (e) { db.exec('ROLLBACK'); console.error(`[pk-date] move FAILED: ${e.message}`); throw e; }
   }
@@ -4056,7 +4168,18 @@ app.post('/pickleball/guest', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball');
   const rd = pkRunDate(); if (pkIsCancelled(rd)) return res.redirect('/pickleball');
   const name = (req.body.name || '').trim().slice(0, 60);
-  if (name) { const { rows } = pkPartition(rd); if (rows.length < PK_CAP + PK_WAIT) { const em = `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}@guest.local`; db.prepare('INSERT INTO pk_checkins (run_date, email, name) VALUES (?,?,?)').run(rd, em, name + ' (guest)'); } }
+  if (name) {
+    // Double-tap guard, same as basketball's /checkin/guest: each guest gets a fresh random
+    // @guest.local email, so there's no UNIQUE to catch a re-post — two taps would silently
+    // eat two floor spots.
+    if (db.prepare("SELECT 1 FROM pk_checkins WHERE run_date=? AND name=? AND created_at > datetime('now','-5 seconds')").get(rd, name + ' (guest)'))
+      return res.redirect('/pickleball');
+    const { rows } = pkPartition(rd);
+    if (rows.length < PK_CAP + PK_WAIT) {
+      const em = `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}@guest.local`;
+      db.prepare('INSERT INTO pk_checkins (run_date, email, name) VALUES (?,?,?)').run(rd, em, name + ' (guest)');
+    }
+  }
   res.redirect('/pickleball');
 });
 app.post('/pickleball/remove', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(), em = String(req.body.email || ''); pkNotifyPromotion(rd, em); db.prepare('DELETE FROM pk_checkins WHERE run_date = ? AND email = ?').run(rd, em); res.redirect('/pickleball'); });
@@ -4071,6 +4194,11 @@ app.post('/pickleball/announce', requireLogin, (req, res) => {
   if (!body) return res.redirect('/pickleball');
   if (rateLimited('pk-announce', req.userEmail, 6, 10 * 60 * 1000)) return res.redirect('/pickleball');
   const author = (g.a && g.a.full_name) || req.userEmail;
+  // Same-body/same-author within 10s = a double-tap, not a second announcement. The 6-per-10-min
+  // rate limit is far too coarse to catch it, and each duplicate costs every member a second
+  // push AND a second email blast. Mirrors basketball's /announce guard.
+  if (db.prepare("SELECT 1 FROM pk_announcements WHERE body = ? AND author = ? AND created_at >= datetime('now','-10 seconds') LIMIT 1").get(body, author))
+    return res.redirect('/pickleball');
   db.prepare('INSERT INTO pk_announcements (body, author) VALUES (?,?)').run(body, author);
   audit(req.userEmail, 'admin', 'pk:announce', body.slice(0, 60));
   setImmediate(() => {

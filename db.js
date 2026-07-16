@@ -204,7 +204,7 @@ db.exec(`
   );
 `);
 // Optional per-week TIME override (2026-07): the host can move the start/end time as
-// well as the day. NULL = the default 19:00–22:00 (7–10 PM). A row may exist for a
+// well as the day. NULL = the DEFAULT_START–DEFAULT_END window in server.js. A row may exist for a
 // time-only change even when run_date === default_date. Additive + migration-guarded.
 const roCols = db.prepare('PRAGMA table_info(run_overrides)').all().map(c => c.name);
 if (!roCols.includes('run_time')) db.exec('ALTER TABLE run_overrides ADD COLUMN run_time TEXT');
@@ -558,15 +558,34 @@ if (pmCols.length && !pmCols.includes('auto_renew')) db.exec('ALTER TABLE progra
 // truth for that cascade; both edit handlers call it, so a new email-keyed table is
 // added HERE once instead of drifting between two copy-pasted blocks. node:sqlite has
 // no better-sqlite3-style .transaction(), so wrap manually and fail-closed on error.
-function rekeyEmail(oldEmail, newEmail) {
-  if (!oldEmail || !newEmail || oldEmail === newEmail) return;
+// Run fn() inside one transaction. Exported so a caller can commit an identity edit and its
+// rekey cascade together — see rekeyEmailTx.
+function transact(fn) {
   db.exec('BEGIN');
-  try {
+  try { const r = fn(); db.exec('COMMIT'); return r; }
+  catch (e) { db.exec('ROLLBACK'); throw e; }
+}
+
+// Per-user tables whose PRIMARY KEY includes `email`. A plain UPDATE on these throws
+// SQLITE_CONSTRAINT whenever the TARGET address already owns rows — which happens in ordinary
+// use: ANY address can magic-link sign in and pick up read-markers/memberships without ever
+// being an applicant, and a deleted person's markers outlive the delete. Every one of these is
+// per-user *state* (read markers, sit-outs, memberships), so the person doing the migrating
+// keeps their own: drop whatever the target address left behind, then carry. Internal constants
+// — never user input — so interpolating them into SQL is safe.
+const EMAIL_KEYED_TABLES = ['announcement_reads', 'announcement_dismissals', 'regular_optout',
+  'pk_optout', 'group_reads', 'pk_group_reads', 'program_membership'];
+
+// Carry every per-user row from oldEmail to newEmail. Assumes the CALLER already opened a
+// transaction, so the `applicants` row update commits atomically with this cascade — a
+// half-migrated identity (applicants moved, history left behind) is worse than a rejected edit.
+function rekeyEmailTx(oldEmail, newEmail) {
+  if (!oldEmail || !newEmail || oldEmail === newEmail) return;
+  {
     db.prepare('UPDATE checkins              SET email=?       WHERE email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE attendance            SET email=?       WHERE email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE pk_checkins           SET email=?       WHERE email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE pk_attendance         SET email=?       WHERE email=?').run(newEmail, oldEmail);
-    db.prepare('UPDATE regular_optout        SET email=?       WHERE email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE votes                 SET voter_email=? WHERE voter_email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE messages              SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE messages              SET to_email=?    WHERE to_email=?').run(newEmail, oldEmail);
@@ -574,27 +593,22 @@ function rekeyEmail(oldEmail, newEmail) {
     db.prepare('UPDATE group_messages        SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE group_messages        SET pinned_by=?   WHERE pinned_by=?').run(newEmail, oldEmail);
     db.prepare('UPDATE group_reactions       SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
-    db.prepare('UPDATE group_reads           SET email=?       WHERE email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE pk_group_messages     SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE pk_group_messages     SET pinned_by=?   WHERE pinned_by=?').run(newEmail, oldEmail);
     db.prepare('UPDATE pk_group_reactions    SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
-    db.prepare('UPDATE pk_group_reads        SET email=?       WHERE email=?').run(newEmail, oldEmail);
-    // Per-program membership (pickleball etc.) follows the email too — otherwise an email
-    // change silently drops membership + auto-renew and leaves a transferable orphan row.
-    db.prepare('UPDATE OR IGNORE program_membership SET email=? WHERE email=?').run(newEmail, oldEmail);
-    db.prepare('UPDATE announcement_reads    SET email=?       WHERE email=?').run(newEmail, oldEmail);
-    db.prepare('UPDATE announcement_dismissals SET email=?     WHERE email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE push_subscriptions    SET email=?       WHERE email=?').run(newEmail, oldEmail);
+    // Email-keyed per-user state (read markers, sit-outs, per-program membership + auto-renew).
+    // Target-address leftovers lose; the migrating person's own state is carried over them.
+    for (const t of EMAIL_KEYED_TABLES) {
+      db.prepare(`DELETE FROM ${t} WHERE email = ?`).run(newEmail);
+      db.prepare(`UPDATE ${t} SET email = ? WHERE email = ?`).run(newEmail, oldEmail);
+    }
     db.prepare('UPDATE announcements         SET author=?      WHERE author=?').run(newEmail, oldEmail); // "posted by" resolves to their name
     // Old-address sign-in tokens are INVALIDATED, not carried — they were emailed to an
     // address the person may no longer control, so a lingering valid link/code is a risk.
     db.prepare('UPDATE login_tokens SET used=1 WHERE email=? AND used=0').run(oldEmail);
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e; // fail loud — a half-migrated identity is worse than a rejected edit
   }
 }
 
-export { DB_PATH, rekeyEmail };
+export { DB_PATH, rekeyEmailTx, transact, EMAIL_KEYED_TABLES };
 export default db;

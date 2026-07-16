@@ -476,16 +476,6 @@ html:not(.noanim) .annbanner{animation:a-rise var(--t-fast) var(--ez-out) both}
 .subhead{font-family:var(--head);font-weight:800;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--orange-deep);
   margin:26px 0 4px;padding-top:14px;border-top:1px solid var(--line)}
 
-/* ---------- run state (operator) ---------- */
-.runstate{display:flex;align-items:center;gap:10px;font-size:14.5px;padding:14px 18px;border-radius:14px;background:#fff;border:1px solid var(--line)}
-.runstate .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
-.runstate.open{border-color:rgba(46,125,83,.45);background:rgba(46,125,83,.07);color:var(--good)}
-.runstate.open b{color:var(--good)}
-.runstate.open .dot{background:var(--good);box-shadow:0 0 0 4px rgba(46,125,83,.16)}
-.runstate.closed{border-color:rgba(188,72,55,.45);background:rgba(188,72,55,.07);color:var(--bad)}
-.runstate.closed b{color:var(--bad)}
-.runstate.closed .dot{background:var(--bad);box-shadow:0 0 0 4px rgba(188,72,55,.14)}
-
 /* ---------- operator player list ---------- */
 
 /* ---------- admin rows ---------- */
