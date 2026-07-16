@@ -354,27 +354,29 @@ if(!window.__ovSwipeBound){window.__ovSwipeBound=1;
       if(dy<=0||Math.abs(dx)>dy){dS=null;return;}            // upward or horizontal → not a dismiss
       if(dBody&&dBody.scrollTop>2){dS=null;return;}
       drag=true;
+      // Take manual control of the scrim so it can LIGHTEN as you pull. Its a-rise has fill:both
+      // pinning opacity, so kill that first. Without this the opaque grey backdrop just GROWS behind
+      // the sheet as it slides down (revealing more scrim) — that visible grey growth was the "blink".
+      if(dScrim){dScrim.style.animation='none';dScrim.style.transition='none';}
     }
     if(dy<0)dy=0;
     e.preventDefault();
     dS.style.transition='none';dS.style.transform='translateY('+dy+'px)';
+    if(dScrim)dScrim.style.opacity=String(Math.max(0.06,1-dy/380));  // backdrop fades as the sheet is pulled
   },{passive:false});
   document.addEventListener('touchend',function(){
     if(!dS)return;
-    var sh=dS,w=dW,scrim=dScrim,px=dy,h=sh.offsetHeight||500;
-    dS=null;dW=null;dBody=null;dScrim=null;
+    var sh=dS,w=dW,scrim=dScrim,px=dy,wasDrag=drag,h=sh.offsetHeight||500;
+    dS=null;dW=null;dBody=null;dScrim=null;drag=false;
     var still=document.documentElement.classList.contains('noanim')||(window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches);
-    if(drag&&px>Math.min(150,h*0.28)){                       // past threshold → dismiss
-      drag=false;
+    if(wasDrag&&px>Math.min(150,h*0.28)){                    // past threshold → dismiss
       if(still){clr(sh,w,scrim);closeFor(w);return;}
-      // Slide the (opaque) SHEET down and fade ONLY the scrim — never the whole wrap. Fading the
-      // wrap makes the sheet itself semi-transparent, so the page bleeds through it mid-slide (that
-      // double-exposure was the flash). The scrim's a-rise has fill:both pinning its opacity, so
-      // drop that animation first; then the inline fade takes and the dark backdrop melts away
-      // smoothly while the sheet clears the screen — no bleed-through, no pop.
+      // Sheet slides down fully OPAQUE (never fade the sheet/wrap — that bleeds the page through it);
+      // the scrim (already animation:none + partly faded from the drag) finishes fading to 0. No
+      // bleed-through, no pop, no grey-growth.
       sh.style.animation='none';
       sh.style.transition='transform .18s ease-out';
-      if(scrim){scrim.style.animation='none';scrim.style.transition='opacity .18s ease-out';}
+      if(scrim)scrim.style.transition='opacity .16s ease-out';
       requestAnimationFrame(function(){sh.style.transform='translateY('+(h+40)+'px)';if(scrim)scrim.style.opacity='0';});
       var fired=false,fin=function(){if(fired)return;fired=true;
         // Teardown INLINE, not via the close fn: the close fn would run its OWN 200ms wgdown after
@@ -383,14 +385,17 @@ if(!window.__ovSwipeBound){window.__ovSwipeBound=1;
         w.classList.remove('open');
         var other=document.querySelector('.wgwrap.open'),t=document.getElementById('tour');
         if(!other&&!(t&&!t.hidden)){document.body.style.overflow='';var p=window.__ovPrev;if(p&&p.focus){try{p.focus();}catch(e){}}}
-        clr(sh,w,scrim);};
+        clr(sh,w,scrim);};                                   // wrap hidden → full scrim reset restores a-rise for next open
       sh.addEventListener('transitionend',fin,{once:true});
-      setTimeout(fin,260);
-    }else{                                                   // not far enough → snap back
-      drag=false;
+      setTimeout(fin,240);
+    }else{                                                   // not far enough (or no real drag) → snap back
       sh.style.transition='transform .2s cubic-bezier(.2,.7,.2,1)';
       sh.style.transform='';
-      setTimeout(function(){clr(sh,w,scrim);},220);
+      // Restore the backdrop to full; keep animation:none (re-adding a-rise would replay its fade-in
+      // = a flash while the sheet stays open). Leaving it means the NEXT open shows the scrim without
+      // the subtle fade-in — negligible, and any real close resets it.
+      if(wasDrag&&scrim){scrim.style.transition='opacity .2s ease-out';scrim.style.opacity='1';}
+      setTimeout(function(){clr(sh,w);if(wasDrag&&scrim)scrim.style.transition='';},220);
     }
   });
 }`;
