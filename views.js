@@ -329,14 +329,14 @@ if(!window.__ovEscBound){window.__ovEscBound=1;
 // downward swipe over scrollable content still scrolls) and the drag is clearly VERTICAL (so it
 // never hijacks the announcement rows' horizontal swipe-to-clear). Bound once; survives swaps.
 if(!window.__ovSwipeBound){window.__ovSwipeBound=1;
-  var dS=null,dW=null,dBody=null,y0=0,x0=0,dy=0,drag=false;
+  var dS=null,dW=null,dBody=null,dScrim=null,y0=0,x0=0,dy=0,drag=false;
   function topSheet(){var pv=document.getElementById('pvwrap');if(pv&&pv.classList.contains('open'))return pv;return document.querySelector('.wgwrap.open');}
   function closeFor(w){var id=w&&w.id;
     if(id==='pvwrap'&&window.pvClose)window.pvClose();
     else if(id==='wgwrap'&&window.wgClose)window.wgClose();
     else if(id==='memwrap'&&window.memClose)window.memClose();
     else if(id==='annwrap'&&window.annClose)window.annClose();}
-  function clr(sh,w){if(sh){sh.style.transition='';sh.style.transform='';sh.style.animation='';}if(w){w.style.transition='';w.style.opacity='';}}
+  function clr(sh,w,sc){if(sh){sh.style.transition='';sh.style.transform='';sh.style.animation='';}if(w){w.style.transition='';w.style.opacity='';}if(sc){sc.style.transition='';sc.style.opacity='';sc.style.animation='';}}
   document.addEventListener('touchstart',function(e){
     if(!e.touches||e.touches.length!==1)return;
     var w=topSheet();if(!w)return;
@@ -344,7 +344,7 @@ if(!window.__ovSwipeBound){window.__ovSwipeBound=1;
     var sh=w.querySelector('.wgsheet');if(!sh)return;
     dBody=sh.querySelector('.wgsheet-b');
     if(dBody&&dBody.scrollTop>2){dS=null;return;}            // content scrolled → leave it to scroll
-    dS=sh;dW=w;y0=e.touches[0].clientY;x0=e.touches[0].clientX;dy=0;drag=false;
+    dS=sh;dW=w;dScrim=w.querySelector('.wgscrim');y0=e.touches[0].clientY;x0=e.touches[0].clientX;dy=0;drag=false;
   },{passive:false});
   document.addEventListener('touchmove',function(e){
     if(!dS)return;
@@ -361,35 +361,36 @@ if(!window.__ovSwipeBound){window.__ovSwipeBound=1;
   },{passive:false});
   document.addEventListener('touchend',function(){
     if(!dS)return;
-    var sh=dS,w=dW,px=dy,h=sh.offsetHeight||500;
-    dS=null;dW=null;dBody=null;
+    var sh=dS,w=dW,scrim=dScrim,px=dy,h=sh.offsetHeight||500;
+    dS=null;dW=null;dBody=null;dScrim=null;
     var still=document.documentElement.classList.contains('noanim')||(window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches);
     if(drag&&px>Math.min(150,h*0.28)){                       // past threshold → dismiss
       drag=false;
-      if(still){clr(sh,w);closeFor(w);return;}
-      sh.style.animation='none';                             // suppress the close fn's own wgdown — we slide it out here
+      if(still){clr(sh,w,scrim);closeFor(w);return;}
+      // Slide the (opaque) SHEET down and fade ONLY the scrim — never the whole wrap. Fading the
+      // wrap makes the sheet itself semi-transparent, so the page bleeds through it mid-slide (that
+      // double-exposure was the flash). The scrim's a-rise has fill:both pinning its opacity, so
+      // drop that animation first; then the inline fade takes and the dark backdrop melts away
+      // smoothly while the sheet clears the screen — no bleed-through, no pop.
+      sh.style.animation='none';
       sh.style.transition='transform .18s ease-out';
-      // Fade the WHOLE wrap (scrim + sheet), not the scrim alone: the scrim's a-rise animation has
-      // fill:both, which pins its opacity and ignores an inline fade — so the dark backdrop used to
-      // pop away the instant the wrap hid (the flash). Parent opacity multiplies through it.
-      w.style.transition='opacity .18s ease-out';
-      requestAnimationFrame(function(){sh.style.transform='translateY('+(h+40)+'px)';w.style.opacity='0';});
+      if(scrim){scrim.style.animation='none';scrim.style.transition='opacity .18s ease-out';}
+      requestAnimationFrame(function(){sh.style.transform='translateY('+(h+40)+'px)';if(scrim)scrim.style.opacity='0';});
       var fired=false,fin=function(){if(fired)return;fired=true;
-        // INSTANT teardown: force each sheet's close fn to its synchronous branch (noanim) so it
-        // doesn't run its OWN 200ms wgdown after ours — that second wait, with the wrap still up +
-        // scroll still locked, was the post-swipe pause. The wrap is already faded to 0 here.
-        var de=document.documentElement,had=de.classList.contains('noanim');
-        if(!had)de.classList.add('noanim');
-        closeFor(w);
-        if(!had)de.classList.remove('noanim');
-        clr(sh,w);};
+        // Teardown INLINE, not via the close fn: the close fn would run its OWN 200ms wgdown after
+        // ours (wrap still up + scroll locked = a pause). Same teardown all four close fns do — drop
+        // .open, and unless another sheet/tour is still up underneath, restore scroll + focus.
+        w.classList.remove('open');
+        var other=document.querySelector('.wgwrap.open'),t=document.getElementById('tour');
+        if(!other&&!(t&&!t.hidden)){document.body.style.overflow='';var p=window.__ovPrev;if(p&&p.focus){try{p.focus();}catch(e){}}}
+        clr(sh,w,scrim);};
       sh.addEventListener('transitionend',fin,{once:true});
       setTimeout(fin,260);
     }else{                                                   // not far enough → snap back
       drag=false;
       sh.style.transition='transform .2s cubic-bezier(.2,.7,.2,1)';
       sh.style.transform='';
-      setTimeout(function(){clr(sh,w);},220);
+      setTimeout(function(){clr(sh,w,scrim);},220);
     }
   });
 }`;
