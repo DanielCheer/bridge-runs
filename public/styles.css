@@ -495,6 +495,16 @@ html:not(.noanim) .annbanner{animation:a-rise var(--t-fast) var(--ez-out) both}
 .tally{font-size:13.5px;margin-top:12px;color:var(--ink)}
 .tally b{font-family:var(--head);font-weight:800;color:var(--orange-deep);font-size:15px}
 .tally-note{font-family:var(--body);font-size:12px;color:var(--muted);margin-top:3px}
+/* Vote colour-coding: approve = green, reject = red, so the two decisions never read alike.
+   Placed AFTER .tally b so these win the equal-specificity tie on the count number. */
+.vc-approve,.vc-approve b{color:var(--good)}
+.vc-reject,.vc-reject b{color:var(--bad)}
+/* Approve button mirrors .btn.leave (reject) but in green. The .voted (cast) state stays on
+   its own colour instead of the shared teal, so a cast approve and a cast reject stay distinct. */
+.btn.approve{background:#fff;color:var(--good);border:1px solid rgba(46,125,83,.4);box-shadow:none;text-shadow:none}
+.btn.approve:hover{background:rgba(46,125,83,.06);border-color:rgba(46,125,83,.6);box-shadow:none}
+.btn.approve.voted{background:var(--good);color:#fff;border-color:transparent}
+.btn.leave.voted{background:var(--bad);color:#fff;border-color:transparent}
 
 /* ---------- people edit form ---------- */
 .editrow{margin:10px 0 0;display:grid;gap:8px}
