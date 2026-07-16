@@ -337,23 +337,6 @@ if(!window.__ovSwipeBound){window.__ovSwipeBound=1;
     else if(id==='memwrap'&&window.memClose)window.memClose();
     else if(id==='annwrap'&&window.annClose)window.annClose();}
   function clr(sh,w,sc){if(sh){sh.style.transition='';sh.style.transform='';sh.style.animation='';}if(w){w.style.transition='';w.style.opacity='';}if(sc){sc.style.transition='';sc.style.opacity='';sc.style.animation='';}}
-  // --- iOS status-bar tint sync ---
-  // In a standalone PWA the safe-area-top strip (behind the clock/battery) is composited by iOS from
-  // the sampled web content AND <meta theme-color>, on a LAGGING clock — so while JS fades the dark
-  // scrim, that strip trails behind and even inverts, leaving a grey SEAM at the status bar. Fix:
-  // drive theme-color to the scrim's OWN current colour (rgba(18,20,14,.55) at scrim-opacity op,
-  // composited over the cream page #F8F5EF) so the strip stays identical to the backdrop. op=1 →
-  // #7a7973 (matches the measured full-scrim luma); op=0 → cream.
-  var __tcM=document.querySelector('meta[name="theme-color"]'),__TC_CREAM='#f8f5ef';
-  function tcOp(op){if(!__tcM)return;if(op<=0.02){__tcM.setAttribute('content',__TC_CREAM);return;}
-    var a=0.55*op,hx=function(base,d){var v=Math.round(base*(1-a)+d*a).toString(16);return v.length<2?'0'+v:v;};
-    __tcM.setAttribute('content','#'+hx(248,18)+hx(245,20)+hx(239,14));}
-  function tcAnim(from,to,ms){var t0=null;function fr(ts){if(t0==null)t0=ts;var k=ms<=0?1:Math.min(1,(ts-t0)/ms);tcOp(from+(to-from)*k);if(k<1)requestAnimationFrame(fr);}requestAnimationFrame(fr);}
-  // Endpoints (any sheet open → dark, all closed → cream) for EVERY open/close path — tap, X, Esc,
-  // and the swipe-teardown — via one observer that survives .wrap swaps (the wraps live inside .wrap).
-  (function(){function sync(){tcOp(document.querySelector('.wgwrap.open')?1:0);}
-    function bind(){try{new MutationObserver(function(rs){for(var i=0;i<rs.length;i++){var t=rs[i].target;if(t&&t.classList&&t.classList.contains('wgwrap')){sync();return;}}}).observe(document.body,{subtree:true,attributes:true,attributeFilter:['class']});}catch(e){}}
-    if(document.body)bind();else document.addEventListener('DOMContentLoaded',bind);})();
   document.addEventListener('touchstart',function(e){
     if(!e.touches||e.touches.length!==1)return;
     var w=topSheet();if(!w)return;
@@ -379,9 +362,7 @@ if(!window.__ovSwipeBound){window.__ovSwipeBound=1;
     if(dy<0)dy=0;
     e.preventDefault();
     dS.style.transition='none';dS.style.transform='translateY('+dy+'px)';
-    var op=Math.max(0.06,1-dy/380);
-    if(dScrim)dScrim.style.opacity=String(op);  // backdrop fades as the sheet is pulled
-    tcOp(op);                                    // status-bar strip tracks the backdrop in lockstep
+    if(dScrim)dScrim.style.opacity=String(Math.max(0.06,1-dy/380));  // backdrop fades as the sheet is pulled
   },{passive:false});
   document.addEventListener('touchend',function(){
     if(!dS)return;
@@ -396,7 +377,6 @@ if(!window.__ovSwipeBound){window.__ovSwipeBound=1;
       sh.style.animation='none';
       sh.style.transition='transform .18s ease-out';
       if(scrim)scrim.style.transition='opacity .16s ease-out';
-      tcAnim(Math.max(0.06,1-px/380),0,170);   // fade the status-bar tint to cream WITH the scrim
       requestAnimationFrame(function(){sh.style.transform='translateY('+(h+40)+'px)';if(scrim)scrim.style.opacity='0';});
       var fired=false,fin=function(){if(fired)return;fired=true;
         // Teardown INLINE, not via the close fn: the close fn would run its OWN 200ms wgdown after
@@ -414,7 +394,7 @@ if(!window.__ovSwipeBound){window.__ovSwipeBound=1;
       // Restore the backdrop to full; keep animation:none (re-adding a-rise would replay its fade-in
       // = a flash while the sheet stays open). Leaving it means the NEXT open shows the scrim without
       // the subtle fade-in — negligible, and any real close resets it.
-      if(wasDrag&&scrim){scrim.style.transition='opacity .2s ease-out';scrim.style.opacity='1';tcAnim(Math.max(0.06,1-px/380),1,200);}  // backdrop + status-bar tint both back to full
+      if(wasDrag&&scrim){scrim.style.transition='opacity .2s ease-out';scrim.style.opacity='1';}
       setTimeout(function(){clr(sh,w);if(wasDrag&&scrim)scrim.style.transition='';},220);
     }
   });
