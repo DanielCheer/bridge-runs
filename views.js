@@ -368,12 +368,20 @@ if(!window.__ovSwipeBound){window.__ovSwipeBound=1;
     if(drag&&px>Math.min(150,h*0.28)){                       // past threshold → dismiss
       drag=false;
       if(still){clr(sh);closeFor(w);return;}
-      sh.style.animation='none';                             // suppress the close fn's own wgdown; we slide it out here
-      sh.style.transition='transform .2s ease-out';
+      sh.style.animation='none';                             // suppress the close fn's own wgdown — we slide it out here
+      sh.style.transition='transform .16s ease-out';
       requestAnimationFrame(function(){sh.style.transform='translateY('+(h+48)+'px)';if(scrim)scrim.style.opacity='0';});
-      var fired=false,fin=function(){if(fired)return;fired=true;closeFor(w);setTimeout(function(){clr(sh);if(scrim)scrim.style.opacity='';},220);};
+      var fired=false,fin=function(){if(fired)return;fired=true;
+        // INSTANT teardown: force each sheet's close fn to its synchronous branch (noanim) so it
+        // doesn't run its OWN 200ms wgdown after ours — that second wait, with the invisible wrap
+        // still up + scroll still locked, was the post-swipe pause.
+        var de=document.documentElement,had=de.classList.contains('noanim');
+        if(!had)de.classList.add('noanim');
+        closeFor(w);
+        if(!had)de.classList.remove('noanim');
+        clr(sh);if(scrim)scrim.style.opacity='';};
       sh.addEventListener('transitionend',fin,{once:true});
-      setTimeout(fin,260);
+      setTimeout(fin,240);
     }else{                                                   // not far enough → snap back
       drag=false;
       sh.style.transition='transform .2s cubic-bezier(.2,.7,.2,1)';
