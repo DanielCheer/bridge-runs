@@ -4104,6 +4104,11 @@ app.post('/pickleball/join', requireLogin, (req, res) => {
   if (pkIsCancelled(rd) || !pkIsOpen(rd)) return res.redirect('/pickleball');
   const { rows } = pkPartition(rd);
   if (rows.length >= PK_CAP + PK_WAIT && !rows.find(p => p.email === req.userEmail)) return res.redirect('/pickleball'); // full
+  // Taking a seat makes you a pickleball member — the same "opening the run joins you" rule the
+  // GET /pickleball page applies. A direct POST skips that GET, so without this an approved
+  // basketball player could seat themselves as a ghost: on the floor but absent from the member
+  // list, chat audience, and check-in-open pushes. Idempotent + guest-safe.
+  pkJoinMembership(req.userEmail);
   db.prepare('DELETE FROM pk_optout WHERE run_date = ? AND email = ?').run(rd, req.userEmail); // re-joining clears any sit-out
   db.prepare('INSERT OR IGNORE INTO pk_checkins (run_date, email, name) VALUES (?,?,?)').run(rd, req.userEmail, g.a.full_name);
   res.redirect('/pickleball');
