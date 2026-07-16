@@ -1799,7 +1799,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
     // A floor spot is being HELD for them — the one action is to claim it.
     action = `<a class="btn primary" href="/checkin/claim/${esc(myOffer.token)}">Claim my spot</a>`;
   } else if (iAmTeam && iAutoRenew && iOptedOut && myState === 'out' && !locked) {
-    action = `<form method="POST" action="/checkin/optin"><button class="btn primary" type="submit" data-tour="join">I'm in</button></form>`;
+    action = `<form method="POST" action="/checkin/optin"><button class="btn primary" type="submit">I'm in</button></form>`;
   } else if (iAmTeam && iAutoRenew && (myState === 'in' || (!isOpen && !iOptedOut))) {
     // team auto-joins on open; give them a self-clear
     action = `<form method="POST" action="/checkin/optout"><button class="btn ghost" type="submit">Sit out</button></form>`;
@@ -1815,10 +1815,10 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
     action = `<button class="btn" type="button" disabled>Early spots full — opens to all soon</button>`;
   } else if (!isOpen && iAmRegular) {
     // regulars can join while closed — shown as a normal join, no role wording
-    action = `<form method="POST" action="/checkin/join"><button class="btn primary" type="submit" data-tour="join">I'm in</button></form>`;
+    action = `<form method="POST" action="/checkin/join"><button class="btn primary" type="submit">I'm in</button></form>`;
   } else if (!isOpen && iAmTeam) {
     // team keep pre-access even with auto-renew off — manual join while closed
-    action = `<form method="POST" action="/checkin/join"><button class="btn primary" type="submit" data-tour="join">I'm in</button></form>`;
+    action = `<form method="POST" action="/checkin/join"><button class="btn primary" type="submit">I'm in</button></form>`;
   } else if (!isOpen) {
     action = `<button class="btn" type="button" disabled>Check-in closed</button>`;
   } else if (runFull) {
@@ -1826,7 +1826,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
   } else if (full) {
     action = `<form method="POST" action="/checkin/join"><button class="btn primary" type="submit">Join waitlist (${waiting}/${waitlistCap})</button></form>`;
   } else {
-    action = `<form method="POST" action="/checkin/join"><button class="btn primary" type="submit" data-tour="join">I'm in</button></form>`;
+    action = `<form method="POST" action="/checkin/join"><button class="btn primary" type="submit">I'm in</button></form>`;
   }
 
   // Run-day confirm/release: a floor player either confirms they're coming or frees the
@@ -2072,7 +2072,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
     ${msg ? `<div class="notice good" style="margin-top:12px">${esc(msg)}</div>` : ''}
     ${suspended ? `<div class="notice bad" style="margin-top:12px"><b>⊘ Your check-in is paused.</b>${suspendReason ? ' ' + esc(suspendReason) : ''} Reach out to the host if you think this is a mistake.</div>` : ''}
     ${mine}
-    ${(action || runToggle) ? `<div class="controls">${action}${runToggle}</div>` : ''}
+    ${(action || runToggle) ? `<div class="controls" data-tour="join">${action}${runToggle}</div>` : ''}
     ${confirmCta}
     ${cancelled ? '' : `<div style="margin-top:12px"><a href="/run.ics" style="font-size:13px;color:var(--muted)">📅 Add this run to your calendar</a></div>`}
     ${infoSection}
@@ -3484,15 +3484,15 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–
     } else {
       const v = a.vote || { poolSize: 0, threshold: 3, approved: [], rejected: [], waiting: [], myVote: null };
       const th = v.threshold || 3;
-      const tally = `<div class="tally"><b>${v.approved.length}/${th}</b> approvals${v.rejected.length ? ` · <span style="color:var(--bad)">${v.rejected.length}/${th} rejects</span>` : ''} <span class="tally-note">(${th} to decide)</span></div>`;
+      const tally = `<div class="tally"><span class="vc-approve"><b>${v.approved.length}/${th}</b> approvals</span>${v.rejected.length ? ` · <span class="vc-reject"><b>${v.rejected.length}/${th}</b> rejects</span>` : ''} <span class="tally-note">(${th} to decide)</span></div>`;
       // Vote transparency — ADMIN ONLY (owner's call). Non-admin team members keep
       // seeing only the tally + their own vote highlight (below), never who cast what.
       // Maps voter emails → names via the council roster. e.g. "Approved by Nic, Sarah
       // · Rejected by Mike".
       const whoVoted = viewerIsAdmin ? (() => {
         const parts = [];
-        if (v.approved.length) parts.push(`Approved by ${v.approved.map(voterName).join(', ')}`);
-        if (v.rejected.length) parts.push(`Rejected by ${v.rejected.map(voterName).join(', ')}`);
+        if (v.approved.length) parts.push(`<span class="vc-approve">Approved by ${v.approved.map(voterName).join(', ')}</span>`);
+        if (v.rejected.length) parts.push(`<span class="vc-reject">Rejected by ${v.rejected.map(voterName).join(', ')}</span>`);
         return parts.length ? `<div class="tally-note">${parts.join(' · ')}</div>` : '';
       })() : '';
       // admin-only: who's still to vote (names, not raw emails)
@@ -3502,7 +3502,7 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–
         ? '<span class="ad" style="margin:0">Team decides — you have oversight, not a vote.</span>'
         : (isSelf
           ? '<span class="ad" style="margin:0">Your own application — you can\'t vote.</span>'
-          : `${voteBtn(a.id, 'approve', 'Approve', 'ghost', v.myVote === 'approve')}
+          : `${voteBtn(a.id, 'approve', 'Approve', 'approve', v.myVote === 'approve')}
              ${voteBtn(a.id, 'reject', 'Reject', 'leave', v.myVote === 'reject')}`);
       const resetBtn = viewerIsAdmin
         ? `<form method="POST" action="/admin/reset"><input type="hidden" name="id" value="${a.id}"><button class="btn ghost sm" type="submit">Reset votes</button></form>` : '';
