@@ -329,14 +329,14 @@ if(!window.__ovEscBound){window.__ovEscBound=1;
 // downward swipe over scrollable content still scrolls) and the drag is clearly VERTICAL (so it
 // never hijacks the announcement rows' horizontal swipe-to-clear). Bound once; survives swaps.
 if(!window.__ovSwipeBound){window.__ovSwipeBound=1;
-  var dS=null,dW=null,dBody=null,dScrim=null,y0=0,x0=0,dy=0,drag=false;
+  var dS=null,dW=null,dBody=null,y0=0,x0=0,dy=0,drag=false;
   function topSheet(){var pv=document.getElementById('pvwrap');if(pv&&pv.classList.contains('open'))return pv;return document.querySelector('.wgwrap.open');}
   function closeFor(w){var id=w&&w.id;
     if(id==='pvwrap'&&window.pvClose)window.pvClose();
     else if(id==='wgwrap'&&window.wgClose)window.wgClose();
     else if(id==='memwrap'&&window.memClose)window.memClose();
     else if(id==='annwrap'&&window.annClose)window.annClose();}
-  function clr(sh){if(sh){sh.style.transition='';sh.style.transform='';sh.style.animation='';}}
+  function clr(sh,w){if(sh){sh.style.transition='';sh.style.transform='';sh.style.animation='';}if(w){w.style.transition='';w.style.opacity='';}}
   document.addEventListener('touchstart',function(e){
     if(!e.touches||e.touches.length!==1)return;
     var w=topSheet();if(!w)return;
@@ -344,7 +344,7 @@ if(!window.__ovSwipeBound){window.__ovSwipeBound=1;
     var sh=w.querySelector('.wgsheet');if(!sh)return;
     dBody=sh.querySelector('.wgsheet-b');
     if(dBody&&dBody.scrollTop>2){dS=null;return;}            // content scrolled → leave it to scroll
-    dS=sh;dW=w;dScrim=w.querySelector('.wgscrim');y0=e.touches[0].clientY;x0=e.touches[0].clientX;dy=0;drag=false;
+    dS=sh;dW=w;y0=e.touches[0].clientY;x0=e.touches[0].clientX;dy=0;drag=false;
   },{passive:false});
   document.addEventListener('touchmove',function(e){
     if(!dS)return;
@@ -358,36 +358,38 @@ if(!window.__ovSwipeBound){window.__ovSwipeBound=1;
     if(dy<0)dy=0;
     e.preventDefault();
     dS.style.transition='none';dS.style.transform='translateY('+dy+'px)';
-    if(dScrim)dScrim.style.opacity=String(Math.max(0.12,0.55*(1-dy/600)));
   },{passive:false});
   document.addEventListener('touchend',function(){
     if(!dS)return;
-    var sh=dS,w=dW,scrim=dScrim,px=dy,h=sh.offsetHeight||500;
-    dS=null;dW=null;dBody=null;dScrim=null;
+    var sh=dS,w=dW,px=dy,h=sh.offsetHeight||500;
+    dS=null;dW=null;dBody=null;
     var still=document.documentElement.classList.contains('noanim')||(window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches);
     if(drag&&px>Math.min(150,h*0.28)){                       // past threshold → dismiss
       drag=false;
-      if(still){clr(sh);closeFor(w);return;}
+      if(still){clr(sh,w);closeFor(w);return;}
       sh.style.animation='none';                             // suppress the close fn's own wgdown — we slide it out here
-      sh.style.transition='transform .16s ease-out';
-      requestAnimationFrame(function(){sh.style.transform='translateY('+(h+48)+'px)';if(scrim)scrim.style.opacity='0';});
+      sh.style.transition='transform .18s ease-out';
+      // Fade the WHOLE wrap (scrim + sheet), not the scrim alone: the scrim's a-rise animation has
+      // fill:both, which pins its opacity and ignores an inline fade — so the dark backdrop used to
+      // pop away the instant the wrap hid (the flash). Parent opacity multiplies through it.
+      w.style.transition='opacity .18s ease-out';
+      requestAnimationFrame(function(){sh.style.transform='translateY('+(h+40)+'px)';w.style.opacity='0';});
       var fired=false,fin=function(){if(fired)return;fired=true;
         // INSTANT teardown: force each sheet's close fn to its synchronous branch (noanim) so it
-        // doesn't run its OWN 200ms wgdown after ours — that second wait, with the invisible wrap
-        // still up + scroll still locked, was the post-swipe pause.
+        // doesn't run its OWN 200ms wgdown after ours — that second wait, with the wrap still up +
+        // scroll still locked, was the post-swipe pause. The wrap is already faded to 0 here.
         var de=document.documentElement,had=de.classList.contains('noanim');
         if(!had)de.classList.add('noanim');
         closeFor(w);
         if(!had)de.classList.remove('noanim');
-        clr(sh);if(scrim)scrim.style.opacity='';};
+        clr(sh,w);};
       sh.addEventListener('transitionend',fin,{once:true});
-      setTimeout(fin,240);
+      setTimeout(fin,260);
     }else{                                                   // not far enough → snap back
       drag=false;
       sh.style.transition='transform .2s cubic-bezier(.2,.7,.2,1)';
       sh.style.transform='';
-      if(scrim)scrim.style.opacity='';
-      setTimeout(function(){clr(sh);},220);
+      setTimeout(function(){clr(sh,w);},220);
     }
   });
 }`;
