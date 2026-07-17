@@ -450,7 +450,7 @@ function fmtClockLabel(hhmm) {
 }
 // "7–10 PM" (drops the shared AM/PM on the start when it matches the end); the tip-off
 // time alone as "7 PM". Used in the masthead + move announcement.
-// "6–9 PM" from two HH:MM strings. Shared by both programs — basketball resolves its window
+// "6–8 PM" from two HH:MM strings. Shared by both programs — basketball resolves its window
 // from per-week overrides, pickleball derives it from PK_START_H/PK_END_H.
 function fmtClockRange(start, end) {
   const s = fmtClockLabel(start), e = fmtClockLabel(end);
@@ -3779,10 +3779,10 @@ function pkProgramActive() { const r = stmtPkActive.get(); return !!(r && r.acti
 // basketball run (RUN_DOW) never drags pickleball's date along. Weekly auto-schedule:
 // check-in reopens right after the run ends (PK_END_H), the roster locks at start
 // (PK_START_H), and the floor gets a confirm ping the night before (PK_PING_H, day before).
-const PK_DOW = 2, PK_START_H = 18, PK_END_H = 21, PK_PING_H = 20, PK_PING_DOW_OFFSET = 1, PK_LOCK = '17:30';
+const PK_DOW = 2, PK_START_H = 18, PK_END_H = 20, PK_PING_H = 20, PK_PING_DOW_OFFSET = 1, PK_LOCK = '17:30';
 // Season opener (YYYY-MM-DD) or null — same gate shape as basketball's seasonStart().
 function pkSeasonStart() { const s = getSetting('pk_season_start'); return (s && /^\d{4}-\d{2}-\d{2}$/.test(s)) ? s : null; }
-// "6–9 PM" / "6 PM" — derived from the schedule constants, never written as a literal, so the
+// "6–8 PM" / "6 PM" — derived from the schedule constants, never written as a literal, so the
 // masthead, the runs hub and the banner caption can't drift from the real hours.
 const pkTimeRange = () => fmtClockRange(`${PK_START_H}:00`, `${PK_END_H}:00`);
 const pkStartLabel = () => fmtClockLabel(`${PK_START_H}:00`);
@@ -3963,7 +3963,7 @@ function pkEnsureWeek() {
   const today = ymdLocal();
   const now = new Date();
   // A run counts as OVER once its end time (PK_END_H) passes on run day — so today's run is
-  // archived that same night and the cycle rolls forward, letting check-in reopen at 9 PM.
+  // archived that same night and the cycle rolls forward, letting check-in reopen at 8 PM.
   const endedToday = now.getHours() >= PK_END_H ? today : null;
   const isPast = rd => rd < today || rd === endedToday;
   // Archive + purge ANY finished pickleball run so the floor is recorded to pk_attendance
@@ -4078,7 +4078,7 @@ app.get('/pickleball/season', requireLogin, (req, res) => {
     dmUnread: unreadCount(me), groupUnread: pkGroupUnread(me), groupMention: pkGroupMentionUnread(me, a ? a.id : 0), ann: null,
   }));
 });
-// Add the pickleball run to a calendar (.ics). Floating local time; 6–9 PM.
+// Add the pickleball run to a calendar (.ics). Floating local time; 6–8 PM.
 app.get('/pickleball/run.ics', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
   const rd = pkRunDate();
