@@ -151,8 +151,10 @@ function queueOpenEmailRecipients() {
 // re-preparing per call recompiles the SQL each time; prepare once, reuse.
 const stmtGetSetting = db.prepare('SELECT value FROM app_settings WHERE key = ?');
 const stmtSetSetting = db.prepare('INSERT OR REPLACE INTO app_settings (key,value) VALUES (?,?)');
+const stmtDelSetting = db.prepare('DELETE FROM app_settings WHERE key = ?');
 const getSetting = (k) => stmtGetSetting.get(k)?.value;
 const setSetting = (k, v) => stmtSetSetting.run(k, String(v));
+const delSetting = (k) => stmtDelSetting.run(k);
 // Apply any host-saved capacity overrides (app_settings) over the env defaults. Called
 // once at startup and again whenever the host saves settings, so live edits need no
 // restart. A missing / non-positive stored value falls back to the env default.
@@ -432,6 +434,18 @@ function runOverrideFor(fridayKey) {
   const row = stmtRunOverride.get(fridayKey);
   return row ? row.run_date : null;
 }
+// The default-day KEY a run date is keyed under in run_overrides — the base of its cycle.
+// Authoritative across FAR moves: read the override row whose run_date matches (its
+// default_date IS the base), falling back to the nearest default day when the run sits on
+// its default position (no override). Keying off the nearest default day to the DESTINATION
+// instead is wrong once a move crosses the week-midpoint — it orphans the run's own override
+// and un-suppresses the original default day. (This is basketball's analog of pickleball's
+// pk_run_base fix — see /pickleball/date.)
+const stmtOverrideByRunDate = db.prepare('SELECT default_date FROM run_overrides WHERE run_date = ? LIMIT 1');
+function runBaseFor(runDate) {
+  const ov = stmtOverrideByRunDate.get(runDate);
+  return ov ? ov.default_date : nearestRunDefault(new Date(runDate + 'T12:00:00'));
+}
 // Default run window — 8:30 PM to 10:30 PM, server-local (Eastern). The host can override
 // per week via run_overrides.run_time / run_end (HH:MM). NULL columns fall back here.
 const DEFAULT_START = '20:30', DEFAULT_END = '22:30';
@@ -689,6 +703,15 @@ function pruneOldMedia() {
   } catch (e) { console.error(`[media-prune] failed: ${e.message}`); }
 }
 
+// audit_log retention: db.js trims to the newest 5000 rows at boot, but a long-lived process
+// (weeks between deploys) grows it unbounded in between. Trim on the same daily cadence as media.
+function pruneAuditLog() {
+  try {
+    const { changes } = db.prepare('DELETE FROM audit_log WHERE id < (SELECT MAX(id) - 5000 FROM audit_log)').run();
+    if (changes) console.log(`[audit-prune] trimmed ${changes} old audit_log row(s)`);
+  } catch (e) { console.error(`[audit-prune] failed: ${e.message}`); }
+}
+
 // The valid sticker set (from views.js) → an image path, or null if unknown. A sticker
 // send carries only a name; this is the ONLY thing trusted to build the path (no upload,
 // no client-supplied path), so a bogus/traversal name can never become an image.
@@ -715,10 +738,14 @@ refreshAvatarMap(); // prime at boot so already-set photos render on the first r
 // The attendance table is the permanent log of who was on the FINAL floor each
 // Friday; loadRun() archives into it right before its weekly checkins purge.
 function runStartEpoch(runDate) { return new Date(runDate + 'T' + runTimesFor(runDate).start + ':00').getTime(); } // configured start, server-local (Eastern)
+// Hoisted — attendanceStats runs on every profile page/card render (node:sqlite has no stmt cache).
+const stmtAttTotal = db.prepare('SELECT COUNT(*) n FROM attendance WHERE email = ?');
+const stmtAttSeason = db.prepare("SELECT COUNT(*) n FROM attendance WHERE email = ? AND run_date >= strftime('%Y-01-01','now')");
+const stmtAttDates = db.prepare('SELECT run_date FROM attendance WHERE email = ? ORDER BY run_date ASC');
 function attendanceStats(email) {
-  const total = db.prepare('SELECT COUNT(*) n FROM attendance WHERE email = ?').get(email).n;
-  const season = db.prepare("SELECT COUNT(*) n FROM attendance WHERE email = ? AND run_date >= strftime('%Y-01-01','now')").get(email).n;
-  const dates = db.prepare('SELECT run_date FROM attendance WHERE email = ? ORDER BY run_date ASC').all(email).map(r => r.run_date);
+  const total = stmtAttTotal.get(email).n;
+  const season = stmtAttSeason.get(email).n;
+  const dates = stmtAttDates.all(email).map(r => r.run_date);
   const first = dates.length ? dates[0] : null;
   // Longest run of consecutive runs attended. Compare CALENDAR days (UTC-midnight floor,
   // DST-safe). Runs are ~weekly, but the host can MOVE a run, so a 4–10-day gap still
@@ -1335,8 +1362,11 @@ app.post('/invite/:token', async (req, res) => {
   if (existing) {
     if (prefilledMatch) {
       // Verified owner confirming their own pre-filled invite — safe to refresh
-      // their name/phone from what they submitted.
-      db.prepare('UPDATE applicants SET status=?, is_team=?, is_regular=?, full_name=?, phone=? WHERE email=?')
+      // their name/phone from what they submitted. Persist the waiver they just attested
+      // (the form requires the checkbox — see the !waiverOk reject above); a fresh-INSERT
+      // claim already sets waiver_ok=1, and dropping it here left auto-seated team members
+      // with no waiver on file.
+      db.prepare('UPDATE applicants SET status=?, is_team=?, is_regular=?, full_name=?, phone=?, waiver_ok=1 WHERE email=?')
         .run('approved', isTeam, isRegular, full_name, phone, email);
     } else {
       // Unverified submitter (email doesn't match the invite's prefill → no ownership proof).
@@ -1691,11 +1721,11 @@ function offereeForFloorLeave(runDate, leavingEmail) {
 // dropped from the waitlist (they didn't claim), their held spot freed, and the next
 // eligible waitlister offered in their place. Idempotent; safe every request. Run
 // this BEFORE computing who to offer/display so a stale hold never blocks the floor.
+const stmtExpiredOffers = db.prepare(  // hoisted — runs on every /checkin + /runs GET and the 60s tick
+  'SELECT * FROM checkins WHERE run_date = ? AND offered_at IS NOT NULL AND offered_at < ?');
 function expireAndReoffer(runDate, req) {
   const cutoff = Date.now() - OFFER_WINDOW_MS;
-  const expired = db.prepare(
-    'SELECT * FROM checkins WHERE run_date = ? AND offered_at IS NOT NULL AND offered_at < ?')
-    .all(runDate, cutoff);
+  const expired = stmtExpiredOffers.all(runDate, cutoff);
   for (const ex of expired) {
     // Capture the next offeree BEFORE dropping the expired hold, so the freed slot
     // offers the true top waitlister rather than one auto-promoted by the drop.
@@ -1850,7 +1880,7 @@ function runDayFor(req, gate) {
   const canSetRunDay = gate.viewerIsAdmin || !!(gate.a && gate.a.is_host);
   if (!canSetRunDay) return null;
   const rdRunDate = nextRunDate();
-  const rdBase = nearestRunDefault(new Date(rdRunDate + 'T12:00:00')); // base run day this run is keyed under
+  const rdBase = runBaseFor(rdRunDate); // the default day THIS run is keyed under (survives far moves)
   const rdTimes = runTimesFor(rdRunDate);
   const today = ymdLocal();
   const opener = seasonStart();
@@ -2016,6 +2046,7 @@ app.get('/u/:id', requireLogin, (req, res) => {
     p, stats: attendanceStats(p.email), isSelf: p.email === req.userEmail, canContact,
     runDate: nextRunDate(),
     hours: runTimeRange(nextRunDate()),
+    back: runCookie(req) === 2 ? '/pickleball/chat' : '/chat', // Back returns to the run you came from (pk vs bball)
     dmUnread: unreadCount(req.userEmail), groupUnread: groupUnread(req.userEmail),
     groupMention: groupMentionUnread(req.userEmail, gate.a ? gate.a.id : 0),
     ann: annPanel(req.userEmail),
@@ -2075,7 +2106,11 @@ app.post('/profile/photo', requireLogin, (req, res) => {
         .toBuffer();
       const fname = `${a.id}-${crypto.randomBytes(6).toString('hex')}.jpg`;
       await fs.promises.writeFile(path.join(AVATARS_DIR, fname), out); // async write off the event loop
-      const prev = a.avatar;
+      // Re-read the CURRENT avatar right before the swap (post-await): `a` was fetched before the
+      // sharp/writeFile awaits, so two concurrent uploads would both see the original and both
+      // delete IT — orphaning the first upload's file. Reading it here chains the unlink to
+      // whatever was current when this upload takes over.
+      const prev = db.prepare('SELECT avatar FROM applicants WHERE id = ?').get(a.id)?.avatar;
       db.prepare('UPDATE applicants SET avatar = ? WHERE id = ?').run(fname, a.id);
       if (prev && prev !== fname) safeUnlinkAvatar(prev); // drop the old file on replace
       refreshAvatarMap();
@@ -2939,9 +2974,14 @@ function autoJoinTeam(runDate) {
   // Team members are dropped onto the floor with TOP priority when the run
   // opens — if pre-access joiners already filled the cap, the newest of them
   // is bumped to waitlist rather than a team member. Team runs the run.
+  // "No waiver, no play" — a team member with no waiver on file is NOT auto-seated (mirrors
+  // pkSeatRenewers' waiver gate). They still see they're off the floor and get seated the
+  // moment they tap "I'm in" and sign the one-time waiver. This closes a hole where every
+  // self-service seat path demanded the waiver but the team auto-seat didn't.
   const team = db.prepare(
     `SELECT email, full_name FROM applicants
-     WHERE is_team = 1 AND status = 'approved' AND auto_renew = 1 AND COALESCE(suspended,0) = 0`).all();
+     WHERE is_team = 1 AND status = 'approved' AND auto_renew = 1 AND COALESCE(suspended,0) = 0
+       AND COALESCE(waiver_ok,0) = 1`).all();
   const optedOut = db.prepare('SELECT 1 FROM regular_optout WHERE run_date = ? AND email = ?');
   const insert = db.prepare('INSERT OR IGNORE INTO checkins (run_date,email,name,sort_order) VALUES (?,?,?,?)');
   let { m } = db.prepare('SELECT MIN(sort_order) m FROM checkins WHERE run_date = ?').get(runDate);
@@ -3297,9 +3337,15 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
   const end = rawEnd || DEFAULT_END;
   if (end <= start) return res.redirect('/checkin?rderr=time');
 
-  // Key the override by the default run day NEAREST the chosen date — an override
-  // REPLACES that day's run. Reset (default day + default time) clears any override.
-  const base = nearestRunDefault(new Date(raw + 'T12:00:00'));
+  // Key the override by the base of the CYCLE BEING MOVED — the default day the current
+  // upcoming run is keyed under — NOT the default day nearest the chosen destination. The
+  // date picker only ever edits the current upcoming run (it's pre-filled with it), so
+  // oldRunDate IS the run being moved. Keying off the destination breaks the moment a move
+  // (or re-move) crosses the week-midpoint: it strands the run's own override AND creates a
+  // second one under the adjacent week's key. runBaseFor recovers the true base across far
+  // moves. (Mirrors pickleball's pk_run_base fix — see /pickleball/date.)
+  const oldRunDate = nextRunDate();  // the live upcoming run date BEFORE the change = the run being moved
+  const base = runBaseFor(oldRunDate);
   const timeCustom = start !== DEFAULT_START || end !== DEFAULT_END;
   const dateMoved = raw !== base;
   const storeTime = timeCustom ? start : null;   // NULL cols = "use defaults"
@@ -3318,7 +3364,6 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
     : (curRow && curRow.run_date === raw && (curRow.run_time || null) === storeTime && (curRow.run_end || null) === storeEnd);
   if (same) return res.redirect('/checkin?rdset=1');
 
-  const oldRunDate = nextRunDate();  // the live upcoming run date BEFORE the change
   if (!dateMoved && !timeCustom) {
     db.prepare('DELETE FROM run_overrides WHERE default_date = ?').run(base);   // full reset
   } else {
@@ -3412,6 +3457,20 @@ app.post('/admin/season', requireLogin, (req, res) => {
   const maxD = new Date(); maxD.setFullYear(maxD.getFullYear() + 1);
   if (raw > ymdLocal(maxD)) return res.redirect('/checkin?rderr=seasonrange');
   setSetting('season_start', raw);
+  // Clear any rosters for runs between now and the opener. The season gate makes nextRunDate
+  // jump to the opener, so these future runs become unreachable (no auto-open/ping, off the
+  // check-in page). Left in place, the NEXT rollover (in September) would archive an abandoned
+  // FUTURE roster into `attendance` as a run that never happened — permanent phantom season-board
+  // credits. Only strictly-future runs (run_date > today); a run happening today archives
+  // normally tonight. Past runs are the rollover's job. (ensureWeek's cutoff=today fix stopped
+  // the immediate-jump archive; this stops the delayed one.)
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM checkins WHERE run_date > ? AND run_date < ?').run(today, raw);
+    db.prepare('DELETE FROM regular_optout WHERE run_date > ? AND run_date < ?').run(today, raw);
+    db.prepare('DELETE FROM run_state WHERE run_date > ? AND run_date < ?').run(today, raw);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); console.error(`[season] roster cleanup FAILED: ${e.message}`); throw e; }
   audit(email, actorRole, 'season:set', raw);
   res.redirect('/checkin?rdset=season');
 });
@@ -3611,7 +3670,9 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
     if (a.avatar) safeUnlinkAvatar(a.avatar); // delete their photo file on hard-delete
     db.prepare('DELETE FROM checkins WHERE email = ?').run(a.email);
     if (offeree) createOffer(runDate, offeree, req);
-    db.prepare('DELETE FROM votes WHERE applicant_id = ?').run(id);
+    db.prepare('DELETE FROM votes WHERE applicant_id = ?').run(id);      // votes cast ON them
+    db.prepare('DELETE FROM votes WHERE voter_email = ?').run(a.email);  // and votes they cast — else a
+    // same-email re-registration made team would resurrect years-old approve/reject tallies.
     // hard-delete is the ONLY path that removes attendance history
     db.prepare('DELETE FROM attendance WHERE email = ?').run(a.email);
     db.prepare('DELETE FROM pk_checkins WHERE email = ?').run(a.email);
@@ -3957,6 +4018,14 @@ function pkGate(req, res) {
   if (!pkProgramActive() && !admin) { res.status(404).send('Not found'); return null; } // hidden from everyone but admins
   return { a, admin, canOperate: admin }; // pickleball operator = admin for now (Daniel)
 }
+// Hoisted — pkEnsureWeek runs on every /runs + /pickleball GET, /pickleball/join, and the 60s tick.
+const stmtPkPastDates = db.prepare('SELECT DISTINCT run_date FROM pk_checkins WHERE run_date <= ?');
+const stmtPkArchiveIns = db.prepare('INSERT OR IGNORE INTO pk_attendance (run_date, email, name) VALUES (?,?,?)');
+const stmtPkDelCheckinsByDate = db.prepare('DELETE FROM pk_checkins WHERE run_date = ?');
+const stmtPkDelStateByDate = db.prepare('DELETE FROM pk_run_state WHERE run_date = ?');
+const stmtPkFloorForArchive = db.prepare('SELECT email, name FROM pk_checkins WHERE run_date = ? ORDER BY sort_order ASC, id ASC LIMIT ?');
+const stmtPkSweepState = db.prepare('DELETE FROM pk_run_state WHERE run_date < ?');
+const stmtPkSweepOptout = db.prepare('DELETE FROM pk_optout WHERE run_date < ?');
 // Lazy rollover (mirrors basketball's ensureWeek): once an EXPLICIT pk_run_date passes, archive
 // the floor into pk_attendance, purge past rows, and revert to the default (next basketball date).
 function pkEnsureWeek() {
@@ -3968,24 +4037,22 @@ function pkEnsureWeek() {
   const isPast = rd => rd < today || rd === endedToday;
   // Archive + purge ANY finished pickleball run so the floor is recorded to pk_attendance
   // and stale rows never accumulate.
-  const pastDates = db.prepare('SELECT DISTINCT run_date FROM pk_checkins WHERE run_date <= ?').all(today).map(r => r.run_date).filter(isPast);
-  const ins = db.prepare('INSERT OR IGNORE INTO pk_attendance (run_date, email, name) VALUES (?,?,?)');
-  const del = db.prepare('DELETE FROM pk_checkins WHERE run_date = ?'), delS = db.prepare('DELETE FROM pk_run_state WHERE run_date = ?');
+  const pastDates = stmtPkPastDates.all(today).map(r => r.run_date).filter(isPast);
   for (const rd of pastDates) {
-    const floor = db.prepare('SELECT email, name FROM pk_checkins WHERE run_date = ? ORDER BY sort_order ASC, id ASC LIMIT ?').all(rd, PK_CAP);
-    for (const p of floor) if (!/@guest\.local$/.test(p.email)) ins.run(rd, p.email, p.name);
-    del.run(rd); delS.run(rd);
+    const floor = stmtPkFloorForArchive.all(rd, PK_CAP);
+    for (const p of floor) if (!/@guest\.local$/.test(p.email)) stmtPkArchiveIns.run(rd, p.email, p.name);
+    stmtPkDelCheckinsByDate.run(rd); stmtPkDelStateByDate.run(rd);
   }
   // Sweep stale run_state for past runs that had NO check-ins (a zero-join or cancelled week
   // never appears in pastDates above, so its is_open/cancelled row would leak forever).
-  db.prepare('DELETE FROM pk_run_state WHERE run_date < ?').run(today);
-  db.prepare('DELETE FROM pk_optout WHERE run_date < ?').run(today);   // sit-outs are per-week → clear past ones so renewal resumes
+  stmtPkSweepState.run(today);
+  stmtPkSweepOptout.run(today);   // sit-outs are per-week → clear past ones so renewal resumes
   // Clear a passed explicit override back to the weekly standing day.
   const set = getSetting('pk_run_date');
-  if (set && isPast(set)) db.prepare("DELETE FROM app_settings WHERE key = 'pk_run_date'").run();
+  if (set && isPast(set)) delSetting('pk_run_date');
   // Clear a consumed standing-Tuesday skip once that Tuesday is itself past (see /pickleball/date).
   const base = getSetting('pk_run_base');
-  if (base && base < today) db.prepare("DELETE FROM app_settings WHERE key = 'pk_run_base'").run();
+  if (base && base < today) delSetting('pk_run_base');
 }
 app.get('/pickleball', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
@@ -4187,7 +4254,7 @@ app.post('/pickleball/guest', requireLogin, (req, res) => {
   }
   res.redirect('/pickleball');
 });
-app.post('/pickleball/remove', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(), em = String(req.body.email || ''); pkNotifyPromotion(rd, em); db.prepare('DELETE FROM pk_checkins WHERE run_date = ? AND email = ?').run(rd, em); res.redirect('/pickleball'); });
+app.post('/pickleball/remove', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(), em = String(req.body.email || '').toLowerCase(); pkNotifyPromotion(rd, em); db.prepare('DELETE FROM pk_checkins WHERE run_date = ? AND email = ?').run(rd, em); res.redirect('/pickleball'); });
 app.post('/pickleball/bump', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(); if (pkIsCancelled(rd)) return res.redirect('/pickleball'); const row = db.prepare('SELECT MIN(sort_order) m FROM pk_checkins WHERE run_date = ?').get(rd); db.prepare('UPDATE pk_checkins SET sort_order = ? WHERE run_date = ? AND email = ?').run(((row && row.m) || 0) - 1, rd, String(req.body.email || '')); res.redirect('/pickleball'); });
 app.post('/pickleball/publish', requireAdmin, (req, res) => { db.prepare('UPDATE program SET active = ? WHERE id = 2').run(req.body.on === '0' ? 0 : 1); audit(req.userEmail, 'admin', req.body.on === '0' ? 'pk:hide' : 'pk:publish', ''); res.redirect('/pickleball'); });
 // Post a pickleball announcement — operator only. Stored on the isolated pk_announcements
@@ -4250,5 +4317,6 @@ app.listen(PORT, () => {
   console.log(`Cap: ${CAP} · Email: ${emailConfigured ? 'SMTP configured' : 'DEV MODE (links print here)'}`);
   console.log(`Admin emails: ${process.env.ADMIN_EMAILS || '(none set — set ADMIN_EMAILS!)'}\n`);
   startBackups(); // snapshot the DB now + once a day
-  pruneOldMedia(); setInterval(pruneOldMedia, 24 * 60 * 60 * 1000).unref(); // media retention: 1 year, checked at boot + daily
+  pruneOldMedia(); pruneAuditLog();
+  setInterval(() => { pruneOldMedia(); pruneAuditLog(); }, 24 * 60 * 60 * 1000).unref(); // media (1yr) + audit_log (5000) retention, boot + daily
 });

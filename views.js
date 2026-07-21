@@ -2212,13 +2212,13 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
               window.__ckBusy=false;
               // A redirect shim (e.g. the waiver gate) has no .wrap → swap fails; follow its
               // target so an unwaivered "I'm in" reaches /waiver instead of dead-ending.
-              if(!window.__swapWrap(html)){var m=html.match(/location\.replace\("([^"]+)"\)/);window.location.href=m?m[1]:'/checkin';return;}
+              if(!window.__swapWrap(html)){var m=html.match(/location\.replace\("([^"]+)"\)/);window.location.href=m?m[1]:window.location.pathname;return;}
               window.scrollTo(0,y);
               if(reopenWg&&window.wgOpen)window.wgOpen(); // keep the who's-going sheet open after a remove/bump
               var n=document.querySelector('.count .n');
               if(n){n.classList.remove('pulse-now');void n.offsetWidth;n.classList.add('pulse-now');}
             })
-            .catch(function(){window.__ckBusy=false;window.location.href='/checkin';});
+            .catch(function(){window.__ckBusy=false;window.location.href=window.location.pathname;}); // stay on the current run page (this handler is shared by basketball + pickleball)
         });
       }
 
@@ -2423,7 +2423,7 @@ export function profileCard({ p, stats, canContact = false, isSelf = false }) {
     <div class="pcbtns">${isSelf ? `<a class="btn ghost sm" href="/profile">Edit profile</a>` : `<a class="btn primary sm" href="/messages/${p.id}">Message</a>`}<a class="btn ghost sm" href="/u/${p.id}">Full profile →</a></div>`;
 }
 
-export function profilePage({ p, stats, isSelf = false, canContact = false, runDate = '', hours = '8:30–10:30 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+export function profilePage({ p, stats, isSelf = false, canContact = false, runDate = '', hours = '8:30–10:30 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null, back = '/chat' }) {
   const badges = [
     p.is_host ? '<span class="bdg host">★ Host</span>' : '',
     p.is_team ? '<span class="bdg team">◆ Team</span>' : (p.is_regular ? '<span class="bdg core">★ Core</span>' : ''),
@@ -2446,7 +2446,7 @@ export function profilePage({ p, stats, isSelf = false, canContact = false, runD
   const prow = prowBtns.length ? `<div class="prow">${prowBtns.join('')}</div>` : '';
   return HEAD('Profile — Adv Runs', 'has-tabs') + header('', wdayShort(runDate), ann, hours) + WELCOME_MODAL + `
     <div class="rule"></div>
-    <a class="pback" href="/chat">‹ Back</a>
+    <a class="pback" href="${esc(back)}">‹ Back</a>
     <div class="phead">
       <div class="pav">${avatarInner(p.email, p.full_name)}</div>
       <div class="pname"><b>${esc(p.full_name)}</b><div class="pbadges">${badges}</div></div>
@@ -3268,7 +3268,7 @@ ${composerInitJS()}
           var body=new URLSearchParams(new FormData(form));
           cbody.value=''; autoGrow(); if(window.clearReply)window.clearReply();
           fetch(form.action,{method:'POST',body:body,headers:{'X-Requested-With':'fetch'},credentials:'same-origin'})
-            .then(function(r){ if(r.redirected&&r.url&&r.url.indexOf('err=slow')>=0){window.location.href=r.url;return;} window.__threadRefresh(); })
+            .then(function(r){ if(r.redirected&&r.url&&r.url.indexOf('err=')>=0){window.location.href=r.url;return;} window.__threadRefresh(); }) // any err= (slow/suspended/…) surfaces its notice
             .catch(function(){ window.location.href=location.pathname; });
         }); }
         // Live updates via the shared 10s poll (page=profile detects DM changes) — patches
@@ -3513,7 +3513,7 @@ ${mentionAutocompleteJS()}
           var body=new URLSearchParams(new FormData(form));
           cbody.value=''; autoGrow(); if(window.clearReply)window.clearReply();
           fetch(form.action,{method:'POST',body:body,headers:{'X-Requested-With':'fetch'},credentials:'same-origin'})
-            .then(function(r){ if(r.redirected&&r.url&&r.url.indexOf('err=slow')>=0){window.location.href=r.url;return;} return r.text().then(function(html){ window.__threadRefresh(false,html); }); }) // reuse the POST response — no 2nd fetch
+            .then(function(r){ if(r.redirected&&r.url&&r.url.indexOf('err=')>=0){window.location.href=r.url;return;} return r.text().then(function(html){ window.__threadRefresh(false,html); }); }) // any err= (slow/suspended/…) → show the notice; else reuse the POST response, no 2nd fetch
             .catch(function(){ window.location.href=CHATBASE; });
         }); }
         // Poll-and-patch the feed (P0-1): re-fetch + patch #thread only on change,
