@@ -451,7 +451,9 @@ ${VSTEPS_CSS}
   var ios=/iPhone|iPad|iPod/.test(ua)||(/Macintosh/.test(ua)&&navigator.maxTouchPoints>1);
   var android=/Android/.test(ua);
   var coarse=!(window.matchMedia)||window.matchMedia('(pointer:coarse)').matches;
-  if(!standalone&&coarse&&(ios||android)){document.documentElement.className+=' walled';}
+  // INSTALL WALL TEMPORARILY DISABLED (2026-07-23) — the app is used purely via the link, no forced
+  // Add-to-Home-Screen. To re-enable, restore the walling line below:
+  // if(!standalone&&coarse&&(ios||android)){document.documentElement.className+=' walled';}
   window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__bip=e;});
 }catch(e){}})();</script>`;
 
