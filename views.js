@@ -579,8 +579,6 @@ const roleBadge = (p) => p.host ? '<span class="bdg host">★ Host</span>'
   : p.regular ? '<span class="bdg core">★ Core</span>'
   : p.guest ? '<span class="bdg guest">Guest</span>'
   : '<span class="bdg reg">Regular</span>';
-// One-word role label for row subtitles.
-const roleWord = (p) => p.host ? 'Host' : p.team ? 'Team' : p.regular ? 'Core' : p.guest ? 'Guest' : 'Regular';
 
 // Bottom tab bar — Check-in / Roster / Profile. Shown to every signed-in
 // approved player (admins too) on the player-facing pages. Operator pages keep

@@ -826,29 +826,30 @@ function hydrateGroupMessages(me, msgs) {
   return { reactions, parents, senders, mentionNames };
 }
 
+// Hoisted — the chat re-render path (loadGroupChat) runs on every /chat page fetch, which every
+// open client re-fetches on each fingerprint change (each message × each viewer on a busy night).
+const stmtHasOlderGroup = db.prepare('SELECT 1 FROM group_messages WHERE id < ? LIMIT 1');
+const stmtGroupMsgs = db.prepare('SELECT * FROM ( SELECT * FROM group_messages ORDER BY id DESC LIMIT 200 ) ORDER BY id ASC');
+const stmtGroupMembers = db.prepare(`SELECT id, full_name, email, is_host, is_team, is_regular, avatar
+    FROM applicants WHERE status = 'approved' AND email NOT LIKE '%@guest.local'
+    ORDER BY is_host DESC, is_team DESC, is_regular DESC, full_name COLLATE NOCASE`);
+const stmtGroupPinned = db.prepare('SELECT * FROM group_messages WHERE pinned_at IS NOT NULL ORDER BY pinned_at DESC LIMIT 5');
 // True if at least one group message exists older than `id` (drives the
 // "Load earlier messages" button — shown only when there is more history).
 function hasOlderGroup(id) {
-  return id ? !!db.prepare('SELECT 1 FROM group_messages WHERE id < ? LIMIT 1').get(id) : false;
+  return id ? !!stmtHasOlderGroup.get(id) : false;
 }
 
 function loadGroupChat(me) {
-  const msgs = db.prepare(`
-    SELECT * FROM (
-      SELECT * FROM group_messages ORDER BY id DESC LIMIT 200
-    ) ORDER BY id ASC`).all();
+  const msgs = stmtGroupMsgs.all();
   const maps = hydrateGroupMessages(me, msgs);
   // Member list = the SAME population the "N members" count uses (approved, non-guest).
   // memberCount is derived from this list's length so the header count and the members
   // overlay can never disagree. Sorted host → team → core → regular, then name.
-  const members = db.prepare(`
-    SELECT id, full_name, email, is_host, is_team, is_regular, avatar
-    FROM applicants
-    WHERE status = 'approved' AND email NOT LIKE '%@guest.local'
-    ORDER BY is_host DESC, is_team DESC, is_regular DESC, full_name COLLATE NOCASE`).all();
+  const members = stmtGroupMembers.all();
   // Pinned messages — newest pin first, capped. Hydrate their senders too (a pinned
   // message may be older than the loaded 200, so it needs its own sender lookup).
-  const pinned = db.prepare('SELECT * FROM group_messages WHERE pinned_at IS NOT NULL ORDER BY pinned_at DESC LIMIT 5').all();
+  const pinned = stmtGroupPinned.all();
   const pinnedNames = new Map();
   if (pinned.length) {
     const pe = [...new Set(pinned.map(p => p.from_email))];
@@ -987,19 +988,23 @@ function hydratePkGroupMessages(me, msgs) {
   }
   return { reactions, parents, senders, mentionNames };
 }
-function hasOlderPkGroup(id) {
-  return id ? !!db.prepare('SELECT 1 FROM pk_group_messages WHERE id < ? LIMIT 1').get(id) : false;
-}
-function loadPkGroupChat(me) {
-  const msgs = db.prepare(`SELECT * FROM (SELECT * FROM pk_group_messages ORDER BY id DESC LIMIT 200) ORDER BY id ASC`).all();
-  const maps = hydratePkGroupMessages(me, msgs);
-  // Members = people who JOINED pickleball (program_membership 2), not the whole approved roster.
-  const members = db.prepare(`
-    SELECT a.id, a.full_name, a.email, a.is_host, a.is_team, a.is_regular, a.avatar
+// Hoisted — same hot chat-render path as loadGroupChat, pickleball twin.
+const stmtHasOlderPkGroup = db.prepare('SELECT 1 FROM pk_group_messages WHERE id < ? LIMIT 1');
+const stmtPkGroupMsgs = db.prepare('SELECT * FROM (SELECT * FROM pk_group_messages ORDER BY id DESC LIMIT 200) ORDER BY id ASC');
+const stmtPkGroupMembers = db.prepare(`SELECT a.id, a.full_name, a.email, a.is_host, a.is_team, a.is_regular, a.avatar
     FROM program_membership pm JOIN applicants a ON a.email = pm.email
     WHERE pm.program_id = 2 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local'
-    ORDER BY a.is_host DESC, a.is_team DESC, a.is_regular DESC, a.full_name COLLATE NOCASE`).all();
-  const pinned = db.prepare('SELECT * FROM pk_group_messages WHERE pinned_at IS NOT NULL ORDER BY pinned_at DESC LIMIT 5').all();
+    ORDER BY a.is_host DESC, a.is_team DESC, a.is_regular DESC, a.full_name COLLATE NOCASE`);
+const stmtPkGroupPinned = db.prepare('SELECT * FROM pk_group_messages WHERE pinned_at IS NOT NULL ORDER BY pinned_at DESC LIMIT 5');
+function hasOlderPkGroup(id) {
+  return id ? !!stmtHasOlderPkGroup.get(id) : false;
+}
+function loadPkGroupChat(me) {
+  const msgs = stmtPkGroupMsgs.all();
+  const maps = hydratePkGroupMessages(me, msgs);
+  // Members = people who JOINED pickleball (program_membership 2), not the whole approved roster.
+  const members = stmtPkGroupMembers.all();
+  const pinned = stmtPkGroupPinned.all();
   const pinnedNames = new Map();
   if (pinned.length) {
     const pe = [...new Set(pinned.map(p => p.from_email))];
@@ -1377,10 +1382,19 @@ app.post('/invite/:token', async (req, res) => {
       db.prepare("UPDATE applicants SET status = CASE WHEN status = 'rejected' THEN 'rejected' ELSE 'approved' END WHERE email = ?")
         .run(email);
     }
-  } else {
+  } else if (prefilledMatch) {
+    // Verified owner (admin pre-filled this exact email) — grant the role + waiver they attested.
     db.prepare(`INSERT INTO applicants (full_name,email,phone,experience,waiver_ok,status,is_team,is_regular)
                 VALUES (?,?,?,?,1,'approved',?,?)`)
       .run(full_name, email, phone, 'Pre-approved (invite)', isTeam, isRegular);
+  } else {
+    // Unverified new email (submitter typed an address that doesn't match the invite's prefill) —
+    // approve but grant NO role and NO waiver, matching the existing-row unverified branch above.
+    // A role here would let a role-carrying invite seat a phantom team member (autoJoinTeam) for an
+    // address the submitter never proved they own; an admin can grant the role later via edit.
+    db.prepare(`INSERT INTO applicants (full_name,email,phone,experience,waiver_ok,status,is_team,is_regular)
+                VALUES (?,?,?,?,0,'approved',0,0)`)
+      .run(full_name, email, phone, 'Pre-approved (invite, unverified)');
   }
   db.prepare("UPDATE invites SET used = 1, used_at = datetime('now'), used_email = ? WHERE token = ?")
     .run(email, iv.token);
@@ -2904,6 +2918,10 @@ app.post('/checkin/autorenew', requireLogin, (req, res) => {
   const a = applicantByEmail(req.userEmail);
   if (a && a.is_team) {
     const on = req.body.on === '1';
+    // No waiver, no seat: autoJoinTeam now filters waiver_ok, so turning auto-renew ON without a
+    // waiver would silently never seat them while the hero shows "Sit out" as if they were on the
+    // floor. Route them to sign the one-time waiver first (mirrors /pickleball/autorenew).
+    if (on && !a.waiver_ok) return res.redirect('/waiver?next=/checkin');
     db.prepare('UPDATE applicants SET auto_renew = ? WHERE id = ?').run(on ? 1 : 0, a.id);
     const runDate = nextRunDate();
     if (!on) {
@@ -2925,6 +2943,7 @@ app.post('/checkin/autorenew', requireLogin, (req, res) => {
 // --- admin-only game controls ---
 app.post('/checkin/guest', requireApprover, (req, res) => {
   const runDate = nextRunDate();
+  if (runIsCancelled(runDate)) return res.redirect('/checkin'); // no adding guests onto a cancelled run (mirrors /pickleball/guest)
   const name = (req.body.name || '').trim().slice(0, 60);
   if (name) {
     // Double-tap guard: a native form re-post within seconds must not add a 2nd identical guest.
@@ -3249,10 +3268,19 @@ app.post('/admin/vote', requireApprover, (req, res) => {
 // Admin-only: wipe an applicant's votes and send them back to pending (re-vote).
 app.post('/admin/reset', requireAdmin, (req, res) => {
   const { id } = req.body;
-  const a = db.prepare('SELECT email FROM applicants WHERE id = ?').get(id);
+  const a = db.prepare('SELECT email, is_team FROM applicants WHERE id = ?').get(id);
   if (a) {
     db.prepare('DELETE FROM votes WHERE applicant_id = ?').run(id);
     db.prepare("UPDATE applicants SET status = 'pending' WHERE id = ? AND is_team = 0").run(id);
+    // Back to pending → requirePlayer bounces them, so they can no longer leave check-in and would
+    // freeze their floor spot. Free it (offer onward) like reject/suspend/delete do. Team members
+    // aren't sent to pending (is_team guard above), so leave their spot alone.
+    if (!a.is_team) {
+      const runDate = nextRunDate();
+      const offeree = offereeForFloorLeave(runDate, a.email);
+      db.prepare('DELETE FROM checkins WHERE email = ?').run(a.email);
+      if (offeree) createOffer(runDate, offeree, req);
+    }
     audit(req.userEmail, 'admin', 'reset', a.email);
   }
   res.redirect('/admin');
@@ -3550,6 +3578,12 @@ app.post('/admin/people/invite', requireAdmin, (req, res) => {
   const isTeam = role === 'team' ? 1 : 0;
   const isRegular = role === 'regular' ? 1 : 0;
   const roleLabel = role === 'team' ? ' as Team' : role === 'regular' ? ' as Core' : ' as approved';
+
+  // The one remaining entry point that didn't validate the address — a malformed/list email
+  // here would land straight in `applicants` and become a nodemailer bcc entry (the exact
+  // shape EMAIL_RE guards elsewhere). Validate before create-or-invite.
+  if (email && !isValidEmail(email))
+    return res.redirect('/admin/people?msg=' + encodeURIComponent('That email did not look valid — double-check it and try again.'));
 
   if (email) {
     const existing = applicantByEmail(email);
@@ -4099,7 +4133,23 @@ app.post('/pickleball/season', requireLogin, (req, res) => {
   if (raw < today) return res.redirect('/pickleball?pkerr=seasonpast');
   const maxD = new Date(); maxD.setFullYear(maxD.getFullYear() + 1);
   if (raw > ymdLocal(maxD)) return res.redirect('/pickleball?pkerr=seasonrange');
-  setSetting('pk_season_start', raw); audit(req.userEmail, 'admin', 'pk:season-set', raw);
+  setSetting('pk_season_start', raw);
+  // Clear rosters/state for pk runs between now and the opener — the pk twin of /admin/season's
+  // cleanup. pk check-in auto-reopens + auto-seats renewers within a minute of each run ending,
+  // so next Tuesday's roster is almost always populated; left in place, the next rollover archives
+  // that stranded roster into pk_attendance as phantom season-board credits. Only future runs.
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM pk_checkins WHERE run_date > ? AND run_date < ?').run(today, raw);
+    db.prepare('DELETE FROM pk_optout WHERE run_date > ? AND run_date < ?').run(today, raw);
+    db.prepare('DELETE FROM pk_run_state WHERE run_date > ? AND run_date < ?').run(today, raw);
+    // A stale explicit pk_run_date/base pointing into the gap would still render as "next run"
+    // (pkRunDate's override branch is NOT season-gated) — clear it when it falls before the opener.
+    const setRd = getSetting('pk_run_date'); if (setRd && setRd < raw) delSetting('pk_run_date');
+    const setBase = getSetting('pk_run_base'); if (setBase && setBase < raw) delSetting('pk_run_base');
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); console.error(`[pk-season] roster cleanup FAILED: ${e.message}`); throw e; }
+  audit(req.userEmail, 'admin', 'pk:season-set', raw);
   res.redirect('/pickleball?pkset=season');
 });
 // Join the pickleball RUN (membership) — the opt-in from the join prompt. Distinct from the
@@ -4255,7 +4305,7 @@ app.post('/pickleball/guest', requireLogin, (req, res) => {
   res.redirect('/pickleball');
 });
 app.post('/pickleball/remove', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(), em = String(req.body.email || '').toLowerCase(); pkNotifyPromotion(rd, em); db.prepare('DELETE FROM pk_checkins WHERE run_date = ? AND email = ?').run(rd, em); res.redirect('/pickleball'); });
-app.post('/pickleball/bump', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(); if (pkIsCancelled(rd)) return res.redirect('/pickleball'); const row = db.prepare('SELECT MIN(sort_order) m FROM pk_checkins WHERE run_date = ?').get(rd); db.prepare('UPDATE pk_checkins SET sort_order = ? WHERE run_date = ? AND email = ?').run(((row && row.m) || 0) - 1, rd, String(req.body.email || '')); res.redirect('/pickleball'); });
+app.post('/pickleball/bump', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(); if (pkIsCancelled(rd)) return res.redirect('/pickleball'); const row = db.prepare('SELECT MIN(sort_order) m FROM pk_checkins WHERE run_date = ?').get(rd); db.prepare('UPDATE pk_checkins SET sort_order = ? WHERE run_date = ? AND email = ?').run(((row && row.m) || 0) - 1, rd, String(req.body.email || '').toLowerCase()); res.redirect('/pickleball'); });
 app.post('/pickleball/publish', requireAdmin, (req, res) => { db.prepare('UPDATE program SET active = ? WHERE id = 2').run(req.body.on === '0' ? 0 : 1); audit(req.userEmail, 'admin', req.body.on === '0' ? 'pk:hide' : 'pk:publish', ''); res.redirect('/pickleball'); });
 // Post a pickleball announcement — operator only. Stored on the isolated pk_announcements
 // table, pushed to pickleball members' phones (and emailed if SMTP is set), separate from
