@@ -3851,7 +3851,7 @@ app.get('/season', requireLogin, (req, res) => {
     LEFT JOIN applicants ap ON ap.email = at.email
     WHERE at.run_date >= strftime('%Y-01-01','now') AND at.email NOT LIKE '%@guest.local'
     GROUP BY at.email ORDER BY n DESC, at.email ASC`).all();
-  const named = rows.map((r, i) => ({ rank: i + 1, name: r.full_name || r.email, n: r.n, me: r.email.toLowerCase() === req.userEmail.toLowerCase() }));
+  const named = rows.map((r, i) => ({ rank: i + 1, name: r.full_name || 'Member', n: r.n, me: r.email.toLowerCase() === req.userEmail.toLowerCase() }));
   res.send(seasonPage({ rows: named, email: a.email, dmUnread: unreadCount(a.email), groupUnread: groupUnread(a.email), groupMention: groupMentionUnread(a.email, a.id), ann: annPanel(a.email) }));
 });
 
@@ -4186,7 +4186,7 @@ app.get('/pickleball/season', requireLogin, (req, res) => {
     LEFT JOIN applicants ap ON ap.email = at.email
     WHERE at.run_date >= strftime('%Y-01-01','now') AND at.email NOT LIKE '%@guest.local'
     GROUP BY at.email ORDER BY n DESC, at.email ASC`).all();
-  const named = rows.map((r, i) => ({ rank: i + 1, name: r.full_name || r.email, n: r.n, me: r.email.toLowerCase() === me.toLowerCase() }));
+  const named = rows.map((r, i) => ({ rank: i + 1, name: r.full_name || 'Member', n: r.n, me: r.email.toLowerCase() === me.toLowerCase() }));
   const a = applicantByEmail(me);
   res.send(seasonPage({
     rows: named, email: me, program: 2,
