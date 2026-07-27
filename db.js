@@ -3,6 +3,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { migrateToPhase2 } from './db-migrate.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'bridge.db');
@@ -449,91 +450,20 @@ for (const t of ['checkins', 'run_state', 'run_overrides', 'regular_optout', 'at
   }
 }
 
-// --- Pickleball run (2026-07, PHASE 2 — ISOLATED tables, zero basketball impact) ---
-// Pickleball is a SEPARATE run on its own tables (pk_*), so nothing here touches basketball's
-// data or code paths. Mirrors the shape of the basketball run tables. Hidden until program 2
-// is flipped active; while hidden only admins can reach the routes.
-db.exec(`
-  CREATE TABLE IF NOT EXISTS pk_checkins (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_date TEXT NOT NULL,
-    email    TEXT NOT NULL,
-    name     TEXT NOT NULL,
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(run_date, email)
-  );
-  CREATE TABLE IF NOT EXISTS pk_optout (
-    run_date TEXT NOT NULL,
-    email    TEXT NOT NULL,
-    PRIMARY KEY (run_date, email)   -- an auto-renew member who sat THIS week out (mirrors regular_optout)
-  );
-  CREATE TABLE IF NOT EXISTS pk_run_state (
-    run_date TEXT PRIMARY KEY,
-    is_open  INTEGER NOT NULL DEFAULT 0,
-    cancelled INTEGER NOT NULL DEFAULT 0
-  );
-  CREATE TABLE IF NOT EXISTS pk_attendance (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_date TEXT NOT NULL, email TEXT NOT NULL, name TEXT NOT NULL,
-    recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(run_date, email)
-  );
-  CREATE INDEX IF NOT EXISTS idx_pk_checkins_run ON pk_checkins(run_date);
-`);
+// --- Multi-program platform (2026-07, PHASE 2 — merge the pk_* clones into the generic
+// program_id-scoped tables). Pickleball's rows now live in checkins/run_state/attendance/
+// regular_optout/group_*/announcements as program_id=2. The old pk_* clone tables are no
+// longer created here; on an existing db the one-time migration below renames them to
+// zz_legacy_pk_* (rows kept for rollback) after copying their data across. See db-migrate.js.
 
-// --- Pickleball chat (2026-07, ISOLATED) — its own run chat on pk_group_* tables, a full
-// mirror of the basketball group_* chat (same columns incl. mentions/pins/voice/video/image)
-// so the check-in view + helpers clone cleanly. Nothing here touches basketball's chat data.
-// New tables → the whole shape is declared up front (no per-column migration guards needed).
-db.exec(`
-  CREATE TABLE IF NOT EXISTS pk_group_messages (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    from_email TEXT NOT NULL,
-    body       TEXT NOT NULL DEFAULT '',
-    reply_to   INTEGER,
-    image      TEXT,
-    mentions   TEXT,
-    pinned_at  TEXT,
-    pinned_by  TEXT,
-    audio      TEXT,
-    audio_dur  INTEGER,
-    video      TEXT,
-    video_dur  INTEGER,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-  CREATE INDEX IF NOT EXISTS idx_pk_group_messages_from ON pk_group_messages(from_email, created_at);
-  CREATE TABLE IF NOT EXISTS pk_group_reactions (
-    group_message_id INTEGER NOT NULL,
-    from_email       TEXT NOT NULL,
-    emoji            TEXT NOT NULL,
-    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (group_message_id, from_email),
-    FOREIGN KEY (group_message_id) REFERENCES pk_group_messages(id) ON DELETE CASCADE
-  );
-  CREATE INDEX IF NOT EXISTS idx_pk_group_reactions_msg ON pk_group_reactions(group_message_id);
-  CREATE TABLE IF NOT EXISTS pk_group_reads (
-    email        TEXT PRIMARY KEY,
-    last_read_at TEXT NOT NULL DEFAULT (datetime('now')),
-    last_read_id INTEGER NOT NULL DEFAULT 0
-  );
-  CREATE TABLE IF NOT EXISTS pk_announcements (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    body       TEXT NOT NULL,
-    author     TEXT NOT NULL DEFAULT '',
-    archived   INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-`);
-// `archived` (retract) — additive + guarded for an existing pk_announcements table.
-const pkaCols = db.prepare('PRAGMA table_info(pk_announcements)').all().map(c => c.name);
-if (pkaCols.length && !pkaCols.includes('archived')) db.exec('ALTER TABLE pk_announcements ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
-// pk_checkins.confirmed_at — the "I'm coming" confirmation timestamp (NULL = unconfirmed).
-const pkcCols = db.prepare('PRAGMA table_info(pk_checkins)').all().map(c => c.name);
-if (pkcCols.length && !pkcCols.includes('confirmed_at')) db.exec('ALTER TABLE pk_checkins ADD COLUMN confirmed_at TEXT');
-// program_membership.auto_renew — a pickleball member's self-service weekly auto-add flag.
+// program_membership.auto_renew — a member's self-service weekly auto-add flag (generic table).
 const pmCols = db.prepare('PRAGMA table_info(program_membership)').all().map(c => c.name);
 if (pmCols.length && !pmCols.includes('auto_renew')) db.exec('ALTER TABLE program_membership ADD COLUMN auto_renew INTEGER NOT NULL DEFAULT 0');
+
+// One-time, versioned, all-or-nothing schema migration. Runs here — after every CREATE/ALTER
+// (so the generic tables + their program_id columns exist) and before the app serves a request.
+// A no-op once PRAGMA user_version >= 2; on failure it rolls back and the old db is untouched.
+migrateToPhase2(db);
 
 // Prune stale magic-link tokens on startup. A token is dead once it's been used
 // OR has expired — keeping them forever just grows the table unbounded (a fresh
@@ -574,7 +504,7 @@ function transact(fn) {
 // keeps their own: drop whatever the target address left behind, then carry. Internal constants
 // — never user input — so interpolating them into SQL is safe.
 const EMAIL_KEYED_TABLES = ['announcement_reads', 'announcement_dismissals', 'regular_optout',
-  'pk_optout', 'group_reads', 'pk_group_reads', 'program_membership'];
+  'group_reads', 'program_membership'];
 
 // Carry every per-user row from oldEmail to newEmail. Assumes the CALLER already opened a
 // transaction, so the `applicants` row update commits atomically with this cascade — a
@@ -582,10 +512,10 @@ const EMAIL_KEYED_TABLES = ['announcement_reads', 'announcement_dismissals', 're
 function rekeyEmailTx(oldEmail, newEmail) {
   if (!oldEmail || !newEmail || oldEmail === newEmail) return;
   {
+    // Program-generic now: one UPDATE per table covers ALL programs (the pk_* clones are gone).
+    // This cascade is program-count-invariant — adding a program adds ZERO lines here.
     db.prepare('UPDATE checkins              SET email=?       WHERE email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE attendance            SET email=?       WHERE email=?').run(newEmail, oldEmail);
-    db.prepare('UPDATE pk_checkins           SET email=?       WHERE email=?').run(newEmail, oldEmail);
-    db.prepare('UPDATE pk_attendance         SET email=?       WHERE email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE votes                 SET voter_email=? WHERE voter_email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE messages              SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE messages              SET to_email=?    WHERE to_email=?').run(newEmail, oldEmail);
@@ -593,9 +523,6 @@ function rekeyEmailTx(oldEmail, newEmail) {
     db.prepare('UPDATE group_messages        SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE group_messages        SET pinned_by=?   WHERE pinned_by=?').run(newEmail, oldEmail);
     db.prepare('UPDATE group_reactions       SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
-    db.prepare('UPDATE pk_group_messages     SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
-    db.prepare('UPDATE pk_group_messages     SET pinned_by=?   WHERE pinned_by=?').run(newEmail, oldEmail);
-    db.prepare('UPDATE pk_group_reactions    SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE push_subscriptions    SET email=?       WHERE email=?').run(newEmail, oldEmail);
     // Email-keyed per-user state (read markers, sit-outs, per-program membership + auto-renew).
     // Target-address leftovers lose; the migrating person's own state is carried over them.

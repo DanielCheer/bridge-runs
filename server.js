@@ -109,14 +109,14 @@ function clientIp(req) {
 // the statement is prepared once at module scope rather than per call.
 const stmtLatestAnnouncement = db.prepare(`SELECT a.*, COALESCE(ap.full_name, a.author) AS authorName
   FROM announcements a LEFT JOIN applicants ap ON ap.email = a.author
-  WHERE a.archived = 0 ORDER BY a.id DESC LIMIT 1`); // authorName resolves the poster's email → name
+  WHERE a.archived = 0 AND a.program_id = 1 ORDER BY a.id DESC LIMIT 1`); // authorName resolves the poster's email → name
 function latestAnnouncement() {
   // the live one players see — archived posts are history only
   return stmtLatestAnnouncement.get() || null;
 }
 function announcementHistory(limit = 40) {
   // newest first; includes the live one plus everything archived
-  return db.prepare('SELECT * FROM announcements ORDER BY id DESC LIMIT ?').all(limit);
+  return db.prepare('SELECT * FROM announcements WHERE program_id = 1 ORDER BY id DESC LIMIT ?').all(limit);
 }
 // Broadcast audiences. approvedEmails() = every real approved player (used for PUSH,
 // which is opt-in per device via a subscription row). announcementRecipients() is the
@@ -206,7 +206,7 @@ const stmtAnnPanel = db.prepare(`
            COALESCE(ap.full_name, a.author) AS authorName
     FROM announcements a
     LEFT JOIN applicants ap ON ap.email = a.author
-    WHERE a.id NOT IN (SELECT announcement_id FROM announcement_dismissals WHERE email = ?)
+    WHERE a.program_id = 1 AND a.id NOT IN (SELECT announcement_id FROM announcement_dismissals WHERE email = ?)
     ORDER BY a.id DESC LIMIT ?`); // hoisted — runs on every authed page render (node:sqlite has no stmt cache)
 function announcementsForPanel(email, limit = 20) {
   return stmtAnnPanel.all(String(email || '').toLowerCase(), limit);
@@ -218,7 +218,7 @@ const stmtAnnLastSeen = db.prepare('SELECT last_seen_id FROM announcement_reads 
 // announcement counts.)
 const stmtAnnUnreadCount = db.prepare(`
   SELECT COUNT(*) n FROM announcements a
-  WHERE a.id > ?
+  WHERE a.program_id = 1 AND a.id > ?
     AND a.id NOT IN (SELECT announcement_id FROM announcement_dismissals WHERE email = ?)`);
 function announcementUnread(email) {
   if (!email) return false;
@@ -230,9 +230,9 @@ function announcementUnread(email) {
 // Upsert the viewer's last-seen id to the current MAX — clears their unread dot.
 const stmtMarkAnnSeen = db.prepare(`
   INSERT INTO announcement_reads (email, last_seen_id, updated_at)
-  VALUES (?, (SELECT COALESCE(MAX(id),0) FROM announcements), datetime('now'))
+  VALUES (?, (SELECT COALESCE(MAX(id),0) FROM announcements WHERE program_id = 1), datetime('now'))
   ON CONFLICT(email) DO UPDATE SET
-    last_seen_id = (SELECT COALESCE(MAX(id),0) FROM announcements),
+    last_seen_id = (SELECT COALESCE(MAX(id),0) FROM announcements WHERE program_id = 1),
     updated_at = datetime('now')`);
 function markAnnouncementsSeen(email) {
   if (email) stmtMarkAnnSeen.run(email.toLowerCase());
@@ -272,7 +272,7 @@ function recomputeStatus(id) {
       // the offeree BEFORE the delete) instead of silently auto-promoting the waitlist.
       const runDate = nextRunDate();
       const offeree = offereeForFloorLeave(runDate, app.email);
-      db.prepare('DELETE FROM checkins WHERE email = ?').run(app.email);
+      db.prepare('DELETE FROM checkins WHERE email = ? AND program_id = 1').run(app.email); // basketball floor only; dropFromPickleball handles pk
       if (offeree) createOffer(runDate, offeree, null);
       dropFromPickleball(app.email);   // a rejected player leaves BOTH programs' floors
     }
@@ -692,10 +692,10 @@ function pruneOldMedia() {
     let n = 0;
     const g = db.prepare("SELECT id, image, audio, video FROM group_messages WHERE created_at < datetime('now','-1 year') AND (audio IS NOT NULL OR video IS NOT NULL OR image LIKE '/chat-media/%')").all();
     const gclr = db.prepare("UPDATE group_messages SET audio = NULL, video = NULL, image = CASE WHEN image LIKE '/chat-media/%' THEN NULL ELSE image END WHERE id = ?");
+    // group_messages now holds every program's room (program_id), so this one sweep covers
+    // pickleball too — the old pk_group_messages twin is gone (Phase 2 merge). Age-based media
+    // retention is program-agnostic, so no program_id filter is needed or wanted here.
     for (const r of g) { safeUnlinkChatImage(r.image); safeUnlinkChatImage(r.audio); safeUnlinkChatImage(r.video); gclr.run(r.id); n++; }
-    const pg = db.prepare("SELECT id, image, audio, video FROM pk_group_messages WHERE created_at < datetime('now','-1 year') AND (audio IS NOT NULL OR video IS NOT NULL OR image LIKE '/chat-media/%')").all();
-    const pgclr = db.prepare("UPDATE pk_group_messages SET audio = NULL, video = NULL, image = CASE WHEN image LIKE '/chat-media/%' THEN NULL ELSE image END WHERE id = ?");
-    for (const r of pg) { safeUnlinkChatImage(r.image); safeUnlinkChatImage(r.audio); safeUnlinkChatImage(r.video); pgclr.run(r.id); n++; }
     const d = db.prepare("SELECT id, image FROM messages WHERE created_at < datetime('now','-1 year') AND image LIKE '/chat-media/%'").all();
     const dclr = db.prepare('UPDATE messages SET image = NULL WHERE id = ?');
     for (const r of d) { safeUnlinkChatImage(r.image); dclr.run(r.id); n++; }
@@ -739,9 +739,9 @@ refreshAvatarMap(); // prime at boot so already-set photos render on the first r
 // Friday; loadRun() archives into it right before its weekly checkins purge.
 function runStartEpoch(runDate) { return new Date(runDate + 'T' + runTimesFor(runDate).start + ':00').getTime(); } // configured start, server-local (Eastern)
 // Hoisted — attendanceStats runs on every profile page/card render (node:sqlite has no stmt cache).
-const stmtAttTotal = db.prepare('SELECT COUNT(*) n FROM attendance WHERE email = ?');
-const stmtAttSeason = db.prepare("SELECT COUNT(*) n FROM attendance WHERE email = ? AND run_date >= strftime('%Y-01-01','now')");
-const stmtAttDates = db.prepare('SELECT run_date FROM attendance WHERE email = ? ORDER BY run_date ASC');
+const stmtAttTotal = db.prepare('SELECT COUNT(*) n FROM attendance WHERE email = ? AND program_id = 1');
+const stmtAttSeason = db.prepare("SELECT COUNT(*) n FROM attendance WHERE email = ? AND program_id = 1 AND run_date >= strftime('%Y-01-01','now')");
+const stmtAttDates = db.prepare('SELECT run_date FROM attendance WHERE email = ? AND program_id = 1 ORDER BY run_date ASC');
 function attendanceStats(email) {
   const total = stmtAttTotal.get(email).n;
   const season = stmtAttSeason.get(email).n;
@@ -772,7 +772,7 @@ function unreadCount(email) { return email ? stmtUnread.get(email).n : 0; }
 // sorts after ''. One COUNT per page load, served by idx_group_messages_from.
 const stmtGroupUnread = db.prepare(`
   SELECT COUNT(*) n FROM group_messages
-  WHERE id > COALESCE((SELECT last_read_id FROM group_reads WHERE email = ?), 0)
+  WHERE program_id = 1 AND id > COALESCE((SELECT last_read_id FROM group_reads WHERE email = ? AND program_id = 1), 0)
     AND from_email != ?`);
 function groupUnread(email) { return email ? stmtGroupUnread.get(email, email).n : 0; }
 
@@ -828,12 +828,12 @@ function hydrateGroupMessages(me, msgs) {
 
 // Hoisted — the chat re-render path (loadGroupChat) runs on every /chat page fetch, which every
 // open client re-fetches on each fingerprint change (each message × each viewer on a busy night).
-const stmtHasOlderGroup = db.prepare('SELECT 1 FROM group_messages WHERE id < ? LIMIT 1');
-const stmtGroupMsgs = db.prepare('SELECT * FROM ( SELECT * FROM group_messages ORDER BY id DESC LIMIT 200 ) ORDER BY id ASC');
+const stmtHasOlderGroup = db.prepare('SELECT 1 FROM group_messages WHERE id < ? AND program_id = 1 LIMIT 1');
+const stmtGroupMsgs = db.prepare('SELECT * FROM ( SELECT * FROM group_messages WHERE program_id = 1 ORDER BY id DESC LIMIT 200 ) ORDER BY id ASC');
 const stmtGroupMembers = db.prepare(`SELECT id, full_name, email, is_host, is_team, is_regular, avatar
     FROM applicants WHERE status = 'approved' AND email NOT LIKE '%@guest.local'
     ORDER BY is_host DESC, is_team DESC, is_regular DESC, full_name COLLATE NOCASE`);
-const stmtGroupPinned = db.prepare('SELECT * FROM group_messages WHERE pinned_at IS NOT NULL ORDER BY pinned_at DESC LIMIT 5');
+const stmtGroupPinned = db.prepare('SELECT * FROM group_messages WHERE pinned_at IS NOT NULL AND program_id = 1 ORDER BY pinned_at DESC LIMIT 5');
 // True if at least one group message exists older than `id` (drives the
 // "Load earlier messages" button — shown only when there is more history).
 function hasOlderGroup(id) {
@@ -866,7 +866,7 @@ function loadGroupChat(me) {
 function loadGroupChatOlder(me, beforeId) {
   const msgs = db.prepare(`
     SELECT * FROM (
-      SELECT * FROM group_messages WHERE id < ? ORDER BY id DESC LIMIT 200
+      SELECT * FROM group_messages WHERE id < ? AND program_id = 1 ORDER BY id DESC LIMIT 200
     ) ORDER BY id ASC`).all(beforeId);
   const maps = hydrateGroupMessages(me, msgs);
   return { msgs, ...maps, hasOlder: msgs.length ? hasOlderGroup(msgs[0].id) : false };
@@ -921,7 +921,7 @@ function notifyDM(sender, toEmail, preview) {
 // Reuses the group_reads high-water mark that groupUnread already scopes against.
 const stmtGroupMentions = db.prepare(`
     SELECT mentions FROM group_messages
-    WHERE id > COALESCE((SELECT last_read_id FROM group_reads WHERE email = ?), 0)
+    WHERE program_id = 1 AND id > COALESCE((SELECT last_read_id FROM group_reads WHERE email = ? AND program_id = 1), 0)
       AND from_email != ? AND mentions IS NOT NULL AND mentions != ''`); // hoisted — runs on every /poll tick; PK range, not a scan
 function groupMentionUnread(email, applicantId) {
   if (!email || !applicantId) return 0;
@@ -937,9 +937,9 @@ function applicantIdOf(email) {
   return a ? a.id : 0;
 }
 // Bump this viewer's Run Chat read high-water mark to now (clears their group-unread).
-const stmtMarkGroupRead = db.prepare(`INSERT INTO group_reads (email, last_read_id, last_read_at)
-              VALUES (?, (SELECT COALESCE(MAX(id),0) FROM group_messages), datetime('now'))
-              ON CONFLICT(email) DO UPDATE SET last_read_id = excluded.last_read_id, last_read_at = excluded.last_read_at`);
+const stmtMarkGroupRead = db.prepare(`INSERT INTO group_reads (email, last_read_id, last_read_at, program_id)
+              VALUES (?, (SELECT COALESCE(MAX(id),0) FROM group_messages WHERE program_id = 1), datetime('now'), 1)
+              ON CONFLICT(email, program_id) DO UPDATE SET last_read_id = excluded.last_read_id, last_read_at = excluded.last_read_at`);
 function markGroupRead(me) {
   stmtMarkGroupRead.run(me);
 }
@@ -949,8 +949,8 @@ function markGroupRead(me) {
 // SAME approved-non-guest roster (pickleball is open-join). Kept a faithful mirror so the
 // chat view + routes clone cleanly; push notifications point at /pickleball/chat.
 const stmtPkGroupUnread = db.prepare(`
-  SELECT COUNT(*) n FROM pk_group_messages
-  WHERE id > COALESCE((SELECT last_read_id FROM pk_group_reads WHERE email = ?), 0)
+  SELECT COUNT(*) n FROM group_messages
+  WHERE program_id = 2 AND id > COALESCE((SELECT last_read_id FROM group_reads WHERE email = ? AND program_id = 2), 0)
     AND from_email != ?`);
 function pkGroupUnread(email) { return email ? stmtPkGroupUnread.get(email, email).n : 0; }
 
@@ -962,7 +962,7 @@ function hydratePkGroupMessages(me, msgs) {
     for (const r of db.prepare(`
       SELECT group_message_id AS mid, emoji, COUNT(*) AS cnt,
              SUM(CASE WHEN from_email = ? THEN 1 ELSE 0 END) AS mine
-      FROM pk_group_reactions WHERE group_message_id IN (${ph})
+      FROM group_reactions WHERE group_message_id IN (${ph})
       GROUP BY group_message_id, emoji ORDER BY group_message_id, emoji`).all(me, ...ids)) {
       if (!reactions.has(r.mid)) reactions.set(r.mid, []);
       reactions.get(r.mid).push({ emoji: r.emoji, count: r.cnt, mine: r.mine > 0 });
@@ -970,7 +970,7 @@ function hydratePkGroupMessages(me, msgs) {
     const replyIds = [...new Set(msgs.map(m => m.reply_to).filter(Boolean))];
     if (replyIds.length) {
       const ph2 = replyIds.map(() => '?').join(',');
-      for (const pr of db.prepare(`SELECT id, from_email, body, image, audio, video FROM pk_group_messages WHERE id IN (${ph2})`).all(...replyIds))
+      for (const pr of db.prepare(`SELECT id, from_email, body, image, audio, video FROM group_messages WHERE id IN (${ph2})`).all(...replyIds))
         parents.set(pr.id, pr);
     }
     const emails = [...new Set([...msgs.map(m => m.from_email), ...[...parents.values()].map(p => p.from_email)])];
@@ -989,13 +989,13 @@ function hydratePkGroupMessages(me, msgs) {
   return { reactions, parents, senders, mentionNames };
 }
 // Hoisted — same hot chat-render path as loadGroupChat, pickleball twin.
-const stmtHasOlderPkGroup = db.prepare('SELECT 1 FROM pk_group_messages WHERE id < ? LIMIT 1');
-const stmtPkGroupMsgs = db.prepare('SELECT * FROM (SELECT * FROM pk_group_messages ORDER BY id DESC LIMIT 200) ORDER BY id ASC');
+const stmtHasOlderPkGroup = db.prepare('SELECT 1 FROM group_messages WHERE id < ? AND program_id = 2 LIMIT 1');
+const stmtPkGroupMsgs = db.prepare('SELECT * FROM (SELECT * FROM group_messages WHERE program_id = 2 ORDER BY id DESC LIMIT 200) ORDER BY id ASC');
 const stmtPkGroupMembers = db.prepare(`SELECT a.id, a.full_name, a.email, a.is_host, a.is_team, a.is_regular, a.avatar
     FROM program_membership pm JOIN applicants a ON a.email = pm.email
     WHERE pm.program_id = 2 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local'
     ORDER BY a.is_host DESC, a.is_team DESC, a.is_regular DESC, a.full_name COLLATE NOCASE`);
-const stmtPkGroupPinned = db.prepare('SELECT * FROM pk_group_messages WHERE pinned_at IS NOT NULL ORDER BY pinned_at DESC LIMIT 5');
+const stmtPkGroupPinned = db.prepare('SELECT * FROM group_messages WHERE pinned_at IS NOT NULL AND program_id = 2 ORDER BY pinned_at DESC LIMIT 5');
 function hasOlderPkGroup(id) {
   return id ? !!stmtHasOlderPkGroup.get(id) : false;
 }
@@ -1015,7 +1015,7 @@ function loadPkGroupChat(me) {
            hasOlder: msgs.length ? hasOlderPkGroup(msgs[0].id) : false };
 }
 function loadPkGroupChatOlder(me, beforeId) {
-  const msgs = db.prepare(`SELECT * FROM (SELECT * FROM pk_group_messages WHERE id < ? ORDER BY id DESC LIMIT 200) ORDER BY id ASC`).all(beforeId);
+  const msgs = db.prepare(`SELECT * FROM (SELECT * FROM group_messages WHERE id < ? AND program_id = 2 ORDER BY id DESC LIMIT 200) ORDER BY id ASC`).all(beforeId);
   const maps = hydratePkGroupMessages(me, msgs);
   return { msgs, ...maps, hasOlder: msgs.length ? hasOlderPkGroup(msgs[0].id) : false };
 }
@@ -1033,8 +1033,8 @@ function notifyPkMentions(fromEmail, body, mentions) {
   setImmediate(() => sendPush(emails, { title: `${name} mentioned you`, body: (body || '').slice(0, 140), url: '/pickleball/chat', tag: 'pkmention' }));
 }
 const stmtPkGroupMentions = db.prepare(`
-    SELECT mentions FROM pk_group_messages
-    WHERE id > COALESCE((SELECT last_read_id FROM pk_group_reads WHERE email = ?), 0)
+    SELECT mentions FROM group_messages
+    WHERE program_id = 2 AND id > COALESCE((SELECT last_read_id FROM group_reads WHERE email = ? AND program_id = 2), 0)
       AND from_email != ? AND mentions IS NOT NULL AND mentions != ''`);
 function pkGroupMentionUnread(email, applicantId) {
   if (!email || !applicantId) return 0;
@@ -1044,9 +1044,9 @@ function pkGroupMentionUnread(email, applicantId) {
   for (const r of rows) if (String(r.mentions).split(',').includes(idStr)) n++;
   return n;
 }
-const stmtMarkPkGroupRead = db.prepare(`INSERT INTO pk_group_reads (email, last_read_id, last_read_at)
-              VALUES (?, (SELECT COALESCE(MAX(id),0) FROM pk_group_messages), datetime('now'))
-              ON CONFLICT(email) DO UPDATE SET last_read_id = excluded.last_read_id, last_read_at = excluded.last_read_at`);
+const stmtMarkPkGroupRead = db.prepare(`INSERT INTO group_reads (email, last_read_id, last_read_at, program_id)
+              VALUES (?, (SELECT COALESCE(MAX(id),0) FROM group_messages WHERE program_id = 2), datetime('now'), 2)
+              ON CONFLICT(email, program_id) DO UPDATE SET last_read_id = excluded.last_read_id, last_read_at = excluded.last_read_at`);
 function markPkGroupRead(me) { stmtMarkPkGroupRead.run(me); }
 // Chat gate = page gate + pickleball MEMBERSHIP. You must have opened the pickleball run
 // (which joins you) to access its chat — being an approved basketball player isn't enough.
@@ -1450,9 +1450,9 @@ app.post('/announce', requireApprover, (req, res) => {
   // Double-submit guard: a fast double-tap (the compose form isn't router-intercepted) would
   // otherwise insert two rows AND fire push + email twice (a real Gmail-quota hit). Skip a
   // repeat of the same body by the same author within 10s.
-  const dup = body && db.prepare("SELECT 1 FROM announcements WHERE body = ? AND author = ? AND at >= datetime('now','-10 seconds') LIMIT 1").get(body, req.userEmail);
+  const dup = body && db.prepare("SELECT 1 FROM announcements WHERE program_id = 1 AND body = ? AND author = ? AND at >= datetime('now','-10 seconds') LIMIT 1").get(body, req.userEmail);
   if (body && !dup) {
-    db.prepare("UPDATE announcements SET archived = 1, archived_at = datetime('now') WHERE archived = 0").run();
+    db.prepare("UPDATE announcements SET archived = 1, archived_at = datetime('now') WHERE archived = 0 AND program_id = 1").run();
     db.prepare('INSERT INTO announcements (body,author) VALUES (?,?)').run(body, req.userEmail);
     audit(req.userEmail, req.actorRole, 'announce:post', body.slice(0, 60));
 
@@ -1574,26 +1574,26 @@ app.post('/waiver', requireLogin, (req, res) => {
 });
 
 // ---------- CHECK-IN ----------
-const stmtRunIsOpen = db.prepare('SELECT is_open FROM run_state WHERE run_date = ?');
+const stmtRunIsOpen = db.prepare('SELECT is_open FROM run_state WHERE run_date = ? AND program_id = 1');
 function runIsOpen(runDate) {
   const row = stmtRunIsOpen.get(runDate); // hot path (every /checkin + /poll)
   return !!(row && row.is_open); // no row = never opened = closed
 }
 function setRunOpen(runDate, open) {
-  db.prepare(`INSERT INTO run_state (run_date, is_open) VALUES (?, ?)
-              ON CONFLICT(run_date) DO UPDATE SET is_open = excluded.is_open`)
+  db.prepare(`INSERT INTO run_state (run_date, is_open, program_id) VALUES (?, ?, 1)
+              ON CONFLICT(run_date, program_id) DO UPDATE SET is_open = excluded.is_open`)
     .run(runDate, open ? 1 : 0);
 }
 // Run cancellation (per run_date). Cancelling closes the run too — a cancelled run can't
 // be open for check-in. Un-cancelling leaves it CLOSED (the host re-opens deliberately).
-const stmtRunCancelled = db.prepare('SELECT cancelled FROM run_state WHERE run_date = ?');
+const stmtRunCancelled = db.prepare('SELECT cancelled FROM run_state WHERE run_date = ? AND program_id = 1');
 function runIsCancelled(runDate) {
   const row = stmtRunCancelled.get(runDate);
   return !!(row && row.cancelled);
 }
 function setRunCancelled(runDate, cancelled) {
-  db.prepare(`INSERT INTO run_state (run_date, is_open, cancelled) VALUES (?, 0, ?)
-              ON CONFLICT(run_date) DO UPDATE SET cancelled = excluded.cancelled, is_open = CASE WHEN excluded.cancelled = 1 THEN 0 ELSE is_open END`)
+  db.prepare(`INSERT INTO run_state (run_date, is_open, cancelled, program_id) VALUES (?, 0, ?, 1)
+              ON CONFLICT(run_date, program_id) DO UPDATE SET cancelled = excluded.cancelled, is_open = CASE WHEN excluded.cancelled = 1 THEN 0 ELSE is_open END`)
     .run(runDate, cancelled ? 1 : 0);
 }
 // Roster LOCK: at run-day 2 PM the queue locks. Existing players can still drop and the
@@ -1610,7 +1610,7 @@ const stmtRun = db.prepare(`
          COALESCE(a.is_host,0) AS is_host, COALESCE(a.position,'') AS position,
          a.id AS applicant_id
   FROM checkins c LEFT JOIN applicants a ON a.email = c.email
-  WHERE c.run_date = ? ORDER BY c.sort_order ASC, c.id ASC`);
+  WHERE c.run_date = ? AND c.program_id = 1 ORDER BY c.sort_order ASC, c.id ASC`);
 
 // Archive the FINAL floor of past weeks into the permanent attendance log,
 // right before loadRun() purges those checkins. "Final floor" = the first CAP
@@ -1630,29 +1630,29 @@ const stmtArchiveAttendance = db.prepare(`
   SELECT run_date, email, name FROM (
     SELECT run_date, email, name, offered_at,
            ROW_NUMBER() OVER (PARTITION BY run_date ORDER BY sort_order ASC, id ASC) AS pos
-    FROM checkins WHERE run_date < ?
+    FROM checkins WHERE run_date < ? AND program_id = 1
   ) WHERE pos <= ? AND offered_at IS NULL`);
 
 // Hot-path lookups rendered on the check-in page (and reused by the join guard) —
 // prepared once at module scope (node:sqlite has no statement cache).
-const stmtOptedOut = db.prepare('SELECT 1 FROM regular_optout WHERE run_date = ? AND email = ?');
-const stmtMyConfirmed = db.prepare('SELECT confirmed_at FROM checkins WHERE run_date = ? AND email = ?'); // hoisted — hottest page
+const stmtOptedOut = db.prepare('SELECT 1 FROM regular_optout WHERE run_date = ? AND email = ? AND program_id = 1');
+const stmtMyConfirmed = db.prepare('SELECT confirmed_at FROM checkins WHERE run_date = ? AND email = ? AND program_id = 1'); // hoisted — hottest page
 const stmtPreregCount = db.prepare(`SELECT COUNT(*) r FROM checkins c
     JOIN applicants ap ON ap.email = c.email
-    WHERE c.run_date = ? AND (ap.is_regular = 1 OR ap.is_team = 1)`);
+    WHERE c.run_date = ? AND c.program_id = 1 AND (ap.is_regular = 1 OR ap.is_team = 1)`);
 const stmtHostCard = db.prepare("SELECT * FROM applicants WHERE is_host = 1 AND status = 'approved'");
 
 // /poll fingerprint statements (P0-1) — read-only, hoisted. The poll route diffs a
 // tiny fingerprint to decide when a page should re-fetch-and-patch (no full reload),
 // and returns the live DM/group unread counts the client patches into tab badges.
-const stmtPollChat = db.prepare('SELECT COALESCE(MAX(id),0) mx FROM group_messages'); // MAX on the PK is O(1); COUNT(*) was a full scan every poll tick
+const stmtPollChat = db.prepare('SELECT COALESCE(MAX(id),0) mx FROM group_messages WHERE program_id = 1'); // MAX on the PK is O(1); COUNT(*) was a full scan every poll tick
 // A monotonic "chat structure changed" counter — bumped on delete/pin/unpin so those
 // propagate to other clients' feeds without a COUNT(*) scan (deletes/pins don't move MAX(id)).
 function bumpChatSeq() { setSetting('chat_seq', String((Number(getSetting('chat_seq')) || 0) + 1)); }
-const stmtPollChatReact = db.prepare('SELECT COUNT(*) c, MAX(created_at) mx FROM group_reactions');
-// Pickleball chat poll fingerprint (isolated mirror; own seq key in app_settings).
-const stmtPollPkChat = db.prepare('SELECT COALESCE(MAX(id),0) mx FROM pk_group_messages');
-const stmtPollPkChatReact = db.prepare('SELECT COUNT(*) c, MAX(created_at) mx FROM pk_group_reactions');
+const stmtPollChatReact = db.prepare('SELECT COUNT(*) c, MAX(created_at) mx FROM group_reactions WHERE program_id = 1');
+// Pickleball chat poll fingerprint (program 2 on the shared tables; own seq key in app_settings).
+const stmtPollPkChat = db.prepare('SELECT COALESCE(MAX(id),0) mx FROM group_messages WHERE program_id = 2');
+const stmtPollPkChatReact = db.prepare('SELECT COUNT(*) c, MAX(created_at) mx FROM group_reactions WHERE program_id = 2');
 function bumpPkChatSeq() { setSetting('pk_chat_seq', String((Number(getSetting('pk_chat_seq')) || 0) + 1)); }
 const stmtPollDM = db.prepare('SELECT MAX(id) mx, COUNT(*) c FROM messages WHERE from_email = ? OR to_email = ?');
 
@@ -1751,7 +1751,7 @@ function offereeForFloorLeave(runDate, leavingEmail) {
 // eligible waitlister offered in their place. Idempotent; safe every request. Run
 // this BEFORE computing who to offer/display so a stale hold never blocks the floor.
 const stmtExpiredOffers = db.prepare(  // hoisted — runs on every /checkin + /runs GET and the 60s tick
-  'SELECT * FROM checkins WHERE run_date = ? AND offered_at IS NOT NULL AND offered_at < ?');
+  'SELECT * FROM checkins WHERE run_date = ? AND program_id = 1 AND offered_at IS NOT NULL AND offered_at < ?');
 function expireAndReoffer(runDate, req) {
   const cutoff = Date.now() - OFFER_WINDOW_MS;
   const expired = stmtExpiredOffers.all(runDate, cutoff);
@@ -1772,9 +1772,9 @@ function expireAndReoffer(runDate, req) {
 // rollover) via module-level lastRunDate, plus once at startup and from the 60s
 // interval. Previously this ran on EVERY /checkin GET (every ~20s per phone),
 // keeping the WAL permanently hot for work that is genuinely week-scoped.
-const stmtPurgeCheckins = db.prepare('DELETE FROM checkins WHERE run_date < ?');
-const stmtPurgeOptouts = db.prepare('DELETE FROM regular_optout WHERE run_date < ?');
-const stmtPurgeRunState = db.prepare('DELETE FROM run_state WHERE run_date < ?');
+const stmtPurgeCheckins = db.prepare('DELETE FROM checkins WHERE run_date < ? AND program_id = 1');
+const stmtPurgeOptouts = db.prepare('DELETE FROM regular_optout WHERE run_date < ? AND program_id = 1');
+const stmtPurgeRunState = db.prepare('DELETE FROM run_state WHERE run_date < ? AND program_id = 1');
 // Prune a spent override only when BOTH its run_date AND its base Friday are past. The
 // base-Friday guard is essential for a run moved EARLIER (e.g. Fri→Thu): after the Thu
 // run passes but while its Friday is still today/upcoming, the override must be RETAINED
@@ -2197,10 +2197,9 @@ app.post('/profile', requireLogin, (req, res) => {
       // subs, opt-outs…) onto the new address. rekeyEmailTx in db.js is the single source
       // of truth for the cascade.
       if (email !== a.email) rekeyEmailTx(a.email, email);
-      // Name can change without the email changing — sync the denormalised name on BOTH
-      // programs' check-in rows (now keyed to the new email if it moved).
+      // Name can change without the email changing — sync the denormalised name across the
+      // person's check-in rows in every program (checkins is program-generic; one update covers all).
       db.prepare('UPDATE checkins SET name=? WHERE email=?').run(full_name, email);
-      db.prepare('UPDATE pk_checkins SET name=? WHERE email=?').run(full_name, email);
     });
   } catch (e) {
     console.error(`[profile] identity edit FAILED for ${a.email}: ${e.message}`);
@@ -2481,7 +2480,7 @@ app.post('/chat', requireLogin, (req, res) => {
     const file = req.file;
     const sticker = stickerPath(req.body.sticker);
     let replyTo = Number(req.body.reply_to) || 0;
-    if (replyTo && !db.prepare('SELECT 1 FROM group_messages WHERE id = ?').get(replyTo)) replyTo = 0;
+    if (replyTo && !db.prepare('SELECT 1 FROM group_messages WHERE id = ? AND program_id = 1').get(replyTo)) replyTo = 0;
     // @-mentions: validate the hidden comma-separated ids against real applicants.
     // Only meaningful when there's a body to carry the "@Name" text (stickers have none).
     const mentions = body ? validMentions(req.body.mentions) : null;
@@ -2531,7 +2530,7 @@ app.post('/chat/react', requireLogin, (req, res) => {
   if (mutedOut(gate, res, { back: '/chat' })) return; // suspended = muted
   const me = req.userEmail;
   const messageId = Number(req.body.message_id) || 0;
-  if (!db.prepare('SELECT 1 FROM group_messages WHERE id = ?').get(messageId)) return res.redirect('/chat');
+  if (!db.prepare('SELECT 1 FROM group_messages WHERE id = ? AND program_id = 1').get(messageId)) return res.redirect('/chat');
   const emoji = validEmoji(req.body.emoji);
   if (!emoji) return res.redirect('/chat');
   if (rateLimited('chat-react', me, 40, 10 * 60 * 1000)) return res.redirect('/chat');
@@ -2554,7 +2553,7 @@ app.post('/chat/delete', requireLogin, (req, res) => {
   if (!gate) return;
   const me = req.userEmail, a = gate.a;
   const messageId = Number(req.body.message_id) || 0;
-  const msg = db.prepare('SELECT id, from_email, image, audio, video FROM group_messages WHERE id = ?').get(messageId);
+  const msg = db.prepare('SELECT id, from_email, image, audio, video FROM group_messages WHERE id = ? AND program_id = 1').get(messageId);
   if (!msg) return res.redirect('/chat');
   const isMod = gate.viewerIsAdmin || !!(a && a.is_host);
   if (!isMod && msg.from_email !== me) return res.redirect('/chat');
@@ -2575,7 +2574,7 @@ app.post('/chat/pin', requireLogin, (req, res) => {
   const canPin = gate.viewerIsAdmin || !!(a && (a.is_host || a.is_team));
   if (!canPin) return res.redirect('/chat');
   const messageId = Number(req.body.message_id) || 0;
-  const msg = db.prepare('SELECT id, pinned_at FROM group_messages WHERE id = ?').get(messageId);
+  const msg = db.prepare('SELECT id, pinned_at FROM group_messages WHERE id = ? AND program_id = 1').get(messageId);
   if (!msg) return res.redirect('/chat');
   if (msg.pinned_at) db.prepare('UPDATE group_messages SET pinned_at = NULL, pinned_by = NULL WHERE id = ?').run(messageId);
   else db.prepare("UPDATE group_messages SET pinned_at = datetime('now'), pinned_by = ? WHERE id = ?").run(req.userEmail, messageId);
@@ -2603,7 +2602,7 @@ app.post('/chat/voice', requireLogin, (req, res) => {
     if (!(dur > 0)) dur = 0;
     if (dur > 300) dur = 300;
     let replyTo = Number(req.body.reply_to) || 0;
-    if (replyTo && !db.prepare('SELECT 1 FROM group_messages WHERE id = ?').get(replyTo)) replyTo = 0;
+    if (replyTo && !db.prepare('SELECT 1 FROM group_messages WHERE id = ? AND program_id = 1').get(replyTo)) replyTo = 0;
     const info = db.prepare('INSERT INTO group_messages (from_email, body, reply_to) VALUES (?,?,?)')
       .run(me, '', replyTo || null);
     const id = info.lastInsertRowid;
@@ -2639,7 +2638,7 @@ app.post('/chat/video', requireLogin, (req, res) => {
     if (!(dur > 0)) dur = 0;
     if (dur > 3600) dur = 3600;
     let replyTo = Number(req.body.reply_to) || 0;
-    if (replyTo && !db.prepare('SELECT 1 FROM group_messages WHERE id = ?').get(replyTo)) replyTo = 0;
+    if (replyTo && !db.prepare('SELECT 1 FROM group_messages WHERE id = ? AND program_id = 1').get(replyTo)) replyTo = 0;
     const info = db.prepare('INSERT INTO group_messages (from_email, body, reply_to) VALUES (?,?,?)')
       .run(me, '', replyTo || null);
     const id = info.lastInsertRowid;
@@ -2700,11 +2699,11 @@ app.post('/pickleball/chat', requireLogin, (req, res) => {
     const file = req.file;
     const sticker = stickerPath(req.body.sticker);
     let replyTo = Number(req.body.reply_to) || 0;
-    if (replyTo && !db.prepare('SELECT 1 FROM pk_group_messages WHERE id = ?').get(replyTo)) replyTo = 0;
+    if (replyTo && !db.prepare('SELECT 1 FROM group_messages WHERE id = ? AND program_id = 2').get(replyTo)) replyTo = 0;
     const mentions = body ? validMentions(req.body.mentions) : null;
     if (sticker) {
       if (rateLimited('pkchat-media', me, 20, 10 * 60 * 1000)) return res.redirect('/pickleball/chat?err=slow');
-      db.prepare('INSERT INTO pk_group_messages (from_email, body, reply_to, image) VALUES (?,?,?,?)')
+      db.prepare('INSERT INTO group_messages (from_email, body, reply_to, image, program_id) VALUES (?,?,?,?,2)')
         .run(me, '', replyTo || null, sticker);
       return res.redirect('/pickleball/chat');
     }
@@ -2714,14 +2713,14 @@ app.post('/pickleball/chat', requireLogin, (req, res) => {
       let msgId = 0;
       try {
         const jpeg = await processChatImage(file.buffer);
-        const info = db.prepare('INSERT INTO pk_group_messages (from_email, body, reply_to, mentions) VALUES (?,?,?,?)')
+        const info = db.prepare('INSERT INTO group_messages (from_email, body, reply_to, mentions, program_id) VALUES (?,?,?,?,2)')
           .run(me, body, replyTo || null, mentions);
         msgId = info.lastInsertRowid;
         const imgPath = await writeChatImage(jpeg, msgId);
-        db.prepare('UPDATE pk_group_messages SET image = ? WHERE id = ?').run(imgPath, msgId);
+        db.prepare('UPDATE group_messages SET image = ? WHERE id = ?').run(imgPath, msgId);
         notifyPkMentions(me, body, mentions);
       } catch (e) {
-        if (msgId) db.prepare('DELETE FROM pk_group_messages WHERE id = ?').run(msgId);
+        if (msgId) db.prepare('DELETE FROM group_messages WHERE id = ?').run(msgId);
         console.error(`[pkchat] image process failed for ${me}: ${e.message}`);
         return res.redirect('/pickleball/chat?err=bad');
       }
@@ -2729,7 +2728,7 @@ app.post('/pickleball/chat', requireLogin, (req, res) => {
     }
     if (!body) return res.redirect('/pickleball/chat');
     if (rateLimited('pkchat-send', me, 30, 10 * 60 * 1000)) return res.redirect('/pickleball/chat?err=slow');
-    db.prepare('INSERT INTO pk_group_messages (from_email, body, reply_to, mentions) VALUES (?,?,?,?)')
+    db.prepare('INSERT INTO group_messages (from_email, body, reply_to, mentions, program_id) VALUES (?,?,?,?,2)')
       .run(me, body, replyTo || null, mentions);
     notifyPkMentions(me, body, mentions);
     res.redirect('/pickleball/chat');
@@ -2740,15 +2739,15 @@ app.post('/pickleball/chat/react', requireLogin, (req, res) => {
   if (mutedOut(g, res, { back: '/pickleball/chat' })) return;
   const me = req.userEmail;
   const messageId = Number(req.body.message_id) || 0;
-  if (!db.prepare('SELECT 1 FROM pk_group_messages WHERE id = ?').get(messageId)) return res.redirect('/pickleball/chat');
+  if (!db.prepare('SELECT 1 FROM group_messages WHERE id = ? AND program_id = 2').get(messageId)) return res.redirect('/pickleball/chat');
   const emoji = validEmoji(req.body.emoji);
   if (!emoji) return res.redirect('/pickleball/chat');
   if (rateLimited('pkchat-react', me, 40, 10 * 60 * 1000)) return res.redirect('/pickleball/chat');
-  const existing = db.prepare('SELECT emoji FROM pk_group_reactions WHERE group_message_id = ? AND from_email = ?').get(messageId, me);
+  const existing = db.prepare('SELECT emoji FROM group_reactions WHERE group_message_id = ? AND from_email = ?').get(messageId, me);
   if (existing && existing.emoji === emoji) {
-    db.prepare('DELETE FROM pk_group_reactions WHERE group_message_id = ? AND from_email = ?').run(messageId, me);
+    db.prepare('DELETE FROM group_reactions WHERE group_message_id = ? AND from_email = ?').run(messageId, me);
   } else {
-    db.prepare(`INSERT INTO pk_group_reactions (group_message_id, from_email, emoji) VALUES (?,?,?)
+    db.prepare(`INSERT INTO group_reactions (group_message_id, from_email, emoji, program_id) VALUES (?,?,?,2)
                 ON CONFLICT(group_message_id, from_email) DO UPDATE SET emoji = excluded.emoji, created_at = datetime('now')`)
       .run(messageId, me, emoji);
   }
@@ -2758,12 +2757,12 @@ app.post('/pickleball/chat/delete', requireLogin, (req, res) => {
   const g = pkChatGate(req, res); if (!g) return;
   const me = req.userEmail;
   const messageId = Number(req.body.message_id) || 0;
-  const msg = db.prepare('SELECT id, from_email, image, audio, video FROM pk_group_messages WHERE id = ?').get(messageId);
+  const msg = db.prepare('SELECT id, from_email, image, audio, video FROM group_messages WHERE id = ? AND program_id = 2').get(messageId);
   if (!msg) return res.redirect('/pickleball/chat');
   const isMod = g.admin || !!(g.a && g.a.is_host);
   if (!isMod && msg.from_email !== me) return res.redirect('/pickleball/chat');
-  db.prepare('DELETE FROM pk_group_reactions WHERE group_message_id = ?').run(messageId);
-  db.prepare('DELETE FROM pk_group_messages WHERE id = ?').run(messageId);
+  db.prepare('DELETE FROM group_reactions WHERE group_message_id = ?').run(messageId);
+  db.prepare('DELETE FROM group_messages WHERE id = ?').run(messageId);
   bumpPkChatSeq();
   safeUnlinkChatImage(msg.image); safeUnlinkChatImage(msg.audio); safeUnlinkChatImage(msg.video);
   res.redirect('/pickleball/chat');
@@ -2774,10 +2773,10 @@ app.post('/pickleball/chat/pin', requireLogin, (req, res) => {
   const canPin = g.admin || !!(g.a && (g.a.is_host || g.a.is_team));
   if (!canPin) return res.redirect('/pickleball/chat');
   const messageId = Number(req.body.message_id) || 0;
-  const msg = db.prepare('SELECT id, pinned_at FROM pk_group_messages WHERE id = ?').get(messageId);
+  const msg = db.prepare('SELECT id, pinned_at FROM group_messages WHERE id = ? AND program_id = 2').get(messageId);
   if (!msg) return res.redirect('/pickleball/chat');
-  if (msg.pinned_at) db.prepare('UPDATE pk_group_messages SET pinned_at = NULL, pinned_by = NULL WHERE id = ?').run(messageId);
-  else db.prepare("UPDATE pk_group_messages SET pinned_at = datetime('now'), pinned_by = ? WHERE id = ?").run(req.userEmail, messageId);
+  if (msg.pinned_at) db.prepare('UPDATE group_messages SET pinned_at = NULL, pinned_by = NULL WHERE id = ?').run(messageId);
+  else db.prepare("UPDATE group_messages SET pinned_at = datetime('now'), pinned_by = ? WHERE id = ?").run(req.userEmail, messageId);
   bumpPkChatSeq();
   res.redirect('/pickleball/chat');
 });
@@ -2796,15 +2795,15 @@ app.post('/pickleball/chat/voice', requireLogin, (req, res) => {
     if (!(dur > 0)) dur = 0;
     if (dur > 300) dur = 300;
     let replyTo = Number(req.body.reply_to) || 0;
-    if (replyTo && !db.prepare('SELECT 1 FROM pk_group_messages WHERE id = ?').get(replyTo)) replyTo = 0;
-    const info = db.prepare('INSERT INTO pk_group_messages (from_email, body, reply_to) VALUES (?,?,?)')
+    if (replyTo && !db.prepare('SELECT 1 FROM group_messages WHERE id = ? AND program_id = 2').get(replyTo)) replyTo = 0;
+    const info = db.prepare('INSERT INTO group_messages (from_email, body, reply_to, program_id) VALUES (?,?,?,2)')
       .run(me, '', replyTo || null);
     const id = info.lastInsertRowid;
     try {
       const apath = await writeChatAudio(file.buffer, id, ext);
-      db.prepare('UPDATE pk_group_messages SET audio = ?, audio_dur = ? WHERE id = ?').run(apath, dur, id);
+      db.prepare('UPDATE group_messages SET audio = ?, audio_dur = ? WHERE id = ?').run(apath, dur, id);
     } catch (e) {
-      db.prepare('DELETE FROM pk_group_messages WHERE id = ?').run(id);
+      db.prepare('DELETE FROM group_messages WHERE id = ?').run(id);
       console.error(`[pkchat] voice write failed for ${me}: ${e.message}`);
       return res.status(500).json({ err: 'bad' });
     }
@@ -2826,15 +2825,15 @@ app.post('/pickleball/chat/video', requireLogin, (req, res) => {
     if (!(dur > 0)) dur = 0;
     if (dur > 3600) dur = 3600;
     let replyTo = Number(req.body.reply_to) || 0;
-    if (replyTo && !db.prepare('SELECT 1 FROM pk_group_messages WHERE id = ?').get(replyTo)) replyTo = 0;
-    const info = db.prepare('INSERT INTO pk_group_messages (from_email, body, reply_to) VALUES (?,?,?)')
+    if (replyTo && !db.prepare('SELECT 1 FROM group_messages WHERE id = ? AND program_id = 2').get(replyTo)) replyTo = 0;
+    const info = db.prepare('INSERT INTO group_messages (from_email, body, reply_to, program_id) VALUES (?,?,?,2)')
       .run(me, '', replyTo || null);
     const id = info.lastInsertRowid;
     try {
       const vpath = await writeChatVideo(file.buffer, id, ext);
-      db.prepare('UPDATE pk_group_messages SET video = ?, video_dur = ? WHERE id = ?').run(vpath, dur, id);
+      db.prepare('UPDATE group_messages SET video = ?, video_dur = ? WHERE id = ?').run(vpath, dur, id);
     } catch (e) {
-      db.prepare('DELETE FROM pk_group_messages WHERE id = ?').run(id);
+      db.prepare('DELETE FROM group_messages WHERE id = ?').run(id);
       console.error(`[pkchat] video write failed for ${me}: ${e.message}`);
       return res.status(500).json({ err: 'bad' });
     }
@@ -2855,7 +2854,7 @@ app.post('/checkin/join', requireLogin, (req, res) => {
   const hasPreAccess = !!(a.is_regular || a.is_team);
   const runOpen = runIsOpen(runDate);
   if (!runOpen && !hasPreAccess) return res.redirect('/checkin');
-  const already = db.prepare('SELECT 1 FROM checkins WHERE run_date=? AND email=?').get(runDate, email);
+  const already = db.prepare('SELECT 1 FROM checkins WHERE run_date=? AND email=? AND program_id = 1').get(runDate, email);
   // Pre-register cap: while CLOSED, team + regulars can hold at most PREREG_CAP
   // spots, so at least (floor − cap) survive for normals once you open.
   if (!runOpen && a.is_regular && !a.is_team && !already) {
@@ -2864,7 +2863,7 @@ app.post('/checkin/join', requireLogin, (req, res) => {
   }
   // Hard cap: 15 floor + 5 waitlist. Past that, nobody new joins.
   if (!already) {
-    const { n } = db.prepare('SELECT COUNT(*) n FROM checkins WHERE run_date=?').get(runDate);
+    const { n } = db.prepare('SELECT COUNT(*) n FROM checkins WHERE run_date=? AND program_id = 1').get(runDate);
     if (n >= TOTAL_CAP) return res.redirect('/checkin'); // run + waitlist full
   }
   try {
@@ -2914,7 +2913,7 @@ app.post('/checkin/leave', requireLogin, (req, res) => {
   // If they held a floor slot, offer it to the top waitlister (offer-and-confirm)
   // instead of silently auto-promoting. Capture the offeree BEFORE deleting.
   const offeree = offereeForFloorLeave(runDate, req.userEmail);
-  db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ?').run(runDate, req.userEmail);
+  db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = 1').run(runDate, req.userEmail);
   if (offeree) createOffer(runDate, offeree, req);
   res.redirect('/checkin');
 });
@@ -2934,7 +2933,7 @@ app.post('/checkin/autorenew', requireLogin, (req, res) => {
       // opting out of the held-seat system — drop the current auto-spot too. If that
       // spot was on the floor, offer the freed slot to the top waitlister.
       const offeree = offereeForFloorLeave(runDate, req.userEmail);
-      db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ?').run(runDate, req.userEmail);
+      db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = 1').run(runDate, req.userEmail);
       if (offeree) createOffer(runDate, offeree, req);
     } else {
       // WIRING: turning auto-renew back ON re-seats them now (autoJoinTeam is
@@ -2953,9 +2952,9 @@ app.post('/checkin/guest', requireApprover, (req, res) => {
   const name = (req.body.name || '').trim().slice(0, 60);
   if (name) {
     // Double-tap guard: a native form re-post within seconds must not add a 2nd identical guest.
-    const dup = db.prepare("SELECT 1 FROM checkins WHERE run_date=? AND name=? AND created_at > datetime('now','-5 seconds')").get(runDate, name + ' (guest)');
+    const dup = db.prepare("SELECT 1 FROM checkins WHERE run_date=? AND name=? AND program_id = 1 AND created_at > datetime('now','-5 seconds')").get(runDate, name + ' (guest)');
     if (dup) return res.redirect('/checkin');
-    const { n } = db.prepare('SELECT COUNT(*) n FROM checkins WHERE run_date=?').get(runDate);
+    const { n } = db.prepare('SELECT COUNT(*) n FROM checkins WHERE run_date=? AND program_id = 1').get(runDate);
     if (n < TOTAL_CAP) {
       const email = `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}@guest.local`;
       db.prepare('INSERT INTO checkins (run_date,email,name) VALUES (?,?,?)').run(runDate, email, name + ' (guest)');
@@ -2969,7 +2968,7 @@ app.post('/checkin/remove', requireApprover, (req, res) => {
   const target = String(req.body.email || '').toLowerCase();
   // Removing a floor occupant frees a slot → offer it onward (capture before delete).
   const offeree = offereeForFloorLeave(runDate, target);
-  db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ?').run(runDate, target);
+  db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = 1').run(runDate, target);
   if (offeree) createOffer(runDate, offeree, req);
   audit(req.userEmail, req.actorRole, 'checkin:remove', target);
   res.redirect('/checkin');
@@ -2980,13 +2979,13 @@ app.post('/checkin/promote', requireApprover, (req, res) => {
   const email = String(req.body.email || '').toLowerCase();
   // float this player above everyone currently checked in → they slot into the run,
   // bumping the last person in the run down to the top of the waitlist if it was full
-  const { m } = db.prepare('SELECT MIN(sort_order) m FROM checkins WHERE run_date = ?').get(runDate);
+  const { m } = db.prepare('SELECT MIN(sort_order) m FROM checkins WHERE run_date = ? AND program_id = 1').get(runDate);
   const newOrder = (m ?? 0) - 1;
   // Promote finalizes the player onto the floor THROUGH any pending offer: clear the
   // hold so they settle as a real floor player instead of lingering as "⏳ Claiming"
   // (offered_at set → partitionRun would keep counting them as a held offer, not
   // seated, so the bump would appear to do nothing). No-op when they had no offer.
-  db.prepare('UPDATE checkins SET sort_order = ?, offered_at = NULL, claim_token = NULL WHERE run_date = ? AND email = ?')
+  db.prepare('UPDATE checkins SET sort_order = ?, offered_at = NULL, claim_token = NULL WHERE run_date = ? AND email = ? AND program_id = 1')
     .run(newOrder, runDate, email);
   audit(req.userEmail, req.actorRole, 'checkin:promote', email);
   res.redirect('/checkin');
@@ -3007,9 +3006,9 @@ function autoJoinTeam(runDate) {
     `SELECT email, full_name FROM applicants
      WHERE is_team = 1 AND status = 'approved' AND auto_renew = 1 AND COALESCE(suspended,0) = 0
        AND COALESCE(waiver_ok,0) = 1`).all();
-  const optedOut = db.prepare('SELECT 1 FROM regular_optout WHERE run_date = ? AND email = ?');
+  const optedOut = db.prepare('SELECT 1 FROM regular_optout WHERE run_date = ? AND email = ? AND program_id = 1');
   const insert = db.prepare('INSERT OR IGNORE INTO checkins (run_date,email,name,sort_order) VALUES (?,?,?,?)');
-  let { m } = db.prepare('SELECT MIN(sort_order) m FROM checkins WHERE run_date = ?').get(runDate);
+  let { m } = db.prepare('SELECT MIN(sort_order) m FROM checkins WHERE run_date = ? AND program_id = 1').get(runDate);
   let order = (m ?? 0);
   for (const t of team) {
     if (optedOut.get(runDate, t.email)) continue; // team member sat out this week
@@ -3018,7 +3017,7 @@ function autoJoinTeam(runDate) {
   }
   // Enforce hard total cap: if team priority pushed anyone past floor+waitlist,
   // trim the lowest-ranked (they're non-team, since team floated to the top).
-  const rows = db.prepare('SELECT id FROM checkins WHERE run_date=? ORDER BY sort_order ASC, id ASC').all(runDate);
+  const rows = db.prepare('SELECT id FROM checkins WHERE run_date=? AND program_id = 1 ORDER BY sort_order ASC, id ASC').all(runDate);
   if (rows.length > TOTAL_CAP) {
     const cut = rows.slice(TOTAL_CAP).map(r => r.id);
     const del = db.prepare('DELETE FROM checkins WHERE id = ?');
@@ -3054,7 +3053,7 @@ app.post('/admin/run/cancel', requireLogin, (req, res) => {
   const cancel = req.body.on === '1';
   if (cancel === runIsCancelled(runDate)) return res.redirect('/checkin'); // no state change → no push spam
   setRunCancelled(runDate, cancel);
-  if (cancel) db.prepare('DELETE FROM checkins WHERE run_date = ?').run(runDate); // clear the floor — a cancelled run has nobody on it
+  if (cancel) db.prepare('DELETE FROM checkins WHERE run_date = ? AND program_id = 1').run(runDate); // clear the floor — a cancelled run has nobody on it
   audit(email, admin ? 'admin' : 'host', cancel ? 'run:cancel' : 'run:uncancel', runDate);
   if (cancel) {
     // Game-day notification: push only (no email storm) — the check-in banner carries it in-app.
@@ -3089,7 +3088,7 @@ app.post('/checkin/optout', requireLogin, (req, res) => {
     .run(runDate, req.userEmail);
   // Sitting out frees their spot — if it was a floor slot, offer it onward.
   const offeree = offereeForFloorLeave(runDate, req.userEmail);
-  db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ?').run(runDate, req.userEmail);
+  db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = 1').run(runDate, req.userEmail);
   if (offeree) createOffer(runDate, offeree, req);
   res.redirect('/checkin');
 });
@@ -3099,7 +3098,7 @@ app.post('/checkin/optin', requireLogin, (req, res) => {
   if (me && me.suspended) return res.redirect('/checkin'); // suspended → can't re-seat (matches /checkin/join)
   if (me && !me.waiver_ok) return res.redirect('/waiver?next=/checkin'); // one-time waiver before seating
   if (runIsCancelled(runDate) || runIsLocked(runDate)) return res.redirect('/checkin'); // cancelled/locked → no re-seat (matches /checkin/join)
-  db.prepare('DELETE FROM regular_optout WHERE run_date = ? AND email = ?').run(runDate, req.userEmail);
+  db.prepare('DELETE FROM regular_optout WHERE run_date = ? AND email = ? AND program_id = 1').run(runDate, req.userEmail);
   // WIRING (autoJoinTeam is now rollover-gated in ensureWeek, not per-view): a team
   // member with auto-renew opting back in — even while CLOSED — must be re-seated
   // here so this POST's response page shows them on the floor immediately.
@@ -3110,8 +3109,8 @@ app.post('/checkin/optin', requireLogin, (req, res) => {
     if (a && a.status === 'approved') {
       // Same hard cap as /checkin/join. Without it this seats row #21, which waitPlayers
       // slices off — an invisible ghost that still counts toward runFull.
-      const already = db.prepare('SELECT 1 FROM checkins WHERE run_date=? AND email=?').get(runDate, req.userEmail);
-      const { n } = db.prepare('SELECT COUNT(*) n FROM checkins WHERE run_date=?').get(runDate);
+      const already = db.prepare('SELECT 1 FROM checkins WHERE run_date=? AND email=? AND program_id = 1').get(runDate, req.userEmail);
+      const { n } = db.prepare('SELECT COUNT(*) n FROM checkins WHERE run_date=? AND program_id = 1').get(runDate);
       if (already || n < TOTAL_CAP) {
         db.prepare('INSERT OR IGNORE INTO checkins (run_date,email,name) VALUES (?,?,?)')
           .run(runDate, req.userEmail, a.full_name);
@@ -3153,7 +3152,7 @@ app.get('/admin', requireApprover, (req, res) => {
     vote: a.is_team ? null : voteInfo(a.id, req.userEmail, pool, votesByApplicant.get(a.id) || []),
   }));
   const runDate = nextRunDate();
-  const checkedInCount = db.prepare('SELECT COUNT(*) n FROM checkins WHERE run_date = ?').get(runDate).n;
+  const checkedInCount = db.prepare('SELECT COUNT(*) n FROM checkins WHERE run_date = ? AND program_id = 1').get(runDate).n;
   const log = viewerIsAdmin
     ? db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 40').all() : [];
   // The voting pool ("The Council"): team members. Shown to all operators as a
@@ -3284,7 +3283,7 @@ app.post('/admin/reset', requireAdmin, (req, res) => {
     if (!a.is_team) {
       const runDate = nextRunDate();
       const offeree = offereeForFloorLeave(runDate, a.email);
-      db.prepare('DELETE FROM checkins WHERE email = ?').run(a.email);
+      db.prepare('DELETE FROM checkins WHERE email = ? AND program_id = 1').run(a.email); // basketball floor only (reset doesn't touch pk)
       if (offeree) createOffer(runDate, offeree, req);
     }
     audit(req.userEmail, 'admin', 'reset', a.email);
@@ -3418,7 +3417,7 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
     db.exec('BEGIN');
     try {
       const st = stmtRunIsOpen.get(oldRunDate);
-      if (st) { setRunOpen(newRunDate, st.is_open); db.prepare('DELETE FROM run_state WHERE run_date = ?').run(oldRunDate); }
+      if (st) { setRunOpen(newRunDate, st.is_open); db.prepare('DELETE FROM run_state WHERE run_date = ? AND program_id = 1').run(oldRunDate); }
       // Carry the once-per-run auto-open marker to the new date — otherwise moving a run the
       // host already closed re-arms auto-open under the new (unmarked) date key.
       if (getSetting('autoopen_done') === oldRunDate) setSetting('autoopen_done', newRunDate);
@@ -3430,8 +3429,8 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
         if (Date.now() >= newClose) setSetting('autoclose_done', newRunDate);
         else db.prepare("DELETE FROM app_settings WHERE key = 'autoclose_done'").run();
       }
-      db.prepare('UPDATE checkins SET run_date = ? WHERE run_date = ?').run(newRunDate, oldRunDate);
-      db.prepare('UPDATE regular_optout SET run_date = ? WHERE run_date = ?').run(newRunDate, oldRunDate);
+      db.prepare('UPDATE checkins SET run_date = ? WHERE run_date = ? AND program_id = 1').run(newRunDate, oldRunDate);
+      db.prepare('UPDATE regular_optout SET run_date = ? WHERE run_date = ? AND program_id = 1').run(newRunDate, oldRunDate);
       db.exec('COMMIT');
     } catch (e) { db.exec('ROLLBACK'); console.error(`[rundate] migration FAILED: ${e.message}`); throw e; }
   }
@@ -3447,7 +3446,7 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
   const annBody = reset
     ? `📅 Update — the run is back to its usual ${wd}, ${lbl} (${timeLbl}).`
     : `📅 Heads up — the run is now ${wd}, ${lbl} (${timeLbl}).`;
-  db.prepare("UPDATE announcements SET archived = 1, archived_at = datetime('now') WHERE archived = 0").run();
+  db.prepare("UPDATE announcements SET archived = 1, archived_at = datetime('now') WHERE archived = 0 AND program_id = 1").run();
   db.prepare('INSERT INTO announcements (body,author) VALUES (?,?)').run(annBody, email);
   audit(email, actorRole, 'rundate:set', `${base} -> ${reset ? 'default' : raw} ${storeTime || DEFAULT_START}-${storeEnd || DEFAULT_END}`);
 
@@ -3500,9 +3499,9 @@ app.post('/admin/season', requireLogin, (req, res) => {
   // the immediate-jump archive; this stops the delayed one.)
   db.exec('BEGIN');
   try {
-    db.prepare('DELETE FROM checkins WHERE run_date > ? AND run_date < ?').run(today, raw);
-    db.prepare('DELETE FROM regular_optout WHERE run_date > ? AND run_date < ?').run(today, raw);
-    db.prepare('DELETE FROM run_state WHERE run_date > ? AND run_date < ?').run(today, raw);
+    db.prepare('DELETE FROM checkins WHERE run_date > ? AND run_date < ? AND program_id = 1').run(today, raw);
+    db.prepare('DELETE FROM regular_optout WHERE run_date > ? AND run_date < ? AND program_id = 1').run(today, raw);
+    db.prepare('DELETE FROM run_state WHERE run_date > ? AND run_date < ? AND program_id = 1').run(today, raw);
     db.exec('COMMIT');
   } catch (e) { db.exec('ROLLBACK'); console.error(`[season] roster cleanup FAILED: ${e.message}`); throw e; }
   audit(email, actorRole, 'season:set', raw);
@@ -3661,9 +3660,8 @@ app.post('/admin/people/edit', requireAdmin, (req, res) => {
         .run(full_name, email, phone, id);
       // Carry EVERY per-user row to the new address (single source of truth: rekeyEmailTx in db.js).
       if (email !== cur.email) rekeyEmailTx(cur.email, email);
-      // keep the denormalised check-in name in sync on BOTH programs (name can change without email)
+      // keep the denormalised check-in name in sync across every program (name can change without email)
       db.prepare('UPDATE checkins SET name=? WHERE email=?').run(full_name, email);
-      db.prepare('UPDATE pk_checkins SET name=? WHERE email=?').run(full_name, email);
     });
   } catch (e) {
     console.error(`[admin] identity edit FAILED for ${cur.email}: ${e.message}`);
@@ -3688,7 +3686,7 @@ app.post('/admin/people/suspend', requireAdmin, (req, res) => {
   if (on) {
     const runDate = nextRunDate();
     const offeree = offereeForFloorLeave(runDate, cur.email);
-    db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ?').run(runDate, cur.email);
+    db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = 1').run(runDate, cur.email);
     if (offeree) createOffer(runDate, offeree, req);
     // Suspension has to clear BOTH programs' floors. pkGate only blocks NEW pickleball
     // actions, so without this a suspended player keeps their seat all week and the
@@ -3713,10 +3711,9 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
     db.prepare('DELETE FROM votes WHERE applicant_id = ?').run(id);      // votes cast ON them
     db.prepare('DELETE FROM votes WHERE voter_email = ?').run(a.email);  // and votes they cast — else a
     // same-email re-registration made team would resurrect years-old approve/reject tallies.
-    // hard-delete is the ONLY path that removes attendance history
+    // hard-delete is the ONLY path that removes attendance history. checkins (above) and
+    // attendance are program-generic now, so one delete per table clears every program.
     db.prepare('DELETE FROM attendance WHERE email = ?').run(a.email);
-    db.prepare('DELETE FROM pk_checkins WHERE email = ?').run(a.email);
-    db.prepare('DELETE FROM pk_attendance WHERE email = ?').run(a.email);
     // Best-effort: delete any chat photo FILES this person uploaded (DM + group) before
     // dropping the rows. Keyed by message id in the DB, so we collect the image paths
     // first, then unlink. Stickers (/stickers/*) are shared assets → safeUnlinkChatImage
@@ -3724,10 +3721,8 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
     for (const r of db.prepare('SELECT image FROM messages WHERE (from_email = ? OR to_email = ?) AND image IS NOT NULL').all(a.email, a.email))
       safeUnlinkChatImage(r.image);
     // group messages can also carry voice/video uploads — clean all three media files
+    // group_messages spans every program now, so this one sweep collects pickleball media too.
     for (const r of db.prepare('SELECT image, audio, video FROM group_messages WHERE from_email = ?').all(a.email)) {
-      safeUnlinkChatImage(r.image); safeUnlinkChatImage(r.audio); safeUnlinkChatImage(r.video);
-    }
-    for (const r of db.prepare('SELECT image, audio, video FROM pk_group_messages WHERE from_email = ?').all(a.email)) {
       safeUnlinkChatImage(r.image); safeUnlinkChatImage(r.audio); safeUnlinkChatImage(r.video);
     }
     // purge messaging: their own reactions everywhere, reactions on their messages,
@@ -3741,20 +3736,14 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
     db.prepare('DELETE FROM group_reactions WHERE from_email = ?').run(a.email);
     db.prepare('DELETE FROM group_reactions WHERE group_message_id IN (SELECT id FROM group_messages WHERE from_email = ?)').run(a.email);
     db.prepare('DELETE FROM group_messages WHERE from_email = ?').run(a.email);
-    db.prepare('DELETE FROM group_reads WHERE email = ?').run(a.email);
-    // same purge for the pickleball chat (isolated pk_group_* tables)
-    db.prepare('DELETE FROM pk_group_reactions WHERE from_email = ?').run(a.email);
-    db.prepare('DELETE FROM pk_group_reactions WHERE group_message_id IN (SELECT id FROM pk_group_messages WHERE from_email = ?)').run(a.email);
-    db.prepare('DELETE FROM pk_group_messages WHERE from_email = ?').run(a.email);
-    db.prepare('DELETE FROM pk_group_reads WHERE email = ?').run(a.email);
+    db.prepare('DELETE FROM group_reads WHERE email = ?').run(a.email);  // (email,program_id) PK → clears every program's marker
     db.prepare('DELETE FROM program_membership WHERE email = ?').run(a.email); // drop all per-program memberships
     db.prepare('DELETE FROM push_subscriptions WHERE email = ?').run(a.email);
     // Per-week sit-outs + announcement read/dismiss markers. These outlived the delete, which
     // both leaked rows forever and left a live PK-collision trap for anyone later rekeyed ONTO
     // this address (see rekeyEmailTx). Any unused sign-in link is revoked too — a delete the
     // admin just performed shouldn't leave a working magic link in an inbox.
-    db.prepare('DELETE FROM regular_optout WHERE email = ?').run(a.email);
-    db.prepare('DELETE FROM pk_optout WHERE email = ?').run(a.email);
+    db.prepare('DELETE FROM regular_optout WHERE email = ?').run(a.email);  // program-generic → clears every program's sit-outs
     db.prepare('DELETE FROM announcement_reads WHERE email = ?').run(a.email);
     db.prepare('DELETE FROM announcement_dismissals WHERE email = ?').run(a.email);
     db.prepare('DELETE FROM login_tokens WHERE email = ?').run(a.email);
@@ -3855,7 +3844,7 @@ app.get('/season', requireLogin, (req, res) => {
   if (!a || (a.status !== 'approved' && !isAdmin(req.userEmail))) return res.redirect('/status');
   const rows = db.prepare(`SELECT at.email, COUNT(*) n, ap.full_name FROM attendance at
     LEFT JOIN applicants ap ON ap.email = at.email
-    WHERE at.run_date >= strftime('%Y-01-01','now') AND at.email NOT LIKE '%@guest.local'
+    WHERE at.program_id = 1 AND at.run_date >= strftime('%Y-01-01','now') AND at.email NOT LIKE '%@guest.local'
     GROUP BY at.email ORDER BY n DESC, at.email ASC`).all();
   const named = rows.map((r, i) => ({ rank: i + 1, name: r.full_name || 'Member', n: r.n, me: r.email.toLowerCase() === req.userEmail.toLowerCase() }));
   res.send(seasonPage({ rows: named, email: a.email, dmUnread: unreadCount(a.email), groupUnread: groupUnread(a.email), groupMention: groupMentionUnread(a.email, a.id), ann: annPanel(a.email) }));
@@ -3867,14 +3856,14 @@ const PK_CAP = Number(process.env.PK_CAP || 20), PK_WAIT = Number(process.env.PK
 // node:sqlite has NO statement cache, so these re-compiled SQL on EVERY /poll tick for every
 // signed-in viewer (pkProgramActive also runs on every /runs and /profile render).
 const stmtPkActive = db.prepare('SELECT active FROM program WHERE id = 2');
-const stmtPkIsOpen = db.prepare('SELECT is_open FROM pk_run_state WHERE run_date = ?');
-const stmtPkIsCancelled = db.prepare('SELECT cancelled FROM pk_run_state WHERE run_date = ?');
+const stmtPkIsOpen = db.prepare('SELECT is_open FROM run_state WHERE run_date = ? AND program_id = 2');
+const stmtPkIsCancelled = db.prepare('SELECT cancelled FROM run_state WHERE run_date = ? AND program_id = 2');
 const stmtPkRoster = db.prepare(`
     SELECT c.email, c.name, c.sort_order, c.id, c.confirmed_at,
            a.id AS applicant_id, a.is_host, a.is_team, a.is_regular
-    FROM pk_checkins c LEFT JOIN applicants a ON a.email = c.email
-    WHERE c.run_date = ? ORDER BY c.sort_order ASC, c.id ASC`);
-const stmtLatestPkAnnouncement = db.prepare('SELECT id, body, author, created_at FROM pk_announcements WHERE COALESCE(archived,0) = 0 ORDER BY id DESC LIMIT 1');
+    FROM checkins c LEFT JOIN applicants a ON a.email = c.email
+    WHERE c.run_date = ? AND c.program_id = 2 ORDER BY c.sort_order ASC, c.id ASC`);
+const stmtLatestPkAnnouncement = db.prepare('SELECT id, body, author, at AS created_at FROM announcements WHERE program_id = 2 AND COALESCE(archived,0) = 0 ORDER BY id DESC LIMIT 1');
 function pkProgramActive() { const r = stmtPkActive.get(); return !!(r && r.active); }
 // Pickleball's standing day = Tuesday (PK_DOW=2), DECOUPLED from basketball so moving the
 // basketball run (RUN_DOW) never drags pickleball's date along. Weekly auto-schedule:
@@ -3917,7 +3906,7 @@ function pkDefaultDate() {
 function pkRunDate() { return getSetting('pk_run_date') || pkDefaultDate(); } // manual per-week override; else the weekly standing Tuesday
 function pkIsOpen(rd) { const r = stmtPkIsOpen.get(rd); return !!(r && r.is_open); }
 function pkIsCancelled(rd) { const r = stmtPkIsCancelled.get(rd); return !!(r && r.cancelled); }
-function pkSetState(rd, field, val) { db.prepare(`INSERT INTO pk_run_state (run_date, ${field}) VALUES (?, ?) ON CONFLICT(run_date) DO UPDATE SET ${field} = excluded.${field}`).run(rd, val ? 1 : 0); }
+function pkSetState(rd, field, val) { db.prepare(`INSERT INTO run_state (run_date, ${field}, program_id) VALUES (?, ?, 2) ON CONFLICT(run_date, program_id) DO UPDATE SET ${field} = excluded.${field}`).run(rd, val ? 1 : 0); }
 function pkPartition(rd) {
   // Join applicants so the roster rows can open a profile popup + show role badges
   // (guests have no applicant row → applicant_id null → non-tappable, matches basketball).
@@ -3927,7 +3916,7 @@ function pkPartition(rd) {
 // Pickleball run start epoch — the run date at 6 PM local. Drives the countdown banner
 // AND the auto-lock time (check-in closes at start).
 function pkStartEpoch(rd) { return rd ? new Date(rd + `T${String(PK_START_H).padStart(2, '0')}:00:00`).getTime() : 0; }
-// Latest LIVE pickleball announcement (own pk_announcements table; retracted ones archived).
+// Latest LIVE pickleball announcement (program 2 rows in the shared announcements table; retracted ones archived).
 function latestPkAnnouncement() { return stmtLatestPkAnnouncement.get() || null; }
 // Pickleball MEMBERSHIP: you become a pickleball member by opening the run (GET /pickleball) —
 // tracked in program_membership (program 2). Chat access, the members list, and the push
@@ -3964,21 +3953,21 @@ function pkSeatRenewers(rd) {
     FROM program_membership pm JOIN applicants a ON a.email = pm.email
     WHERE pm.program_id = 2 AND pm.auto_renew = 1 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local'
       AND COALESCE(a.suspended,0) = 0 AND COALESCE(a.waiver_ok,0) = 1
-      AND NOT EXISTS (SELECT 1 FROM pk_optout o WHERE o.run_date = ? AND o.email = pm.email)
+      AND NOT EXISTS (SELECT 1 FROM regular_optout o WHERE o.run_date = ? AND o.email = pm.email AND o.program_id = 2)
     ORDER BY a.id`).all(rd);
-  const insTeam = db.prepare('INSERT OR IGNORE INTO pk_checkins (run_date, email, name, sort_order) VALUES (?,?,?,?)');
-  const insR = db.prepare('INSERT OR IGNORE INTO pk_checkins (run_date, email, name) VALUES (?,?,?)');
+  const insTeam = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, sort_order, program_id) VALUES (?,?,?,?,2)');
+  const insR = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, program_id) VALUES (?,?,?,2)');
   let added = 0;
   // Team first, top priority — negative sort_order so they float above any first-come joiners.
-  let { m } = db.prepare('SELECT MIN(sort_order) m FROM pk_checkins WHERE run_date = ?').get(rd);
+  let { m } = db.prepare('SELECT MIN(sort_order) m FROM checkins WHERE run_date = ? AND program_id = 2').get(rd);
   let order = (m ?? 0);
   for (const r of renewers.filter(r => r.is_team)) { order -= 1; if (insTeam.run(rd, r.email, r.full_name, order).changes > 0) added++; }
   // Non-team renewers fill the remaining room up to cap + waitlist.
-  let room = (PK_CAP + PK_WAIT) - db.prepare('SELECT COUNT(*) n FROM pk_checkins WHERE run_date = ?').get(rd).n;
+  let room = (PK_CAP + PK_WAIT) - db.prepare('SELECT COUNT(*) n FROM checkins WHERE run_date = ? AND program_id = 2').get(rd).n;
   for (const r of renewers.filter(r => !r.is_team)) { if (room <= 0) break; if (insR.run(rd, r.email, r.full_name).changes > 0) { room--; added++; } }
   // Hard total cap: team priority may have pushed non-team past cap+wait — trim the lowest.
-  const rows = db.prepare('SELECT id FROM pk_checkins WHERE run_date = ? ORDER BY sort_order ASC, id ASC').all(rd);
-  if (rows.length > PK_CAP + PK_WAIT) { const del = db.prepare('DELETE FROM pk_checkins WHERE id = ?'); for (const r of rows.slice(PK_CAP + PK_WAIT)) del.run(r.id); }
+  const rows = db.prepare('SELECT id FROM checkins WHERE run_date = ? AND program_id = 2 ORDER BY sort_order ASC, id ASC').all(rd);
+  if (rows.length > PK_CAP + PK_WAIT) { const del = db.prepare('DELETE FROM checkins WHERE id = ?'); for (const r of rows.slice(PK_CAP + PK_WAIT)) del.run(r.id); }
   return added;
 }
 // When a FLOOR player leaves, the next waitlister silently crosses onto the floor (pkPartition
@@ -4001,7 +3990,7 @@ function dropFromPickleball(email) {
   if (!email) return;
   const rd = pkRunDate();
   pkNotifyPromotion(rd, email);
-  db.prepare('DELETE FROM pk_checkins WHERE run_date = ? AND email = ?').run(rd, email);
+  db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = 2').run(rd, email);
 }
 // Weekly auto open/lock/ping for pickleball (runs on the shared 60s interval), keyed to the
 // standing Tuesday (pkRunDate). Check-in OPENS the moment the prior run ends (PK_END_H the
@@ -4059,15 +4048,15 @@ function pkGate(req, res) {
   return { a, admin, canOperate: admin }; // pickleball operator = admin for now (Daniel)
 }
 // Hoisted — pkEnsureWeek runs on every /runs + /pickleball GET, /pickleball/join, and the 60s tick.
-const stmtPkPastDates = db.prepare('SELECT DISTINCT run_date FROM pk_checkins WHERE run_date <= ?');
-const stmtPkArchiveIns = db.prepare('INSERT OR IGNORE INTO pk_attendance (run_date, email, name) VALUES (?,?,?)');
-const stmtPkDelCheckinsByDate = db.prepare('DELETE FROM pk_checkins WHERE run_date = ?');
-const stmtPkDelStateByDate = db.prepare('DELETE FROM pk_run_state WHERE run_date = ?');
-const stmtPkFloorForArchive = db.prepare('SELECT email, name FROM pk_checkins WHERE run_date = ? ORDER BY sort_order ASC, id ASC LIMIT ?');
-const stmtPkSweepState = db.prepare('DELETE FROM pk_run_state WHERE run_date < ?');
-const stmtPkSweepOptout = db.prepare('DELETE FROM pk_optout WHERE run_date < ?');
+const stmtPkPastDates = db.prepare('SELECT DISTINCT run_date FROM checkins WHERE program_id = 2 AND run_date <= ?');
+const stmtPkArchiveIns = db.prepare('INSERT OR IGNORE INTO attendance (run_date, email, name, program_id) VALUES (?,?,?,2)');
+const stmtPkDelCheckinsByDate = db.prepare('DELETE FROM checkins WHERE run_date = ? AND program_id = 2');
+const stmtPkDelStateByDate = db.prepare('DELETE FROM run_state WHERE run_date = ? AND program_id = 2');
+const stmtPkFloorForArchive = db.prepare('SELECT email, name FROM checkins WHERE run_date = ? AND program_id = 2 ORDER BY sort_order ASC, id ASC LIMIT ?');
+const stmtPkSweepState = db.prepare('DELETE FROM run_state WHERE run_date < ? AND program_id = 2');
+const stmtPkSweepOptout = db.prepare('DELETE FROM regular_optout WHERE run_date < ? AND program_id = 2');
 // Lazy rollover (mirrors basketball's ensureWeek): once an EXPLICIT pk_run_date passes, archive
-// the floor into pk_attendance, purge past rows, and revert to the default (next basketball date).
+// the floor into attendance (program 2), purge past rows, and revert to the default (next basketball date).
 function pkEnsureWeek() {
   const today = ymdLocal();
   const now = new Date();
@@ -4075,7 +4064,7 @@ function pkEnsureWeek() {
   // archived that same night and the cycle rolls forward, letting check-in reopen at 8 PM.
   const endedToday = now.getHours() >= PK_END_H ? today : null;
   const isPast = rd => rd < today || rd === endedToday;
-  // Archive + purge ANY finished pickleball run so the floor is recorded to pk_attendance
+  // Archive + purge ANY finished pickleball run so the floor is recorded to attendance (program 2)
   // and stale rows never accumulate.
   const pastDates = stmtPkPastDates.all(today).map(r => r.run_date).filter(isPast);
   for (const rd of pastDates) {
@@ -4143,12 +4132,12 @@ app.post('/pickleball/season', requireLogin, (req, res) => {
   // Clear rosters/state for pk runs between now and the opener — the pk twin of /admin/season's
   // cleanup. pk check-in auto-reopens + auto-seats renewers within a minute of each run ending,
   // so next Tuesday's roster is almost always populated; left in place, the next rollover archives
-  // that stranded roster into pk_attendance as phantom season-board credits. Only future runs.
+  // that stranded roster into attendance as phantom season-board credits. Only future runs.
   db.exec('BEGIN');
   try {
-    db.prepare('DELETE FROM pk_checkins WHERE run_date > ? AND run_date < ?').run(today, raw);
-    db.prepare('DELETE FROM pk_optout WHERE run_date > ? AND run_date < ?').run(today, raw);
-    db.prepare('DELETE FROM pk_run_state WHERE run_date > ? AND run_date < ?').run(today, raw);
+    db.prepare('DELETE FROM checkins WHERE run_date > ? AND run_date < ? AND program_id = 2').run(today, raw);
+    db.prepare('DELETE FROM regular_optout WHERE run_date > ? AND run_date < ? AND program_id = 2').run(today, raw);
+    db.prepare('DELETE FROM run_state WHERE run_date > ? AND run_date < ? AND program_id = 2').run(today, raw);
     // A stale explicit pk_run_date/base pointing into the gap would still render as "next run"
     // (pkRunDate's override branch is NOT season-gated) — clear it when it falls before the opener.
     const setRd = getSetting('pk_run_date'); if (setRd && setRd < raw) delSetting('pk_run_date');
@@ -4171,7 +4160,7 @@ app.post('/pickleball/confirm', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
   const rd = pkRunDate(), part = pkPartition(rd);
   if (part.floor.some(p => p.email === req.userEmail)) {
-    db.prepare("UPDATE pk_checkins SET confirmed_at = datetime('now') WHERE run_date = ? AND email = ? AND confirmed_at IS NULL").run(rd, req.userEmail);
+    db.prepare("UPDATE checkins SET confirmed_at = datetime('now') WHERE run_date = ? AND email = ? AND program_id = 2 AND confirmed_at IS NULL").run(rd, req.userEmail);
   }
   res.redirect('/pickleball');
 });
@@ -4184,13 +4173,13 @@ app.post('/pickleball/autorenew', requireLogin, (req, res) => {
   db.prepare('UPDATE program_membership SET auto_renew = ? WHERE program_id = 2 AND email = ?').run(on, req.userEmail);
   res.redirect('/pickleball');
 });
-// Pickleball season board — most pickleball runs this year, from pk_attendance. Member-gated.
+// Pickleball season board — most pickleball runs this year, from attendance (program 2). Member-gated.
 app.get('/pickleball/season', requireLogin, (req, res) => {
   const g = pkChatGate(req, res); if (!g) return; // members only (same bar as the chat)
   const me = req.userEmail;
-  const rows = db.prepare(`SELECT at.email, COUNT(*) n, ap.full_name FROM pk_attendance at
+  const rows = db.prepare(`SELECT at.email, COUNT(*) n, ap.full_name FROM attendance at
     LEFT JOIN applicants ap ON ap.email = at.email
-    WHERE at.run_date >= strftime('%Y-01-01','now') AND at.email NOT LIKE '%@guest.local'
+    WHERE at.program_id = 2 AND at.run_date >= strftime('%Y-01-01','now') AND at.email NOT LIKE '%@guest.local'
     GROUP BY at.email ORDER BY n DESC, at.email ASC`).all();
   const named = rows.map((r, i) => ({ rank: i + 1, name: r.full_name || 'Member', n: r.n, me: r.email.toLowerCase() === me.toLowerCase() }));
   const a = applicantByEmail(me);
@@ -4232,8 +4221,8 @@ app.post('/pickleball/join', requireLogin, (req, res) => {
   // basketball player could seat themselves as a ghost: on the floor but absent from the member
   // list, chat audience, and check-in-open pushes. Idempotent + guest-safe.
   pkJoinMembership(req.userEmail);
-  db.prepare('DELETE FROM pk_optout WHERE run_date = ? AND email = ?').run(rd, req.userEmail); // re-joining clears any sit-out
-  db.prepare('INSERT OR IGNORE INTO pk_checkins (run_date, email, name) VALUES (?,?,?)').run(rd, req.userEmail, g.a.full_name);
+  db.prepare('DELETE FROM regular_optout WHERE run_date = ? AND email = ? AND program_id = 2').run(rd, req.userEmail); // re-joining clears any sit-out
+  db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, program_id) VALUES (?,?,?,2)').run(rd, req.userEmail, g.a.full_name);
   res.redirect('/pickleball');
 });
 app.post('/pickleball/leave', requireLogin, (req, res) => {
@@ -4243,8 +4232,8 @@ app.post('/pickleball/leave', requireLogin, (req, res) => {
   // Record a sit-out for THIS week so an auto-renew member who leaves isn't re-seated by a
   // later pkSeatRenewers (manual re-open) — mirrors basketball's regular_optout. Cleared when
   // they re-join, and purged on weekly rollover, so their standing renewal resumes next week.
-  db.prepare('INSERT OR IGNORE INTO pk_optout (run_date, email) VALUES (?, ?)').run(rd, req.userEmail);
-  db.prepare('DELETE FROM pk_checkins WHERE run_date = ? AND email = ?').run(rd, req.userEmail);
+  db.prepare('INSERT OR IGNORE INTO regular_optout (run_date, email, program_id) VALUES (?, ?, 2)').run(rd, req.userEmail);
+  db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = 2').run(rd, req.userEmail);
   res.redirect('/pickleball');
 });
 app.post('/pickleball/open', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(); if (pkIsCancelled(rd)) return res.redirect('/pickleball'); /* un-cancel first — matches /checkin/open */ pkSetState(rd, 'is_open', 1); pkSeatRenewers(rd); res.redirect('/pickleball'); });
@@ -4252,7 +4241,7 @@ app.post('/pickleball/close', requireLogin, (req, res) => { const g = pkGate(req
 app.post('/pickleball/cancel', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball');
   const rd = pkRunDate(), on = req.body.on !== '0';
-  pkSetState(rd, 'cancelled', on); if (on) { pkSetState(rd, 'is_open', 0); db.prepare('DELETE FROM pk_checkins WHERE run_date = ?').run(rd); }
+  pkSetState(rd, 'cancelled', on); if (on) { pkSetState(rd, 'is_open', 0); db.prepare('DELETE FROM checkins WHERE run_date = ? AND program_id = 2').run(rd); }
   res.redirect('/pickleball');
 });
 app.post('/pickleball/date', requireLogin, (req, res) => {
@@ -4273,12 +4262,12 @@ app.post('/pickleball/date', requireLogin, (req, res) => {
     // and record the standing Tuesday this move consumes so it isn't resurrected as a phantom run.
     db.exec('BEGIN');
     try {
-      db.prepare('UPDATE pk_checkins SET run_date = ? WHERE run_date = ?').run(d, oldRd);
-      db.prepare('UPDATE OR IGNORE pk_optout SET run_date = ? WHERE run_date = ?').run(d, oldRd);
-      const st = db.prepare('SELECT is_open, cancelled FROM pk_run_state WHERE run_date = ?').get(oldRd);
+      db.prepare('UPDATE checkins SET run_date = ? WHERE run_date = ? AND program_id = 2').run(d, oldRd);
+      db.prepare('UPDATE OR IGNORE regular_optout SET run_date = ? WHERE run_date = ? AND program_id = 2').run(d, oldRd);
+      const st = db.prepare('SELECT is_open, cancelled FROM run_state WHERE run_date = ? AND program_id = 2').get(oldRd);
       if (st) {
-        db.prepare("INSERT INTO pk_run_state (run_date, is_open, cancelled) VALUES (?,?,?) ON CONFLICT(run_date) DO UPDATE SET is_open = excluded.is_open, cancelled = excluded.cancelled").run(d, st.is_open, st.cancelled);
-        db.prepare('DELETE FROM pk_run_state WHERE run_date = ?').run(oldRd);
+        db.prepare("INSERT INTO run_state (run_date, is_open, cancelled, program_id) VALUES (?,?,?,2) ON CONFLICT(run_date, program_id) DO UPDATE SET is_open = excluded.is_open, cancelled = excluded.cancelled").run(d, st.is_open, st.cancelled);
+        db.prepare('DELETE FROM run_state WHERE run_date = ? AND program_id = 2').run(oldRd);
       }
       for (const k of ['pk_autoopen_done', 'pk_autoping_done', 'pk_autolock_done']) if (getSetting(k) === oldRd) setSetting(k, d);
       setSetting('pk_run_date', d);
@@ -4300,20 +4289,20 @@ app.post('/pickleball/guest', requireLogin, (req, res) => {
     // Double-tap guard, same as basketball's /checkin/guest: each guest gets a fresh random
     // @guest.local email, so there's no UNIQUE to catch a re-post — two taps would silently
     // eat two floor spots.
-    if (db.prepare("SELECT 1 FROM pk_checkins WHERE run_date=? AND name=? AND created_at > datetime('now','-5 seconds')").get(rd, name + ' (guest)'))
+    if (db.prepare("SELECT 1 FROM checkins WHERE run_date=? AND name=? AND program_id = 2 AND created_at > datetime('now','-5 seconds')").get(rd, name + ' (guest)'))
       return res.redirect('/pickleball');
     const { rows } = pkPartition(rd);
     if (rows.length < PK_CAP + PK_WAIT) {
       const em = `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}@guest.local`;
-      db.prepare('INSERT INTO pk_checkins (run_date, email, name) VALUES (?,?,?)').run(rd, em, name + ' (guest)');
+      db.prepare('INSERT INTO checkins (run_date, email, name, program_id) VALUES (?,?,?,2)').run(rd, em, name + ' (guest)');
     }
   }
   res.redirect('/pickleball');
 });
-app.post('/pickleball/remove', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(), em = String(req.body.email || '').toLowerCase(); pkNotifyPromotion(rd, em); db.prepare('DELETE FROM pk_checkins WHERE run_date = ? AND email = ?').run(rd, em); res.redirect('/pickleball'); });
-app.post('/pickleball/bump', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(); if (pkIsCancelled(rd)) return res.redirect('/pickleball'); const row = db.prepare('SELECT MIN(sort_order) m FROM pk_checkins WHERE run_date = ?').get(rd); db.prepare('UPDATE pk_checkins SET sort_order = ? WHERE run_date = ? AND email = ?').run(((row && row.m) || 0) - 1, rd, String(req.body.email || '').toLowerCase()); res.redirect('/pickleball'); });
+app.post('/pickleball/remove', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(), em = String(req.body.email || '').toLowerCase(); pkNotifyPromotion(rd, em); db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = 2').run(rd, em); res.redirect('/pickleball'); });
+app.post('/pickleball/bump', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(); if (pkIsCancelled(rd)) return res.redirect('/pickleball'); const row = db.prepare('SELECT MIN(sort_order) m FROM checkins WHERE run_date = ? AND program_id = 2').get(rd); db.prepare('UPDATE checkins SET sort_order = ? WHERE run_date = ? AND email = ? AND program_id = 2').run(((row && row.m) || 0) - 1, rd, String(req.body.email || '').toLowerCase()); res.redirect('/pickleball'); });
 app.post('/pickleball/publish', requireAdmin, (req, res) => { db.prepare('UPDATE program SET active = ? WHERE id = 2').run(req.body.on === '0' ? 0 : 1); audit(req.userEmail, 'admin', req.body.on === '0' ? 'pk:hide' : 'pk:publish', ''); res.redirect('/pickleball'); });
-// Post a pickleball announcement — operator only. Stored on the isolated pk_announcements
+// Post a pickleball announcement — operator only. Stored in announcements (program 2)
 // table, pushed to pickleball members' phones (and emailed if SMTP is set), separate from
 // basketball announcements. Shown as a banner on the pickleball page.
 app.post('/pickleball/announce', requireLogin, (req, res) => {
@@ -4325,9 +4314,9 @@ app.post('/pickleball/announce', requireLogin, (req, res) => {
   // Same-body/same-author within 10s = a double-tap, not a second announcement. The 6-per-10-min
   // rate limit is far too coarse to catch it, and each duplicate costs every member a second
   // push AND a second email blast. Mirrors basketball's /announce guard.
-  if (db.prepare("SELECT 1 FROM pk_announcements WHERE body = ? AND author = ? AND created_at >= datetime('now','-10 seconds') LIMIT 1").get(body, author))
+  if (db.prepare("SELECT 1 FROM announcements WHERE program_id = 2 AND body = ? AND author = ? AND at >= datetime('now','-10 seconds') LIMIT 1").get(body, author))
     return res.redirect('/pickleball');
-  db.prepare('INSERT INTO pk_announcements (body, author) VALUES (?,?)').run(body, author);
+  db.prepare('INSERT INTO announcements (body, author, program_id) VALUES (?,?,2)').run(body, author);
   audit(req.userEmail, 'admin', 'pk:announce', body.slice(0, 60));
   // Push is the always-on app-native channel (every pk member's phone), independent of email.
   setImmediate(() => sendPush(pkMemberEmails(), { title: 'Pickleball announcement', body: body.slice(0, 140), url: '/pickleball', tag: 'pkann' }));
@@ -4346,7 +4335,7 @@ app.post('/pickleball/announce', requireLogin, (req, res) => {
 app.post('/pickleball/announce/retract', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball');
   const cur = latestPkAnnouncement();
-  if (cur) { db.prepare('UPDATE pk_announcements SET archived = 1 WHERE id = ?').run(cur.id); audit(req.userEmail, 'admin', 'pk:announce:retract', String(cur.id)); }
+  if (cur) { db.prepare('UPDATE announcements SET archived = 1 WHERE id = ? AND program_id = 2').run(cur.id); audit(req.userEmail, 'admin', 'pk:announce:retract', String(cur.id)); }
   res.redirect('/pickleball');
 });
 
