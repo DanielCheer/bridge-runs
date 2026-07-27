@@ -130,22 +130,23 @@ window.addEventListener('pagereveal',function(e){
 window.__composing=function(){var ae=document.activeElement;if(ae&&/^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)&&(ae.type||'')!=='hidden')return true;var f=document.querySelectorAll('textarea,input');for(var i=0;i<f.length;i++){var t=(f[i].type||'text').toLowerCase();if(t==='hidden'||t==='checkbox'||t==='radio'||t==='submit'||t==='button'||t==='file'||t==='date'||t==='time'||t==='datetime-local'||t==='month'||t==='week')continue;if(f[i].value&&f[i].value.trim())return true;}if(document.querySelector('details.announce-compose[open]'))return true;return false;};
 // Patch the DM (Profile tab) + group (Chat tab) unread badges in place every poll
 // tick — no reload needed to keep them fresh. Also toggles the hero group-chat dot.
-window.__patchBadges=function(dm,group,gm,ann,pkgroup,pkgm){try{
+window.__patchBadges=function(d){try{d=d||{};var chats=d.chats||{};
+  // Look up a chat element's unread from the poll's program-keyed map via its data-chat-program.
+  function counts(el){var id=el&&el.getAttribute('data-chat-program');var c=id&&chats[id];return c?{u:c.u||0,m:c.m||0}:{u:0,m:0};}
   function setTab(key,n,mention){var a=document.querySelector('.tabs a[data-tab="'+key+'"]');if(!a)return;var b=a.querySelector('.tabbadge');
     if(n>0){var t=(mention>0?'@':'')+(n>9?'9+':String(n));if(!b){b=document.createElement('span');b.className='tabbadge';a.appendChild(b);}b.textContent=t;b.className='tabbadge'+(mention>0?' mention':'');}
     else if(b){b.parentNode.removeChild(b);}}
-  // The Chat tab is run-aware: if it currently points at pickleball chat, badge it with the
-  // pickleball counts; otherwise the basketball counts. Keeps the live badge honest per run.
-  var ct=document.querySelector('.tabs a[data-tab="chat"]'), pk=ct&&ct.getAttribute('href')==='/pickleball/chat';
-  setTab('chat', pk?(pkgroup||0):group, pk?(pkgm||0):gm); setTab('profile',dm,0);
-  var hchat=document.querySelector('.hchat');if(hchat){var d=hchat.querySelector('.hdot');
-    var hg=(hchat.getAttribute('href')==='/pickleball/chat')?(pkgroup||0):group; // pk hero dot uses pk unread
-    if(hg>0){if(!d){d=document.createElement('span');d.className='hdot';d.setAttribute('aria-hidden','true');hchat.appendChild(d);}}else if(d){d.parentNode.removeChild(d);}}
+  // The Chat tab is run-aware: it carries data-chat-program, so badge it with THAT program's
+  // unread from the map. Works for any number of runs — no per-program branch here.
+  var ct=document.querySelector('.tabs a[data-tab="chat"]'), cc=counts(ct);
+  setTab('chat', cc.u, cc.m); setTab('profile', d.dm||0, 0);
+  var hchat=document.querySelector('.hchat');if(hchat){var dot=hchat.querySelector('.hdot');var hg=counts(hchat).u; // hero dot uses its own program's unread
+    if(hg>0){if(!dot){dot=document.createElement('span');dot.className='hdot';dot.setAttribute('aria-hidden','true');hchat.appendChild(dot);}}else if(dot){dot.parentNode.removeChild(dot);}}
   // Masthead announcement bell dot — toggled live from the poll ann unread flag.
   var bell=document.querySelector('.bellbtn');if(bell){var bd=bell.querySelector('.belldot');
-    if(ann>0){if(!bd){bd=document.createElement('span');bd.className='belldot';bd.setAttribute('aria-hidden','true');bell.appendChild(bd);}}else if(bd){bd.parentNode.removeChild(bd);}}
-  // Home-screen app-icon badge (installed PWA, iOS 16.4+): total unread across DM+chat.
-  if(navigator.setAppBadge){var tot=(dm||0)+(group||0);
+    if((d.ann||0)>0){if(!bd){bd=document.createElement('span');bd.className='belldot';bd.setAttribute('aria-hidden','true');bell.appendChild(bd);}}else if(bd){bd.parentNode.removeChild(bd);}}
+  // Home-screen app-icon badge (installed PWA, iOS 16.4+): DM + basketball chat unread.
+  if(navigator.setAppBadge){var c1=chats[1]||{};var tot=(d.dm||0)+(c1.u||0);
     if(tot>0)navigator.setAppBadge(tot).catch(function(){});
     else if(navigator.clearAppBadge)navigator.clearAppBadge().catch(function(){});}
 }catch(e){}};
@@ -199,7 +200,7 @@ window.__poll=function(page,onChange){
     if(window.__pollResetLast){last=null;window.__pollResetLast=false;}
     fetch('/poll?page='+encodeURIComponent(pg),{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}})
       .then(function(r){if(!r.ok)throw 0;return r.json();})
-      .then(function(d){fails=0;window.__patchBadges(d.dm,d.group,d.gm,d.ann,d.pkgroup,d.pkgm);
+      .then(function(d){fails=0;window.__patchBadges(d);
         if(d.v&&window.__ver&&d.v!==window.__ver&&(!window.__composing||!window.__composing())){window.__reload();return;}
         if(last!==null&&d.f!==last){try{if(window.__pollOnChange)window.__pollOnChange();}catch(e){}}
         last=d.f;})
@@ -1237,18 +1238,28 @@ const mentionAutocompleteJS = () => `
 // /pickleball/chat and its badge reflects the counts the caller passes; program 1
 // (default, basketball) points at /chat. The caller always passes the counts (group/
 // groupMention) for whichever chat the tab points to, so the badge logic stays uniform.
-// data-tab lets the live poll patch the right tab regardless of its (varying) href.
+// Program presentation metadata (id → { chat, season, seasonLabel }) injected by the server
+// at boot (setProgramMeta) so views render run-aware links WITHOUT hardcoding paths — the
+// server's PROGRAMS registry is the single source of truth. The seed default keeps program 1
+// working if a render somehow beats hydration (it never does at request time).
+let PROGRAM_META = { 1: { chat: '/chat', season: '/season', seasonLabel: 'Season board' } };
+export function setProgramMeta(meta) { if (meta && meta[1]) PROGRAM_META = meta; }
+const progMeta = (id) => PROGRAM_META[id] || PROGRAM_META[1];
+// data-tab lets the live poll patch the right tab regardless of its (varying) href; the Chat
+// tab also carries data-chat-program so the poll patcher knows which program's unread to show.
 const tabNav = (current, { dm = 0, group = 0, groupMention = 0, program = 1 } = {}) => {
-  const tab = (href, key, label, extra = '') => `<a href="${href}" data-tab="${key}" class="tab${current === key ? ' on' : ''}">${ICON[key]}${label}${extra}</a>`;
+  const tab = (href, key, label, extra = '', attrs = '') => `<a href="${href}" data-tab="${key}"${attrs} class="tab${current === key ? ' on' : ''}">${ICON[key]}${label}${extra}</a>`;
   // groupMention > 0 → a DISTINCT "@" marker (teal) instead of the plain orange count,
   // so a mentioned player can tell "you were tagged" from ordinary unread at a glance.
   const badge = (n, mention = 0) => n > 0
     ? `<span class="tabbadge${mention > 0 ? ' mention' : ''}">${mention > 0 ? '@' : ''}${n > 9 ? '9+' : n}</span>`
     : '';
-  const chatHref = program === 2 ? '/pickleball/chat' : '/chat';
+  // The Chat tab is run-aware: its href + which program's unread it shows both come from the
+  // program registry, so a third run needs no new branch here — just a registry entry.
+  const chatHref = progMeta(program).chat;
   return `<nav class="tabs"><div class="tabrow">
     ${tab('/runs', 'runs', 'Runs')}
-    ${tab(chatHref, 'chat', 'Chat', badge(group, groupMention))}
+    ${tab(chatHref, 'chat', 'Chat', badge(group, groupMention), ` data-chat-program="${program}"`)}
     ${tab('/profile', 'profile', 'Profile', badge(dm))}
   </div></nav>`;
 };
@@ -2031,7 +2042,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
   // ----- hero "Group chat" button (beside the Run pill; links to the Chat tab
   //       where the Run Chat lives). Small unread dot when group unread > 0. -----
   const chatBtn = canPlay
-    ? `<a class="hchat" href="/chat" aria-label="Group chat${groupUnread > 0 ? `, ${groupUnread} unread` : ''}">
+    ? `<a class="hchat" href="/chat" data-chat-program="1" aria-label="Group chat${groupUnread > 0 ? `, ${groupUnread} unread` : ''}">
         <span class="hci">${GROUP_ICON}</span>Group chat${groupUnread > 0 ? '<span class="hdot" aria-hidden="true"></span>' : ''}
       </a>`
     : '';
@@ -2591,7 +2602,7 @@ export function pickleballPage({ email, runDate = '', runLabel = '', hours = '6�
   // ----- teal scoreboard hero (mirrors the basketball check-in hero) -----
   // "Group chat" button beside the Run pill — links to the Pickleball chat tab; small
   // unread dot when group unread > 0.
-  const chatBtn = `<a class="hchat" href="/pickleball/chat" aria-label="Group chat${groupUnread > 0 ? `, ${groupUnread} unread` : ''}">
+  const chatBtn = `<a class="hchat" href="/pickleball/chat" data-chat-program="2" aria-label="Group chat${groupUnread > 0 ? `, ${groupUnread} unread` : ''}">
         <span class="hci">${GROUP_ICON}</span>Group chat${groupUnread > 0 ? '<span class="hdot" aria-hidden="true"></span>' : ''}
       </a>`;
   // Operator "Add a guest" — sits on the RIGHT of the Checked-in / Waitlist row.
@@ -2869,7 +2880,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
         <div class="d">Games attended · Member since ${esc(memberSince)}<br>${stats.season} this season · ${stats.streak}-run streak${a.is_host ? ' · ★ Host' : ''}</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
-        <a class="btn ghost sm" href="${chatProgram === 2 ? '/pickleball/season' : '/season'}">🏆 ${chatProgram === 2 ? 'Pickleball season' : 'Season board'}</a>
+        <a class="btn ghost sm" href="${progMeta(chatProgram).season}">🏆 ${esc(progMeta(chatProgram).seasonLabel)}</a>
       </div>
       ${(stats.dates && stats.dates.length) ? `<details style="margin-top:10px">
         <summary style="cursor:pointer;font-size:13px;color:var(--muted)">Run history · ${stats.dates.length}</summary>

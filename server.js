@@ -20,7 +20,7 @@ import {
 } from './auth.js';
 import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, logoutPage, APP_JS,
-  chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap,
+  chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap, setProgramMeta,
   STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage, runsPage, pkChatPage, pkJoinPage, waiverPage,
 } from './views.js';
 
@@ -1061,22 +1061,37 @@ function pkChatGate(req, res, json) {
   return g;
 }
 
-// Remember the last run the viewer opened (1 = basketball, 2 = pickleball) so the
-// program-neutral pages (Runs hub, Profile) point their run-aware Chat tab at the right
-// room. A lightweight UNSIGNED preference cookie (not identity) — read only for tab routing.
+// ---------- PROGRAM REGISTRY ----------
+// Every run (basketball, pickleball, …) is one entry in this in-memory map, hydrated at boot
+// (buildPrograms(), defined below once the engine functions exist) from the `program` table
+// + the per-program presentation/dispatch in PROGRAM_DEFS. This registry is the ONLY thing
+// the cookie, unread counts, runs hub, /poll, and back-links read — no code hardcodes
+// "program 1 vs 2" anymore, so a new run is a new registry entry, not a new `=== 2 ?` branch.
+// Phase 1: each entry still dispatches to today's basketball / pickleball functions; a later
+// phase folds the two DEFS into one config-driven engine. Insertion order = ascending id
+// (deterministic hub / poll output). Each entry: { id, key, emoji, displayName, paths,
+// seasonLabel, active():bool, unread(email,aid):{group,gm}, hubCard(req):{…dynamic card…} }.
+const PROGRAMS = new Map();
+const P = (id) => PROGRAMS.get(Number(id)) || PROGRAMS.get(1);   // unknown/stale id → the default run (basketball)
+
+// Remember the last run the viewer opened, as its numeric program id (1 = basketball). A
+// lightweight UNSIGNED preference cookie (not identity) — read only for run-aware tab routing.
 function setRunCookie(req, res, program) {
   if (req.headers['x-prewarm'] === '1') return; // a router prewarm isn't a real visit — don't flip context
   try { res.cookie('bridge_run', String(program), { httpOnly: true, sameSite: 'lax', maxAge: 180 * 24 * 60 * 60 * 1000, path: '/' }); } catch {}
 }
-// Only treat the cookie as pickleball when the run is actually live — otherwise a stale
-// (or unpublished-since) bridge_run=2 would point the Chat tab at a route pkGate now 404s.
-function runCookie(req) { return req.cookies && req.cookies.bridge_run === '2' && pkProgramActive() ? 2 : 1; }
-// The chat unread badge for whichever program the viewer is currently "in" — used on the
-// neutral pages so the Chat tab badge matches the room it will open.
+// The program the viewer is currently "in", from the cookie. Only honored when that program
+// EXISTS and is LIVE — otherwise a stale / unpublished-since id would point the Chat tab at a
+// route its gate now 404s. Defaults to program 1 (basketball, always live).
+function runCookie(req) {
+  const id = Number(req.cookies && req.cookies.bridge_run);
+  const p = PROGRAMS.get(id);
+  return (id > 1 && p && p.active()) ? id : 1;
+}
+// The chat unread counts for a given program — used on the neutral pages so the run-aware
+// Chat tab badge matches the room it will open. Delegates to that program's dispatch.
 function chatCountsFor(program, email, aid) {
-  return program === 2
-    ? { group: pkGroupUnread(email), gm: pkGroupMentionUnread(email, aid) }
-    : { group: groupUnread(email), gm: groupMentionUnread(email, aid) };
+  return P(program).unread(email, aid);
 }
 
 // The SINGLE authorization seam for messaging. Host-only in v1: a player may
@@ -1850,28 +1865,12 @@ app.get('/runs', requireLogin, (req, res) => {
   const status = a?.status || 'none';
   const canJoin = viewerIsAdmin || status === 'approved';
   const runs = [];
-
-  // Basketball (program 1) — always listed.
-  const bb = loadRun(req);
-  runs.push({
-    key: 'basketball', emoji: '🏀', name: 'Basketball', href: '/checkin',
-    runDate: bb.runDate, dateLabel: runLabelFor(bb.runDate), timeLabel: runTimeRange(bb.runDate),
-    going: bb.inPlayers.length + bb.offeredPlayers.length, cap: CAP,
-    status: runIsCancelled(bb.runDate) ? 'cancelled' : (runIsOpen(bb.runDate) ? 'open' : 'closed'),
-    hidden: false,
-  });
-
-  // Pickleball (program 2) — admins always; members only when live.
-  if (viewerIsAdmin || pkProgramActive()) {
-    pkEnsureWeek();
-    const rd = pkRunDate(), part = pkPartition(rd);
-    runs.push({
-      key: 'pickleball', emoji: '🥒', name: 'Pickleball', href: '/pickleball',
-      runDate: rd, dateLabel: runLabelFor(rd), timeLabel: pkTimeRange(),
-      going: part.floor.length, cap: PK_CAP,
-      status: pkIsCancelled(rd) ? 'cancelled' : (pkIsOpen(rd) ? 'open' : 'closed'),
-      hidden: !pkProgramActive(),
-    });
+  // Every registered run, in id order: live ones are always listed; a hidden run (not yet
+  // published) shows to admins only, with a lock badge. Each card's dynamic fields come from
+  // that program's own dispatch (basketball / pickleball engine today) — no hardcoded pushes.
+  for (const p of PROGRAMS.values()) {
+    if (!p.active() && !viewerIsAdmin) continue;
+    runs.push({ key: p.key, emoji: p.emoji, name: p.displayName, href: p.paths.run, ...p.hubCard(req) });
   }
 
   const chatProgram = runCookie(req);
@@ -2026,9 +2025,16 @@ app.get('/poll', requireLogin, (req, res) => {
     f = `${m.mx || 0}:${m.c || 0}`;
   }
   const aid = applicantIdOf(email);
-  const pkOn = pkProgramActive(); // skip the pk unread queries on every 10s tick while the run is hidden
-  res.json({ f, dm: unreadCount(email), group: groupUnread(email), gm: groupMentionUnread(email, aid),
-    pkgroup: pkOn ? pkGroupUnread(email) : 0, pkgm: pkOn ? pkGroupMentionUnread(email, aid) : 0,
+  // Program-keyed chat unread map: the client reads data-chat-program off the Chat tab / hero
+  // and looks up its counts here, so the badges work for any number of runs. Only LIVE programs
+  // contribute (a hidden run shows no badge — matches the old pkOn gate). The old scalar fields
+  // (group/gm/pkgroup/pkgm) are DUAL-EMITTED for one release so a stale cached client keeps
+  // working until its next 10s poll force-reloads it on the BUILD_VER bump.
+  const chats = {};
+  for (const p of PROGRAMS.values()) { if (!p.active()) continue; const u = p.unread(email, aid); chats[p.id] = { u: u.group, m: u.gm }; }
+  const c1 = chats[1] || { u: 0, m: 0 }, c2 = chats[2] || { u: 0, m: 0 };
+  res.json({ f, dm: unreadCount(email), chats,
+    group: c1.u, gm: c1.m, pkgroup: c2.u, pkgm: c2.m,          // legacy — dual-emit for stale clients (drop next release)
     ann: announcementUnread(email) ? 1 : 0, v: BUILD_VER });
 });
 
@@ -2060,7 +2066,7 @@ app.get('/u/:id', requireLogin, (req, res) => {
     p, stats: attendanceStats(p.email), isSelf: p.email === req.userEmail, canContact,
     runDate: nextRunDate(),
     hours: runTimeRange(nextRunDate()),
-    back: runCookie(req) === 2 ? '/pickleball/chat' : '/chat', // Back returns to the run you came from (pk vs bball)
+    back: P(runCookie(req)).paths.chat, // Back returns to the run you came from (its own chat room)
     dmUnread: unreadCount(req.userEmail), groupUnread: groupUnread(req.userEmail),
     groupMention: groupMentionUnread(req.userEmail, gate.a ? gate.a.id : 0),
     ann: annPanel(req.userEmail),
@@ -4361,6 +4367,63 @@ process.on('unhandledRejection', (reason) => {
 process.on('uncaughtException', (err) => {
   console.error('[uncaughtException]', (err && err.stack) || err);
 });
+
+// ---------- PROGRAM REGISTRY HYDRATION ----------
+// Per-program presentation + engine dispatch. Phase 1: each entry still routes to today's
+// basketball / pickleball functions — the registry exists so nothing hardcodes "1 vs 2". A
+// later phase folds these two DEFS into a single config-driven engine (config_json /
+// program_settings land with that schema work, when there's a real consumer + editor).
+const PROGRAM_DEFS = {
+  1: {
+    key: 'basketball', emoji: '🏀', displayName: 'Basketball', alwaysActive: true,
+    paths: { run: '/checkin', chat: '/chat', season: '/season' }, seasonLabel: 'Season board',
+    unread: (email, aid) => ({ group: groupUnread(email), gm: groupMentionUnread(email, aid) }),
+    hubCard: (req) => {
+      const bb = loadRun(req);
+      return {
+        runDate: bb.runDate, dateLabel: runLabelFor(bb.runDate), timeLabel: runTimeRange(bb.runDate),
+        going: bb.inPlayers.length + bb.offeredPlayers.length, cap: CAP,
+        status: runIsCancelled(bb.runDate) ? 'cancelled' : (runIsOpen(bb.runDate) ? 'open' : 'closed'),
+        hidden: false,
+      };
+    },
+  },
+  2: {
+    key: 'pickleball', emoji: '🥒', displayName: 'Pickleball',
+    paths: { run: '/pickleball', chat: '/pickleball/chat', season: '/pickleball/season' }, seasonLabel: 'Pickleball season',
+    unread: (email, aid) => ({ group: pkGroupUnread(email), gm: pkGroupMentionUnread(email, aid) }),
+    hubCard: () => {
+      pkEnsureWeek();
+      const rd = pkRunDate(), part = pkPartition(rd);
+      return {
+        runDate: rd, dateLabel: runLabelFor(rd), timeLabel: pkTimeRange(),
+        going: part.floor.length, cap: PK_CAP,
+        status: pkIsCancelled(rd) ? 'cancelled' : (pkIsOpen(rd) ? 'open' : 'closed'),
+        hidden: !pkProgramActive(),
+      };
+    },
+  },
+};
+const stmtProgActiveById = db.prepare('SELECT active FROM program WHERE id = ?');
+function buildPrograms() {
+  PROGRAMS.clear();
+  for (const row of db.prepare('SELECT * FROM program ORDER BY id').all()) {
+    const def = PROGRAM_DEFS[row.id];
+    if (!def) continue; // only runs with a known engine are mounted this phase (Phase 3 generalizes)
+    PROGRAMS.set(row.id, {
+      id: row.id, key: def.key, emoji: def.emoji, displayName: def.displayName,
+      paths: def.paths, seasonLabel: def.seasonLabel,
+      active: def.alwaysActive ? (() => true) : (() => !!(stmtProgActiveById.get(row.id) || {}).active),
+      unread: def.unread, hubCard: def.hubCard,
+    });
+  }
+  // Hand the view layer the presentation subset so it renders run-aware links (Chat tab href,
+  // season link) without hardcoding paths — the server is the single source of program truth.
+  const meta = {};
+  for (const [id, p] of PROGRAMS) meta[id] = { chat: p.paths.chat, season: p.paths.season, seasonLabel: p.seasonLabel };
+  setProgramMeta(meta);
+}
+buildPrograms();
 
 app.listen(PORT, () => {
   console.log(`\nThe Bridge Adv Runs → http://localhost:${PORT}`);
