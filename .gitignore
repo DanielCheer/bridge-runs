@@ -9,6 +9,8 @@ backups/
 public/chat-media/
 public/avatars/
 _predesign_backup/
+# private licensing/strategy docs (NDA, term sheet, feature spec, deal plan) — must NOT travel with the code
+docs/
 
 # stray db from a DB_PATH-unset node invocation
 undefined
