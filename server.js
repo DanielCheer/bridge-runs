@@ -4366,6 +4366,18 @@ const PROGRAM_DEFS = {
   1: {
     key: 'basketball', emoji: '🏀', displayName: 'Basketball', alwaysActive: true,
     paths: { run: '/checkin', chat: '/chat', season: '/season' }, seasonLabel: 'Season board',
+    // Per-program config (Phase 3a foundation): the single source the unified engine will read
+    // so a new run = a config row, not cloned code. Capacities are HOST-EDITABLE at runtime
+    // (app_settings via reloadRunSettings), so they're getters — a snapshot would go stale on the
+    // next Council settings save. Nothing consumes this yet (0-diff); the engine merge wires it in.
+    config: {
+      get cap() { return CAP; }, get waitlist() { return WAITLIST_CAP; }, get prereg() { return PREREG_CAP; },
+      dow: RUN_DOW, start: DEFAULT_START, end: DEFAULT_END,          // Wed 8:30–10:30 PM
+      openDaysBefore: OPEN_DAYS_BEFORE, openHour: OPEN_H, lockTime: '14:00',
+      theme: 'default', access: 'apply', approval: 'council',
+      tiers: ['team', 'core', 'host'], offerWindow: true,
+      features: { teams: false, groupQueue: false },
+    },
     unread: (email, aid) => ({ group: groupUnread(email), gm: groupMentionUnread(email, aid) }),
     hubCard: (req) => {
       const bb = loadRun(req);
@@ -4380,6 +4392,16 @@ const PROGRAM_DEFS = {
   2: {
     key: 'pickleball', emoji: '🥒', displayName: 'Pickleball',
     paths: { run: '/pickleball', chat: '/pickleball/chat', season: '/pickleball/season' }, seasonLabel: 'Pickleball season',
+    // Pickleball config: fixed cap/waitlist (not host-editable today), own Tue schedule, teal 'pk'
+    // theme, opt-in access, team-only tier (no core). Matches today's PK_* constants exactly.
+    config: {
+      cap: PK_CAP, waitlist: PK_WAIT, prereg: 0,
+      dow: PK_DOW, startHour: PK_START_H, endHour: PK_END_H,         // Tue 6–8 PM
+      pingHour: PK_PING_H, pingDowOffset: PK_PING_DOW_OFFSET, lockTime: PK_LOCK,
+      theme: 'pk', access: 'opt-in', approval: 'invite',
+      tiers: ['team', 'host'], offerWindow: false,
+      features: { teams: false, groupQueue: false },
+    },
     unread: (email, aid) => ({ group: pkGroupUnread(email), gm: pkGroupMentionUnread(email, aid) }),
     hubCard: () => {
       pkEnsureWeek();
@@ -4401,7 +4423,7 @@ function buildPrograms() {
     if (!def) continue; // only runs with a known engine are mounted this phase (Phase 3 generalizes)
     PROGRAMS.set(row.id, {
       id: row.id, key: def.key, emoji: def.emoji, displayName: def.displayName,
-      paths: def.paths, seasonLabel: def.seasonLabel,
+      paths: def.paths, seasonLabel: def.seasonLabel, config: def.config,
       active: def.alwaysActive ? (() => true) : (() => !!(stmtProgActiveById.get(row.id) || {}).active),
       unread: def.unread, hubCard: def.hubCard,
     });
