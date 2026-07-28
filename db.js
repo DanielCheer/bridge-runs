@@ -472,11 +472,26 @@ for (const t of ['checkins', 'run_state', 'run_overrides', 'regular_optout', 'at
 // program_membership.auto_renew — a member's self-service weekly auto-add flag (generic table).
 const pmCols = db.prepare('PRAGMA table_info(program_membership)').all().map(c => c.name);
 if (pmCols.length && !pmCols.includes('auto_renew')) db.exec('ALTER TABLE program_membership ADD COLUMN auto_renew INTEGER NOT NULL DEFAULT 0');
+// Auto-renew penalty (Phase 5.5): consecutive-flake strike counter + a hard-pause window (YYYY-MM-DD) + last-strike date.
+if (pmCols.length && !pmCols.includes('ar_strikes')) db.exec('ALTER TABLE program_membership ADD COLUMN ar_strikes INTEGER NOT NULL DEFAULT 0');
+if (pmCols.length && !pmCols.includes('ar_paused_until')) db.exec('ALTER TABLE program_membership ADD COLUMN ar_paused_until TEXT');
+if (pmCols.length && !pmCols.includes('ar_strike_at')) db.exec('ALTER TABLE program_membership ADD COLUMN ar_strike_at TEXT');
 
 // One-time, versioned, all-or-nothing schema migration. Runs here — after every CREATE/ALTER
 // (so the generic tables + their program_id columns exist) and before the app serves a request.
 // A no-op once PRAGMA user_version >= 2; on failure it rolls back and the old db is untouched.
 migrateToPhase2(db);
+
+// Auto-renew penalty (Phase 5.5): auto_seated marks a checkins row as an auto-renew AUTO-SEAT (vs a
+// self-join) — only auto-seated no-shows/late-leaves strike a standing renewal. Added AFTER
+// migrateToPhase2 ON PURPOSE: that migration REBUILDS checkins with a fixed column list, so a column
+// added before it would be dropped by the rebuild (checkins/attendance/run_state/regular_optout/
+// group_reads are all rebuilt — additive columns on them must come after). program_membership isn't
+// rebuilt, so the ar_* ALTERs above sit before fine.
+{
+  const cc = db.prepare('PRAGMA table_info(checkins)').all().map(c => c.name);
+  if (!cc.includes('auto_seated')) db.exec('ALTER TABLE checkins ADD COLUMN auto_seated INTEGER NOT NULL DEFAULT 0');
+}
 
 // Prune stale magic-link tokens on startup. A token is dead once it's been used
 // OR has expired — keeping them forever just grows the table unbounded (a fresh

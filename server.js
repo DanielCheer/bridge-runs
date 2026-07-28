@@ -3986,9 +3986,9 @@ function pkEmailRecipients() { return programEmailRecipients(2); }
 // opt-out gate EVERY seat path — the auto-seat waiver hole, closed once, must not reopen generically.
 function seatRenewers(programId, rd) {
   if (!rd) return 0;
-  const cfg = P(programId).config, total = cfg.cap + cfg.waitlist;
-  const insTeam = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, sort_order, program_id) VALUES (?,?,?,?,?)');
-  const insR = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, program_id) VALUES (?,?,?,?)');
+  const cfg = P(programId).config, total = cfg.cap + cfg.waitlist, today = ymdLocal();
+  const insTeam = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, sort_order, program_id, auto_seated) VALUES (?,?,?,?,?,1)');
+  const insR = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, program_id, auto_seated) VALUES (?,?,?,?,1)');
   let team = [], nonTeam = [];
   if (cfg.autoRenew.from === 'members') {
     const renewers = db.prepare(`SELECT pm.email, a.full_name, COALESCE(a.is_team,0) AS is_team
@@ -3996,7 +3996,8 @@ function seatRenewers(programId, rd) {
       WHERE pm.program_id = ? AND pm.auto_renew = 1 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local'
         AND COALESCE(a.suspended,0) = 0 AND COALESCE(a.waiver_ok,0) = 1
         AND NOT EXISTS (SELECT 1 FROM regular_optout o WHERE o.run_date = ? AND o.email = pm.email AND o.program_id = ?)
-      ORDER BY a.id`).all(programId, rd, programId);
+        AND (pm.ar_paused_until IS NULL OR pm.ar_paused_until <= ?)
+      ORDER BY a.id`).all(programId, rd, programId, today);
     team = renewers.filter(r => r.is_team); nonTeam = renewers.filter(r => !r.is_team);
   } else { // 'team' — only the org team auto-renews (basketball); opt-out checked per-row (matches autoJoinTeam)
     const optedOut = db.prepare('SELECT 1 FROM regular_optout WHERE run_date = ? AND email = ? AND program_id = ?');
