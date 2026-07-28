@@ -3834,28 +3834,36 @@ function pkPartition(rd) { return partitionFor(2, rd); }
 function pkStartEpoch(rd) { return rd ? new Date(rd + `T${String(PK_START_H).padStart(2, '0')}:00:00`).getTime() : 0; }
 // Latest LIVE pickleball announcement (program 2 rows in the shared announcements table; retracted ones archived).
 function latestPkAnnouncement() { return stmtLatestPkAnnouncement.get() || null; }
-// Pickleball MEMBERSHIP: you become a pickleball member by opening the run (GET /pickleball) —
-// tracked in program_membership (program 2). Chat access, the members list, and the push
-// audience all read from this, so being an approved BASKETBALL player alone doesn't grant it.
-function pkJoinMembership(email) {
+// ---------- PROGRAM MEMBERSHIP + AUDIENCE (program-generic) ----------
+// Opt-in programs (pickleball, volleyball) track membership in program_membership; chat access, the
+// members list, and the push/email audiences all read from it. One set of helpers keyed by program
+// id; the pk* names below stay thin wrappers so call sites are untouched (a new program reuses them
+// by passing its id).
+function joinProgramMembership(programId, email) {
   if (!email || /@guest\.local$/.test(email)) return;
-  db.prepare("INSERT OR IGNORE INTO program_membership (program_id, email, status, role) VALUES (2, ?, 'approved', 'approved')").run(email);
+  db.prepare("INSERT OR IGNORE INTO program_membership (program_id, email, status, role) VALUES (?, ?, 'approved', 'approved')").run(programId, email);
 }
-function pkIsMember(email) {
+function memberOf(programId, email) {
   if (!email) return false;
   if (isAdmin(email)) return true; // admins operate the run — always members
-  return !!db.prepare('SELECT 1 FROM program_membership WHERE program_id = 2 AND email = ?').get(email);
+  return !!db.prepare('SELECT 1 FROM program_membership WHERE program_id = ? AND email = ?').get(programId, email);
 }
-// Push/announce audience = actual pickleball members (approved, non-guest). Not the whole club.
-function pkMemberEmails() {
+// Push/announce audience = actual members (approved, non-guest). Not the whole club.
+function programMemberEmails(programId) {
   return db.prepare(`SELECT pm.email FROM program_membership pm JOIN applicants a ON a.email = pm.email
-    WHERE pm.program_id = 2 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local'`).all().map(r => r.email);
+    WHERE pm.program_id = ? AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local'`).all(programId).map(r => r.email);
 }
-// Email audience = pickleball members who haven't opted out of announcement emails.
-function pkEmailRecipients() {
+// Email audience = members who haven't opted out of announcement emails.
+function programEmailRecipients(programId) {
   return db.prepare(`SELECT pm.email FROM program_membership pm JOIN applicants a ON a.email = pm.email
-    WHERE pm.program_id = 2 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local' AND COALESCE(a.email_optout,0) = 0`).all().map(r => r.email);
+    WHERE pm.program_id = ? AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local' AND COALESCE(a.email_optout,0) = 0`).all(programId).map(r => r.email);
 }
+// You become a pickleball member by opening the run (GET /pickleball) — being an approved
+// BASKETBALL player alone doesn't grant it.
+function pkJoinMembership(email) { return joinProgramMembership(2, email); }
+function pkIsMember(email) { return memberOf(2, email); }
+function pkMemberEmails() { return programMemberEmails(2); }
+function pkEmailRecipients() { return programEmailRecipients(2); }
 // ---------- UNIFIED SEATING ENGINE (Phase 3c) ----------
 // Seat a program's auto-renew members onto the floor for run `rd` (idempotent). ONE engine for
 // every run — it reads P(id).config for the caps + the auto-renew ELIGIBILITY MODEL, so a new run
