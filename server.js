@@ -2912,38 +2912,16 @@ app.post('/checkin/promote', requireApprover, (req, res) => {
   res.redirect('/checkin');
 });
 
+// Basketball's auto-renew team seating, now on the unified engine (Phase 3c). Keeps its
+// root-cause guard — never re-seat a cancelled run (floor cleared) or a locked one (past 2 PM,
+// roster set) so no caller (optin/autorenew/open/rollover) re-populates — then delegates to
+// seatRenewers, which reads P(1).config.autoRenew.from='team': only the org team
+// (applicants.is_team, approved, auto_renew, waiver_ok, not-suspended, not-opted-out this week)
+// is seated, TOP priority via negative sort_order, trimmed to cap+waitlist. NO non-team fill
+// (basketball auto-renews only the team; "no waiver, no play" preserved by the shared engine).
 function autoJoinTeam(runDate) {
-  // Never seed a cancelled run (floor was cleared) or a locked one (past 2 PM — roster is
-  // set). Root-cause guard so no caller (optin/autorenew/open/rollover) can re-populate.
   if (runIsCancelled(runDate) || runIsLocked(runDate)) return;
-  // Team members are dropped onto the floor with TOP priority when the run
-  // opens — if pre-access joiners already filled the cap, the newest of them
-  // is bumped to waitlist rather than a team member. Team runs the run.
-  // "No waiver, no play" — a team member with no waiver on file is NOT auto-seated (mirrors
-  // pkSeatRenewers' waiver gate). They still see they're off the floor and get seated the
-  // moment they tap "I'm in" and sign the one-time waiver. This closes a hole where every
-  // self-service seat path demanded the waiver but the team auto-seat didn't.
-  const team = db.prepare(
-    `SELECT email, full_name FROM applicants
-     WHERE is_team = 1 AND status = 'approved' AND auto_renew = 1 AND COALESCE(suspended,0) = 0
-       AND COALESCE(waiver_ok,0) = 1`).all();
-  const optedOut = db.prepare('SELECT 1 FROM regular_optout WHERE run_date = ? AND email = ? AND program_id = 1');
-  const insert = db.prepare('INSERT OR IGNORE INTO checkins (run_date,email,name,sort_order) VALUES (?,?,?,?)');
-  let { m } = db.prepare('SELECT MIN(sort_order) m FROM checkins WHERE run_date = ? AND program_id = 1').get(runDate);
-  let order = (m ?? 0);
-  for (const t of team) {
-    if (optedOut.get(runDate, t.email)) continue; // team member sat out this week
-    order -= 1;
-    insert.run(runDate, t.email, t.full_name, order);
-  }
-  // Enforce hard total cap: if team priority pushed anyone past floor+waitlist,
-  // trim the lowest-ranked (they're non-team, since team floated to the top).
-  const rows = db.prepare('SELECT id FROM checkins WHERE run_date=? AND program_id = 1 ORDER BY sort_order ASC, id ASC').all(runDate);
-  if (rows.length > TOTAL_CAP) {
-    const cut = rows.slice(TOTAL_CAP).map(r => r.id);
-    const del = db.prepare('DELETE FROM checkins WHERE id = ?');
-    for (const id of cut) del.run(id);
-  }
+  seatRenewers(1, runDate);
 }
 
 app.post('/checkin/open', requireApprover, (req, res) => {
@@ -3727,7 +3705,9 @@ function autoRunState() {
     }
   }
 }
-ensureWeek(nextRunDate());
+// The boot-time weekly rollover runs BELOW, after buildPrograms() — ensureWeek → autoJoinTeam →
+// seatRenewers reads P(1).config, so the PROGRAMS registry must be hydrated first. This 60s
+// interval is safe as-is: it first fires ~60s in, long after buildPrograms() has run.
 setInterval(() => {
   try {
     const rd = nextRunDate();
@@ -4377,6 +4357,9 @@ function buildPrograms() {
   setProgramMeta(meta);
 }
 buildPrograms();
+// Boot-time weekly rollover (archive/purge/auto-seat) — MUST run after buildPrograms() so the
+// unified engine's P(id).config is hydrated (ensureWeek → autoJoinTeam → seatRenewers reads it).
+ensureWeek(nextRunDate());
 
 app.listen(PORT, () => {
   console.log(`\nThe Bridge Adv Runs → http://localhost:${PORT}`);
