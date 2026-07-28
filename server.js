@@ -4530,8 +4530,70 @@ const PROGRAM_DEFS = {
     hubCard: genericHubCard(2),
     tick: genericTick(2),
   },
+  // Volleyball — the Phase-4 acceptance test: adding a program is PURE CONFIG (this block + a
+  // program row + a CSS theme). Ships HIDDEN (program.active=0); publish = flip active + set the
+  // season start in September. Cap 21 (3×7), waitlist 6, queue ON (offerWindow → the auto-offer
+  // loop), opt-in, org-team tier only. Day/time are PLACEHOLDER (Fri ~6–9 PM) — config, finalize
+  // before publish. Uses the generic engine end-to-end; runs routes are registered by mountRunProgram.
+  3: {
+    key: 'volleyball', emoji: '🏐', displayName: 'Volleyball',
+    paths: { run: '/volleyball', chat: '/volleyball/chat', season: '/volleyball/season' }, seasonLabel: 'Volleyball season',
+    config: {
+      cap: 21, waitlist: 6, prereg: 0,
+      dow: 5, startHour: 18, endHour: 21,          // Fri 6–9 PM (PLACEHOLDER — owner to finalize 6:30–9:30)
+      pingHour: 20, pingDowOffset: 1, lockTime: '18:00',   // confirm ping Thu 8 PM, roster locks 6 PM
+      keys: { runDate: 'vb_run_date', runBase: 'vb_run_base', seasonStart: 'vb_season_start',
+              autoopen: 'vb_autoopen_done', autoping: 'vb_autoping_done', autolock: 'vb_autolock_done' },
+      logTag: 'vb', openOffsetDays: -7,
+      copy: {
+        openTitle: 'Volleyball check-in is open',
+        openBody: (rd) => `Check-in is open for ${runWeekday(rd)}, ${runLabelFor(rd)} volleyball — grab your spot 🏐`,
+        confirmTitle: 'Confirm your volleyball spot',
+        confirmBody: (rd) => `You're on the floor for ${runWeekday(rd)} volleyball. Tap to confirm — or leave to free your spot.`,
+        promoTitle: "You're in for volleyball 🏐",
+        promoBody: (rd) => `A spot opened — you're on the floor for ${runWeekday(rd)}, ${runLabelFor(rd)} volleyball.`,
+        annTitle: 'Volleyball announcement',
+      },
+      theme: 'vb', access: 'opt-in', approval: 'invite',
+      bannerPath: path.join(__dirname, 'public', 'vb-banner.jpg'), bannerPublic: '/vb-banner.jpg',
+      tiers: ['team', 'host'], offerWindow: true,
+      autoRenew: { from: 'members' },
+      mentionTag: 'vbmention', chatSeqKey: 'vb_chat_seq',
+      features: { teams: false, groupQueue: false },
+    },
+    unread: genericUnread(3),
+    hubCard: genericHubCard(3),
+    tick: genericTick(3),
+  },
 };
 const stmtProgActiveById = db.prepare('SELECT active FROM program WHERE id = ?');
+// Register a program's full run-route set from config (paths + the generic runXxx handlers).
+// Basketball (/checkin/*) and pickleball (/pickleball/*) keep their inline routes for now; other
+// programs (volleyball, …) get theirs here. These mount after the terminal error middleware, so an
+// uncaught throw falls through to Express's default handler — acceptable for the hidden pre-launch
+// program (the process-level backstops still catch escapes). Chat + season-board + banner routes
+// for a new program are follow-ups.
+function mountRunProgram(app, program) {
+  const b = program.paths.run, id = program.id;
+  app.get(b, requireLogin, (req, res) => runGetPage(id, req, res));
+  app.get(`${b}/run.ics`, requireLogin, (req, res) => runIcs(id, req, res));
+  app.post(`${b}/join-run`, requireLogin, (req, res) => runJoinRun(id, req, res));
+  app.post(`${b}/join`, requireLogin, (req, res) => runJoin(id, req, res));
+  app.post(`${b}/leave`, requireLogin, (req, res) => runLeave(id, req, res));
+  app.post(`${b}/confirm`, requireLogin, (req, res) => runConfirm(id, req, res));
+  app.post(`${b}/autorenew`, requireLogin, (req, res) => runAutorenew(id, req, res));
+  app.post(`${b}/open`, requireLogin, (req, res) => runOpen(id, req, res));
+  app.post(`${b}/close`, requireLogin, (req, res) => runClose(id, req, res));
+  app.post(`${b}/cancel`, requireLogin, (req, res) => runCancel(id, req, res));
+  app.post(`${b}/date`, requireLogin, (req, res) => runDate(id, req, res));
+  app.post(`${b}/remove`, requireLogin, (req, res) => runRemove(id, req, res));
+  app.post(`${b}/bump`, requireLogin, (req, res) => runBump(id, req, res));
+  app.post(`${b}/guest`, requireLogin, (req, res) => runGuest(id, req, res));
+  app.post(`${b}/season`, requireLogin, (req, res) => runSeasonSet(id, req, res));
+  app.post(`${b}/announce`, requireLogin, (req, res) => runAnnounce(id, req, res));
+  app.post(`${b}/announce/retract`, requireLogin, (req, res) => runAnnounceRetract(id, req, res));
+  app.post(`${b}/publish`, requireAdmin, (req, res) => runPublish(id, req, res));
+}
 function buildPrograms() {
   PROGRAMS.clear();
   for (const row of db.prepare('SELECT * FROM program ORDER BY id').all()) {
@@ -4551,6 +4613,10 @@ function buildPrograms() {
   setProgramMeta(meta);
 }
 buildPrograms();
+// Register run routes for programs beyond basketball (/checkin/*) + pickleball (/pickleball/*),
+// which keep their inline routes — e.g. volleyball via the config-driven factory. After
+// buildPrograms() so P(id) is hydrated (mountRunProgram reads program.paths.run).
+for (const p of PROGRAMS.values()) if (p.id >= 3) mountRunProgram(app, p);
 // Boot-time weekly rollover (archive/purge/auto-seat) — MUST run after buildPrograms() so the
 // unified engine's P(id).config is hydrated (ensureWeek → autoJoinTeam → seatRenewers reads it).
 ensureWeek(nextRunDate());

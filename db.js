@@ -441,6 +441,7 @@ db.exec(`
 // Seed the two programs (idempotent). 1 = the live Advanced Basketball run; 2 = Pickleball, HIDDEN.
 db.prepare("INSERT OR IGNORE INTO program (id,name,sport,slug,active,approval) VALUES (1,'Advanced Basketball','basketball','adv',1,'council')").run();
 db.prepare("INSERT OR IGNORE INTO program (id,name,sport,slug,active,approval) VALUES (2,'Pickleball','pickleball','pickleball',0,'invite')").run();
+db.prepare("INSERT OR IGNORE INTO program (id,name,sport,slug,active,approval) VALUES (3,'Volleyball','volleyball','volleyball',0,'invite')").run();
 // Add program_id (DEFAULT 1) to every run-scoped table — guarded + backfilled so existing rows stay basketball.
 for (const t of ['checkins', 'run_state', 'run_overrides', 'regular_optout', 'attendance', 'group_messages', 'group_reads', 'group_reactions', 'announcements', 'votes']) {
   const cols = db.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name);
