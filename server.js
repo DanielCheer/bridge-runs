@@ -4359,6 +4359,34 @@ process.on('uncaughtException', (err) => {
 // basketball / pickleball functions — the registry exists so nothing hardcodes "1 vs 2". A
 // later phase folds these two DEFS into a single config-driven engine (config_json /
 // program_settings land with that schema work, when there's a real consumer + editor).
+// Generic registry closures for an OPT-IN program (pickleball, volleyball) — so a program's DEFS
+// entry is pure config, not cloned unread/hubCard/tick logic. Basketball keeps its own (it uses
+// host-editable caps + per-week time overrides). Each returns a closure that reads P(id) at call time.
+function genericUnread(programId) {
+  return (email, aid) => ({ group: chatUnreadFor(programId, email), gm: chatMentionUnreadFor(programId, email, aid) });
+}
+function genericHubCard(programId) {
+  return () => {
+    ensureWeekFor(programId);
+    const cfg = P(programId).config;
+    const rd = programRunDate(programId), part = partitionFor(programId, rd);
+    const floor = cfg.offerWindow ? part.floorReal : part.floor;
+    return {
+      runDate: rd, dateLabel: runLabelFor(rd), timeLabel: fmtClockRange(`${cfg.startHour}:00`, `${cfg.endHour}:00`),
+      going: floor.length, cap: cfg.cap,
+      status: runCancelledFor(programId, rd) ? 'cancelled' : (runOpenFor(programId, rd) ? 'open' : 'closed'),
+      hidden: !programActive(programId),
+    };
+  };
+}
+function genericTick(programId) {
+  return () => {
+    ensureWeekFor(programId);
+    const rd = programRunDate(programId);
+    if (P(programId).config.offerWindow) expireAndReoffer(rd, null, programId);   // queue programs re-offer freed spots
+    autoRunStateFor(programId);
+  };
+}
 const PROGRAM_DEFS = {
   1: {
     key: 'basketball', emoji: '🏀', displayName: 'Basketball', alwaysActive: true,
@@ -4414,19 +4442,9 @@ const PROGRAM_DEFS = {
       mentionTag: 'pkmention', chatSeqKey: 'pk_chat_seq',
       features: { teams: false, groupQueue: false },
     },
-    unread: (email, aid) => ({ group: pkGroupUnread(email), gm: pkGroupMentionUnread(email, aid) }),
-    hubCard: () => {
-      pkEnsureWeek();
-      const rd = pkRunDate(), part = pkPartition(rd);
-      return {
-        runDate: rd, dateLabel: runLabelFor(rd), timeLabel: pkTimeRange(),
-        going: part.floor.length, cap: PK_CAP,
-        status: pkIsCancelled(rd) ? 'cancelled' : (pkIsOpen(rd) ? 'open' : 'closed'),
-        hidden: !pkProgramActive(),
-      };
-    },
-    // Pickleball has no offer window, so its tick is just rollover + auto open/ping/lock.
-    tick: () => { pkEnsureWeek(); pkAutoRunState(); },
+    unread: genericUnread(2),
+    hubCard: genericHubCard(2),
+    tick: genericTick(2),
   },
 };
 const stmtProgActiveById = db.prepare('SELECT active FROM program WHERE id = ?');
