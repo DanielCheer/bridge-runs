@@ -21,7 +21,7 @@ import {
 import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap, setProgramMeta,
-  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage, runsPage, pkChatPage, pkJoinPage, waiverPage,
+  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage, runPage, runsPage, pkChatPage, pkJoinPage, runJoinPage, waiverPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -396,6 +396,7 @@ const hhLocal = h => `T${String(h).padStart(2, '0')}:00:00`;
 // drivable in tests. Unset in prod → real Date.now(). Precedent: FORCE_HELD_RELEASED.
 const TEST_NOW = (process.env.TEST_NOW && !isNaN(new Date(process.env.TEST_NOW).getTime())) ? new Date(process.env.TEST_NOW).getTime() : null;
 function schedNow() { return TEST_NOW != null ? TEST_NOW : Date.now(); }
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];  // dow → standing-day label
 // The date check-in opens for run `rd`.
 const openDateFor = (rd) => shiftYmd(rd, -OPEN_DAYS_BEFORE);
 function nextRunDefault(d = new Date()) {
@@ -671,9 +672,14 @@ function bannerVersion() {
 // Pickleball gets its OWN banner photo (pk-banner.jpg); until one is uploaded it falls back
 // to the basketball court photo, so the page always shows something.
 const PK_BANNER_PATH = process.env.PK_BANNER_PATH || path.join(__dirname, 'public', 'pk-banner.jpg');
-function pkBannerHasOwn() { try { return fs.statSync(PK_BANNER_PATH).size > 0; } catch { return false; } }
-function pkBannerSrc() { return pkBannerHasOwn() ? '/pk-banner.jpg' : '/gym.jpg'; }
-function pkBannerVersion() { try { return String(Math.floor(fs.statSync(pkBannerHasOwn() ? PK_BANNER_PATH : BANNER_PATH).mtimeMs)); } catch { return '0'; } }
+// Banner (own uploaded photo else the shared gym.jpg) — program-generic; the file path + public URL
+// come from config.bannerPath/bannerPublic. pk* names stay wrappers.
+function bannerHasOwnFor(programId) { try { return fs.statSync(P(programId).config.bannerPath).size > 0; } catch { return false; } }
+function bannerSrcFor(programId) { return bannerHasOwnFor(programId) ? P(programId).config.bannerPublic : '/gym.jpg'; }
+function bannerVersionFor(programId) { const cfg = P(programId).config; try { return String(Math.floor(fs.statSync(bannerHasOwnFor(programId) ? cfg.bannerPath : BANNER_PATH).mtimeMs)); } catch { return '0'; } }
+function pkBannerHasOwn() { return bannerHasOwnFor(2); }
+function pkBannerSrc() { return bannerSrcFor(2); }
+function pkBannerVersion() { return bannerVersionFor(2); }
 
 // Delete a stored chat photo by its public path. Only /chat-media/<safe-name> paths are
 // touched — stickers (/stickers/*) and anything with a separator/`..` are refused, so a
@@ -3855,7 +3861,10 @@ function simplePartition(programId, rd) {
 function pkPartition(rd) { return partitionFor(2, rd); }
 // Pickleball run start epoch — the run date at 6 PM local. Drives the countdown banner
 // AND the auto-lock time (check-in closes at start).
-function pkStartEpoch(rd) { return rd ? new Date(rd + `T${String(PK_START_H).padStart(2, '0')}:00:00`).getTime() : 0; }
+function startEpochFor(programId, rd) { return rd ? new Date(rd + `T${String(P(programId).config.startHour).padStart(2, '0')}:00:00`).getTime() : 0; }
+function timeRangeFor(programId) { const cfg = P(programId).config; return fmtClockRange(`${cfg.startHour}:00`, `${cfg.endHour}:00`); }
+function startLabelFor(programId) { return fmtClockLabel(`${P(programId).config.startHour}:00`); }
+function pkStartEpoch(rd) { return startEpochFor(2, rd); }
 // Latest LIVE pickleball announcement (program 2 rows in the shared announcements table; retracted ones archived).
 function latestAnnouncementFor(programId) { return stmtLatestAnnouncementById.get(programId) || null; }
 function latestPkAnnouncement() { return latestAnnouncementFor(2); }
@@ -4318,40 +4327,48 @@ function runGuest(programId, req, res) {
   }
   res.redirect(base);
 }
-
-app.get('/pickleball', requireLogin, (req, res) => {
-  const g = pkGate(req, res); if (!g) return;
-  // Not a member yet (and not an admin, who operates it) → show a JOIN PROMPT instead of the
-  // run. Membership is opt-in: you choose to join pickleball, separate from basketball approval.
-  if (!pkIsMember(req.userEmail)) {
+// The run page (GET). Non-members see the join prompt; members see the roster + controls. Offer-
+// window programs use the offer partition shape (floorReal / offered / waitPlayers) so held offers
+// render; simple programs use floor / wait. All presentation values come from config + the registry.
+function runGetPage(programId, req, res) {
+  const base = P(programId).paths.run, cfg = P(programId).config, prog = P(programId);
+  const g = programGate(programId, req, res); if (!g) return;
+  if (!memberOf(programId, req.userEmail)) {   // not a member yet → opt-in join prompt (Chat tab stays on basketball)
     const me = req.userEmail, mid = applicantIdOf(me);
-    return res.send(pkJoinPage({ email: me, runDate: pkRunDate(), runLabel: runLabelFor(pkRunDate()),
-      dmUnread: unreadCount(me), groupUnread: groupUnread(me), groupMention: groupMentionUnread(me, mid), ann: null }));
+    return res.send(runJoinPage({ email: me, runDate: programRunDate(programId), runLabel: runLabelFor(programRunDate(programId)),
+      dmUnread: unreadCount(me), groupUnread: groupUnread(me), groupMention: groupMentionUnread(me, mid), ann: null,
+      runBase: base, theme: cfg.theme, sport: prog.displayName, sportEmoji: prog.emoji }));
   }
-  setRunCookie(req, res, 2); // a member opened pickleball → the neutral pages' Chat tab points here
-  if (req.headers['x-prewarm'] !== '1') pkJoinMembership(req.userEmail); // ensure operators/host appear in the member list too (no-op for existing members)
-  pkEnsureWeek();
-  const rd = pkRunDate(), part = pkPartition(rd);
+  setRunCookie(req, res, programId);
+  if (req.headers['x-prewarm'] !== '1') joinProgramMembership(programId, req.userEmail); // operators/host appear in the member list too
+  ensureWeekFor(programId);
+  const rd = programRunDate(programId), part = partitionFor(programId, rd);
+  const floor = cfg.offerWindow ? part.floorReal : part.floor;
+  const wait = cfg.offerWindow ? part.waitPlayers : part.wait;
+  const offered = cfg.offerWindow ? part.offered : [];
   const mine = part.rows.find(p => p.email === req.userEmail);
-  const myState = mine ? (part.floor.indexOf(mine) >= 0 ? 'in' : 'waitlist') : 'out';
-  const myWaitPos = myState === 'waitlist' ? part.wait.findIndex(p => p.email === req.userEmail) + 1 : 0;
+  const myState = mine ? (floor.indexOf(mine) >= 0 ? 'in' : 'waitlist') : 'out';
+  const myWaitPos = myState === 'waitlist' ? wait.findIndex(p => p.email === req.userEmail) + 1 : 0;
   const myConfirmed = myState === 'in' && !!(mine && mine.confirmed_at);
-  const iAutoRenew = !!(db.prepare('SELECT auto_renew FROM program_membership WHERE program_id = 2 AND email = ?').get(req.userEmail)?.auto_renew);
-  const pkOpener = pkSeasonStart(), pkPre = !!pkOpener && ymdLocal() < pkOpener;
-  res.send(pickleballPage({
-    email: req.userEmail, runDate: rd, runLabel: runLabelFor(rd), isOpen: pkIsOpen(rd), cancelled: pkIsCancelled(rd),
-    hours: pkTimeRange(), startLabel: pkStartLabel(),   // masthead + caption, derived like basketball's
-    cap: PK_CAP, waitlistCap: PK_WAIT, going: part.floor.length, waiting: part.wait.length,
-    canOperate: g.canOperate, isAdmin: g.admin, myState, myWaitPos, floorPlayers: part.floor, waitPlayers: part.wait, hidden: !pkProgramActive(),
+  const iAutoRenew = !!(db.prepare('SELECT auto_renew FROM program_membership WHERE program_id = ? AND email = ?').get(programId, req.userEmail)?.auto_renew);
+  const opener = programSeasonStart(programId), pre = !!opener && ymdLocal() < opener;
+  res.send(runPage({
+    email: req.userEmail, runDate: rd, runLabel: runLabelFor(rd), isOpen: runOpenFor(programId, rd), cancelled: runCancelledFor(programId, rd),
+    hours: timeRangeFor(programId), startLabel: startLabelFor(programId),
+    cap: cfg.cap, waitlistCap: cfg.waitlist, going: floor.length + offered.length, waiting: wait.length,
+    canOperate: g.canOperate, isAdmin: g.admin, myState, myWaitPos, floorPlayers: floor, offeredPlayers: offered, waitPlayers: wait, hidden: !programActive(programId),
     myConfirmed, iAutoRenew,
-    bannerSrc: pkBannerSrc(), bannerVer: pkBannerVersion(),
-    tipoff: pkStartEpoch(rd), announcement: latestPkAnnouncement(),
-    season: pkOpener || '', seasonWeekday: pkOpener ? runWeekday(pkOpener) : '', seasonLabel: pkOpener ? runLabelFor(pkOpener) : '',
-    preseason: pkPre, today: ymdLocal(), seasonMax: shiftYmd(ymdLocal(), 365),
+    bannerSrc: bannerSrcFor(programId), bannerVer: bannerVersionFor(programId),
+    tipoff: startEpochFor(programId, rd), announcement: latestAnnouncementFor(programId),
+    season: opener || '', seasonWeekday: opener ? runWeekday(opener) : '', seasonLabel: opener ? runLabelFor(opener) : '',
+    preseason: pre, today: ymdLocal(), seasonMax: shiftYmd(ymdLocal(), 365),
     pkMsg: req.query.pkset ? String(req.query.pkset) : (req.query.pkerr || ''),
-    dmUnread: unreadCount(req.userEmail), groupUnread: pkGroupUnread(req.userEmail), groupMention: pkGroupMentionUnread(req.userEmail, g.a ? g.a.id : 0), ann: null,
+    dmUnread: unreadCount(req.userEmail), groupUnread: chatUnreadFor(programId, req.userEmail), groupMention: chatMentionUnreadFor(programId, req.userEmail, g.a ? g.a.id : 0), ann: null,
+    runBase: base, programId, theme: cfg.theme, sport: prog.displayName, sportEmoji: prog.emoji, dayName: DAY_NAMES[cfg.dow], pollKey: prog.key,
   }));
-});
+}
+
+app.get('/pickleball', requireLogin, (req, res) => runGetPage(2, req, res));
 // Pickleball season-start gate control (operator = admin) — mirrors /admin/season. Sets/clears
 // app_settings 'pk_season_start'; before it, no weekly pickleball runs and nothing auto-fires.
 app.post('/pickleball/season', requireLogin, (req, res) => runSeasonSet(2, req, res));
@@ -4503,6 +4520,7 @@ const PROGRAM_DEFS = {
         annTitle: 'Pickleball announcement',
       },
       theme: 'pk', access: 'opt-in', approval: 'invite',
+      bannerPath: PK_BANNER_PATH, bannerPublic: '/pk-banner.jpg',   // own banner file + its public URL (fallback /gym.jpg)
       tiers: ['team', 'host'], offerWindow: false,
       autoRenew: { from: 'members' },   // any opt-in member (program_membership.auto_renew) renews; team seated first, then non-team fill
       mentionTag: 'pkmention', chatSeqKey: 'pk_chat_seq',
