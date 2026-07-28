@@ -2530,6 +2530,7 @@ function doBlock(me, them) { // one-way; auto-removes any friendship AND any fol
   db.prepare(`DELETE FROM social_edges WHERE kind IN ('friend','follow')
               AND ((from_email=? AND to_email=?) OR (from_email=? AND to_email=?))`).run(me, them, them, me);
   db.prepare(`INSERT OR IGNORE INTO social_edges(from_email,to_email,kind,status) VALUES (?,?,'block','accepted')`).run(me, them);
+  dropSharedPartyMemberships(me, them); // block invariant also holds for parties already formed (P2-1)
 }
 function doUnblock(me, them) { // only the blocker (from_email) can lift their own block
   me = lc(me); them = lc(them);
@@ -4791,6 +4792,7 @@ function runLeave(programId, req, res) {
   db.prepare('INSERT OR IGNORE INTO regular_optout (run_date, email, program_id) VALUES (?, ?, ?)').run(rd, req.userEmail, programId);
   db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = ?').run(rd, req.userEmail, programId);
   clearTeamAssignment(programId, rd, req.userEmail);   // off the floor → off any team
+  setPartyDeclinedFor(programId, rd, req.userEmail);   // and out of any party so a group check-in can't re-seat them (P2-2)
   if (offeree) createOffer(rd, offeree, req, programId);
   res.redirect(base);
 }
@@ -4804,6 +4806,7 @@ function runRemove(programId, req, res) {
   if (!cfg.offerWindow) notifyPromotionFor(programId, rd, em);
   db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = ?').run(rd, em, programId);
   clearTeamAssignment(programId, rd, em);   // off the floor → off any team
+  setPartyDeclinedFor(programId, rd, em);   // and out of any party so a group check-in can't re-seat them (P2-2)
   if (offeree) createOffer(rd, offeree, req, programId);
   res.redirect(base);
 }
@@ -5240,10 +5243,16 @@ const stmtPartyById     = db.prepare('SELECT * FROM signup_groups WHERE id=?');
 // The party `email` belongs to for this run (leads it, or is an invited/joined member).
 function myParty(programId, rd, email) {
   email = lc(email);
+  // Deterministic when the viewer touches more than one party this run: prefer the one they LEAD,
+  // then one they've JOINED, then a pending INVITE — so leave/disband/check-in act on the party
+  // they actually own, not an arbitrary inbound invite (P2-4).
   return db.prepare(`SELECT g.* FROM signup_groups g WHERE g.program_id=? AND g.run_date=?
     AND (g.leader_email=? OR EXISTS (SELECT 1 FROM signup_group_members m
-      WHERE m.group_id=g.id AND m.email=? AND m.status IN ('invited','joined'))) LIMIT 1`)
-    .get(programId, rd, email, email);
+      WHERE m.group_id=g.id AND m.email=? AND m.status IN ('invited','joined')))
+    ORDER BY CASE WHEN g.leader_email=? THEN 0
+      WHEN EXISTS (SELECT 1 FROM signup_group_members m WHERE m.group_id=g.id AND m.email=? AND m.status='joined') THEN 1
+      ELSE 2 END, g.id ASC LIMIT 1`)
+    .get(programId, rd, email, email, email, email);
 }
 function partyJoinedEmails(groupId) { // leader (implicitly in) + accepted members
   const g = stmtPartyById.get(groupId); if (!g) return [];
@@ -5267,6 +5276,36 @@ function resyncPartyGroupIds(groupId) {
   } else {
     db.prepare('UPDATE checkins SET group_id=NULL WHERE group_id=?').run(groupId);
   }
+}
+// Blocking someone must break any party they currently SHARE with the blocker (the block invariant
+// is only enforced at invite/accept, so a block AFTER both joined would otherwise still seat them
+// together — P2-1). For every active queue-with-friends run this week, drop the non-leader of the
+// pair from any party containing both, then resync group_ids off the floor.
+function dropSharedPartyMemberships(a, b) {
+  a = lc(a); b = lc(b);
+  if (!a || !b || a === b) return;
+  for (const p of PROGRAMS.values()) {
+    if (!groupQueueFeature(p.id)) continue;
+    const rd = programRunDate(p.id);
+    for (const party of db.prepare('SELECT id, leader_email FROM signup_groups WHERE program_id=? AND run_date=?').all(p.id, rd)) {
+      const all = partyAllEmails(party.id);
+      if (!(all.includes(a) && all.includes(b))) continue;
+      const drop = lc(party.leader_email) === a ? b : a; // keep the leader of the pair; drop the other (always a member row)
+      db.prepare('DELETE FROM signup_group_members WHERE group_id=? AND email=?').run(party.id, drop);
+      resyncPartyGroupIds(party.id);
+    }
+  }
+}
+// A member who leaves / is pulled off the floor drops out of their party too (status→declined), so
+// a later "check in my group" can't silently re-seat them (P2-2). Leaders are left alone — they
+// disband via the party panel. No-op unless the run has queue-with-friends on.
+function setPartyDeclinedFor(programId, rd, email) {
+  if (!groupQueueFeature(programId)) return;
+  email = lc(email);
+  const party = myParty(programId, rd, email);
+  if (!party || lc(party.leader_email) === email) return;
+  db.prepare("UPDATE signup_group_members SET status='declined' WHERE group_id=? AND email=?").run(party.id, email);
+  resyncPartyGroupIds(party.id);
 }
 // Invite an accepted friend into my party for this run (I lead it; created lazily). Friends-only +
 // block invariant + party-size cap. Returns silently on any violation (swap re-renders the page).
@@ -5300,6 +5339,12 @@ function runPartyAccept(programId, req, res) {
   const inv = db.prepare('SELECT status FROM signup_group_members WHERE group_id=? AND email=?').get(gid, me);
   if (!inv) return res.redirect(base);
   if (partyAllEmails(gid).some(e => e !== me && blockedPair(me, e))) return res.redirect(base); // block invariant
+  // P2-3: one committed party per run. If I already LEAD or have JOINED a different party this run,
+  // refuse — else group_id would flap between them by last-mutator.
+  const other = db.prepare(`SELECT g.id FROM signup_groups g WHERE g.program_id=? AND g.run_date=? AND g.id<>?
+    AND (g.leader_email=? OR EXISTS (SELECT 1 FROM signup_group_members m WHERE m.group_id=g.id AND m.email=? AND m.status='joined')) LIMIT 1`)
+    .get(programId, rd, gid, me, me);
+  if (other) return res.redirect(base + '?inparty=1');
   db.prepare("UPDATE signup_group_members SET status='joined' WHERE group_id=? AND email=?").run(gid, me);
   resyncPartyGroupIds(gid);
   res.redirect(base);
@@ -5345,14 +5390,18 @@ function runPartyCheckin(programId, req, res) {
   if (!partyJoinedEmails(party.id).includes(lc(req.userEmail))) return res.redirect(base); // only a committed member checks the group in
   const seatable = partyJoinedEmails(party.id).map(e => applicantByEmail(e))
     .filter(a => a && a.status === 'approved' && a.waiver_ok && !a.suspended && !/@guest\.local$/.test(a.email));
+  const me = lc(req.userEmail);
+  const optRow = db.prepare('SELECT 1 FROM regular_optout WHERE run_date=? AND email=? AND program_id=?');
   const { rows } = partitionFor(programId, rd);
   const already = new Set(rows.map(r => lc(r.email)));
-  const toAdd = seatable.filter(a => !already.has(lc(a.email)));
+  // Skip members already checked in, and RESPECT a member's sit-out (regular_optout) instead of
+  // silently deleting it (P2-2) — except for me, the tapper, who is actively opting back in.
+  const toAdd = seatable.filter(a => !already.has(lc(a.email)) && (lc(a.email) === me || !optRow.get(rd, a.email, programId)));
   if (rows.length + toAdd.length > cfg.cap + cfg.waitlist) return res.redirect(base + '?partyfull=1'); // atomic: whole party or none
   const ins = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, program_id, group_id) VALUES (?,?,?,?,?)');
   for (const a of toAdd) {
     joinProgramMembership(programId, a.email);
-    db.prepare('DELETE FROM regular_optout WHERE run_date=? AND email=? AND program_id=?').run(rd, a.email, programId);
+    if (lc(a.email) === me) db.prepare('DELETE FROM regular_optout WHERE run_date=? AND email=? AND program_id=?').run(rd, a.email, programId); // tapper opts back in
     ins.run(rd, a.email, a.full_name, programId, party.id);
   }
   resyncPartyGroupIds(party.id);
