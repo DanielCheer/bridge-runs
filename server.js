@@ -48,7 +48,7 @@ const requireApprover = makeRequireApprover(db);
 // Prepared once at module scope — node:sqlite has no statement cache, so re-preparing
 // this INSERT on every audited action (every check-in, vote, edit…) is pure waste.
 const stmtAudit = db.prepare('INSERT INTO audit_log (actor,actor_role,action,target) VALUES (?,?,?,?)');
-const stmtAnnouncementExists = db.prepare('SELECT 1 FROM announcements WHERE id = ?');
+const stmtAnnouncementExists = db.prepare('SELECT 1 FROM announcements WHERE id = ? AND program_id = 1');
 function audit(actor, actorRole, action, target) {
   stmtAudit.run(actor, actorRole, action, target || '');
 }
@@ -793,7 +793,7 @@ function groupUnread(email) { return chatUnreadFor(1, email); }
 // Bulk-hydrate a chronological (id ASC) slice of group messages: reactions,
 // reply-parents, sender identities, and @-mention names — all no-N+1. Shared by
 // loadGroupChat (latest page) and loadGroupChatOlder (a scroll-back page).
-function hydrateGroupMessages(me, msgs) {
+function hydrateGroupMessages(programId, me, msgs) {
   const reactions = new Map();  // message_id -> [{emoji,count,mine}]
   const parents = new Map();    // parent id -> {from_email, body}
   const senders = new Map();    // email -> {id, full_name, is_host}
@@ -811,7 +811,7 @@ function hydrateGroupMessages(me, msgs) {
     const replyIds = [...new Set(msgs.map(m => m.reply_to).filter(Boolean))];
     if (replyIds.length) {
       const ph2 = replyIds.map(() => '?').join(',');
-      for (const pr of db.prepare(`SELECT id, from_email, body, image, audio, video FROM group_messages WHERE id IN (${ph2})`).all(...replyIds))
+      for (const pr of db.prepare(`SELECT id, from_email, body, image, audio, video FROM group_messages WHERE id IN (${ph2}) AND program_id = ?`).all(...replyIds, programId))
         parents.set(pr.id, pr);
     }
     const emails = [...new Set([...msgs.map(m => m.from_email), ...[...parents.values()].map(p => p.from_email)])];
@@ -858,7 +858,7 @@ function hasOlderChat(programId, id) { return id ? !!stmtChatHasOlder.get(id, pr
 
 function loadChat(programId, me) {
   const msgs = stmtChatMsgs.all(programId);
-  const maps = hydrateGroupMessages(me, msgs);
+  const maps = hydrateGroupMessages(programId, me, msgs);
   // Member list = the SAME population the "N members" count uses (see chatMembersFor).
   // memberCount is derived from this list's length so the header count and the members
   // overlay can never disagree. Sorted host → team → core → regular, then name.
@@ -880,7 +880,7 @@ function loadChat(programId, me) {
 // (id ASC), hydrated the same way. hasOlder reports whether yet more history remains above.
 function loadChatOlder(programId, me, beforeId) {
   const msgs = stmtChatOlder.all(beforeId, programId);
-  const maps = hydrateGroupMessages(me, msgs);
+  const maps = hydrateGroupMessages(programId, me, msgs);
   return { msgs, ...maps, hasOlder: msgs.length ? hasOlderChat(programId, msgs[0].id) : false };
 }
 function loadGroupChat(me) { return loadChat(1, me); }
@@ -2980,7 +2980,7 @@ app.post('/checkin/confirm', requireLogin, (req, res) => {
   // Only real floor players confirm — a waitlister shouldn't pre-mark ✓ and slide on later.
   const part = partitionRun(runDate);
   if (part.floorReal.some(p => p.email === req.userEmail)) {
-    db.prepare("UPDATE checkins SET confirmed_at = datetime('now') WHERE run_date = ? AND email = ? AND confirmed_at IS NULL")
+    db.prepare("UPDATE checkins SET confirmed_at = datetime('now') WHERE run_date = ? AND email = ? AND program_id = 1 AND confirmed_at IS NULL")
       .run(runDate, req.userEmail);
   }
   res.redirect('/checkin');
