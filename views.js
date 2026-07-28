@@ -569,7 +569,7 @@ const header = (right = '', weekdayShort = '', ann = null, hours = '') => { // h
   const { btn, sheet } = annBell(ann);
   return `<div class="mast">
   <div class="bl">${BALL}<div class="wm"><b>THE BRIDGE</b></div></div>
-  <div class="mastr">${btn}<div class="when">${weekdayShort ? `<b>${esc(weekdayShort)}</b>` : ''}<span>${esc(hours)}</span></div></div>
+  <div class="mastr"><div class="when">${weekdayShort ? `<b>${esc(weekdayShort)}</b>` : ''}<span>${esc(hours)}</span></div>${btn}</div>
 </div>${sheet}`;
 };
 
