@@ -1531,7 +1531,7 @@ const stmtRun = db.prepare(`
          COALESCE(a.is_host,0) AS is_host, COALESCE(a.position,'') AS position,
          a.id AS applicant_id
   FROM checkins c LEFT JOIN applicants a ON a.email = c.email
-  WHERE c.run_date = ? AND c.program_id = 1 ORDER BY c.sort_order ASC, c.id ASC`);
+  WHERE c.run_date = ? AND c.program_id = ? ORDER BY c.sort_order ASC, c.id ASC`);
 
 // Archive the FINAL floor of past weeks into the permanent attendance log,
 // right before loadRun() purges those checkins. "Final floor" = the first CAP
@@ -1594,8 +1594,13 @@ function heldReleased(runDate, d = new Date()) {
 //   overflow stays on the waitlist. going/full therefore count real + held = taken.
 //   Clearing the offer (on claim) drops offered.length by one, freeing the real slot
 //   for that same person, so they slide onto the floor positionally with no overfill.
-function partitionRun(runDate) {
-  const rows = stmtRun.all(runDate).map(r => ({
+// Partition an OFFER-WINDOW run (basketball, and volleyball later) reading P(id).config for the
+// caps + a program-scoped roster query. partitionRun keeps the program-1 (basketball) entry so its
+// ~15 call sites are untouched; a future offer-window program partitions through the SAME code by
+// passing its id — this is the reusable half of the engine (pickleball uses simplePartition).
+function offerPartition(programId, runDate) {
+  const cfg = P(programId).config;
+  const rows = stmtRun.all(runDate, programId).map(r => ({
     ...r, tryout: r.pstatus === 'tryout', team: !!r.is_team, regular: !!r.is_regular,
     host: !!r.is_host,
     guest: /@guest\.local$/.test(r.email),
@@ -1608,12 +1613,13 @@ function partitionRun(runDate) {
   const heldLate = released ? [] : rows.filter(r => r.held);
   const offered = active.filter(r => r.offered_at != null);   // held pending-claim spots
   const nonOffered = active.filter(r => r.offered_at == null);
-  const floorCapForReal = Math.max(0, CAP - offered.length);  // held spots reserve floor slots
+  const floorCapForReal = Math.max(0, cfg.cap - offered.length);  // held spots reserve floor slots
   const floorReal = nonOffered.slice(0, floorCapForReal);
   const overflow = nonOffered.slice(floorCapForReal);
-  const waitPlayers = [...overflow, ...heldLate].slice(0, WAITLIST_CAP);
+  const waitPlayers = [...overflow, ...heldLate].slice(0, cfg.waitlist);
   return { rows, active, offered, floorReal, overflow, heldLate, waitPlayers };
 }
+function partitionRun(runDate) { return offerPartition(1, runDate); }
 
 // True if `email` currently occupies a floor slot (a real floor player OR a held
 // offer) — i.e. removing them frees a floor slot that should be offered onward.
@@ -3763,7 +3769,7 @@ const stmtPkRoster = db.prepare(`
     SELECT c.email, c.name, c.sort_order, c.id, c.confirmed_at,
            a.id AS applicant_id, a.is_host, a.is_team, a.is_regular
     FROM checkins c LEFT JOIN applicants a ON a.email = c.email
-    WHERE c.run_date = ? AND c.program_id = 2 ORDER BY c.sort_order ASC, c.id ASC`);
+    WHERE c.run_date = ? AND c.program_id = ? ORDER BY c.sort_order ASC, c.id ASC`);
 const stmtLatestPkAnnouncement = db.prepare('SELECT id, body, author, at AS created_at FROM announcements WHERE program_id = 2 AND COALESCE(archived,0) = 0 ORDER BY id DESC LIMIT 1');
 function pkProgramActive() { const r = stmtPkActive.get(); return !!(r && r.active); }
 // Pickleball's standing day = Tuesday (PK_DOW=2), DECOUPLED from basketball so moving the
@@ -3808,12 +3814,17 @@ function pkRunDate() { return getSetting('pk_run_date') || pkDefaultDate(); } //
 function pkIsOpen(rd) { const r = stmtPkIsOpen.get(rd); return !!(r && r.is_open); }
 function pkIsCancelled(rd) { const r = stmtPkIsCancelled.get(rd); return !!(r && r.cancelled); }
 function pkSetState(rd, field, val) { db.prepare(`INSERT INTO run_state (run_date, ${field}, program_id) VALUES (?, ?, 2) ON CONFLICT(run_date, program_id) DO UPDATE SET ${field} = excluded.${field}`).run(rd, val ? 1 : 0); }
-function pkPartition(rd) {
+// Partition a SIMPLE (no offer-window) run's roster into floor / waitlist by sort order — the
+// immediate first-come model (pickleball). Reads P(id).config.cap for the floor size; program-
+// scoped roster query. pkPartition keeps the program-2 entry so its call sites are unchanged.
+function simplePartition(programId, rd) {
   // Join applicants so the roster rows can open a profile popup + show role badges
   // (guests have no applicant row → applicant_id null → non-tappable, matches basketball).
-  const rows = stmtPkRoster.all(rd);
-  return { floor: rows.slice(0, PK_CAP), wait: rows.slice(PK_CAP), rows };
+  const rows = stmtPkRoster.all(rd, programId);
+  const cap = P(programId).config.cap;
+  return { floor: rows.slice(0, cap), wait: rows.slice(cap), rows };
 }
+function pkPartition(rd) { return simplePartition(2, rd); }
 // Pickleball run start epoch — the run date at 6 PM local. Drives the countdown banner
 // AND the auto-lock time (check-in closes at start).
 function pkStartEpoch(rd) { return rd ? new Date(rd + `T${String(PK_START_H).padStart(2, '0')}:00:00`).getTime() : 0; }
