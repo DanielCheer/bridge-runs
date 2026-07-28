@@ -612,7 +612,7 @@ const GROUP_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-wi
 // Role → badge markup (loudest first). p carries host/team/regular/guest flags.
 const roleBadge = (p) => p.host ? '<span class="bdg host">★ Host</span>'
   : p.team ? '<span class="bdg team">◆ Team</span>'
-  : p.regular ? '<span class="bdg core">★ Core</span>'
+  : p.regular ? '<span class="bdg core">★ Pillar</span>'
   : p.guest ? '<span class="bdg guest">Guest</span>'
   : '<span class="bdg reg">Regular</span>';
 
@@ -2417,7 +2417,7 @@ export function pkChatPage({ me, chat, runDate = '', dmUnread = 0, pkGroupUnread
 // Compact profile card — served as a fragment for the quick-look popup (tap a name in the
 // who's-going sheet). Just the essentials + a Message / Full-profile jump; no page chrome.
 export function profileCard({ p, stats, canContact = false, isSelf = false }) {
-  const rb = p.is_host ? '<span class="bdg host">★ Host</span>' : p.is_team ? '<span class="bdg team">◆ Team</span>' : p.is_regular ? '<span class="bdg core">★ Core</span>' : '<span class="bdg reg">Regular</span>';
+  const rb = p.is_host ? '<span class="bdg host">★ Host</span>' : p.is_team ? '<span class="bdg team">◆ Team</span>' : p.is_regular ? '<span class="bdg core">★ Pillar</span>' : '<span class="bdg reg">Regular</span>';
   const positions = (p.position || '').split(',').filter(Boolean).join(' · ');
   const memberSince = stats.first ? fmtMonthYear(stats.first) : null;
   const row = (k, v) => `<div class="pcrow"><span class="pck">${esc(k)}</span><span class="pcv">${v}</span></div>`;
@@ -2433,7 +2433,7 @@ export function profileCard({ p, stats, canContact = false, isSelf = false }) {
 export function profilePage({ p, stats, isSelf = false, canContact = false, rel = 'none', following = false, runDate = '', hours = '8:30–10:30 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null, back = '/chat' }) {
   const badges = [
     p.is_host ? '<span class="bdg host">★ Host</span>' : '',
-    p.is_team ? '<span class="bdg team">◆ Team</span>' : (p.is_regular ? '<span class="bdg core">★ Core</span>' : ''),
+    p.is_team ? '<span class="bdg team">◆ Team</span>' : (p.is_regular ? '<span class="bdg core">★ Pillar</span>' : ''),
     (!p.is_host && !p.is_team && !p.is_regular) ? '<span class="bdg reg">Regular</span>' : '',
     isSelf ? '<span class="tag">YOU</span>' : '',
   ].join('');
@@ -3826,8 +3826,8 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–
       ? `<form method="POST" action="/admin/role"><input type="hidden" name="id" value="${a.id}"><input type="hidden" name="role" value="${role}"><input type="hidden" name="on" value="0"><button class="btn sm regstar" type="submit">${onLabel}</button></form>`
       : `<form method="POST" action="/admin/role"><input type="hidden" name="id" value="${a.id}"><input type="hidden" name="role" value="${role}"><input type="hidden" name="on" value="1"><button class="btn ghost sm" type="submit">${offLabel}</button></form>`);
     const teamBtn = roleBtn('team', a.is_team, '◆ Team — remove', 'Make team', true);
-    // Make Core auto-approves (like team), so it's offered for pending applicants too, not just approved.
-    const regBtn  = roleBtn('regular', a.is_regular, '★ Core — remove', 'Make Core', true);
+    // Make Pillar auto-approves (like team), so it's offered for pending applicants too, not just approved.
+    const regBtn  = roleBtn('regular', a.is_regular, '★ Pillar — remove', 'Make Pillar', true);
     const hostBtn = roleBtn('host', a.is_host, '★ Host — remove', 'Make Host', a.status === 'approved' && viewerIsAdmin);
 
     // Team members are auto-approved and not voted on.
@@ -3865,7 +3865,7 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–
     }
 
     return `<details class="arow"${a.status === 'pending' ? ' open' : ''}>
-    <summary><span class="an">${esc(a.full_name)}${a.is_host ? ' <span class="tag host">★ Host</span>' : ''}${a.is_team ? ' <span class="tag team">◆ Team</span>' : ''}${a.is_regular ? ' <span class="tag reg">★ Core</span>' : ''}</span> ${pill(a.status)}</summary>
+    <summary><span class="an">${esc(a.full_name)}${a.is_host ? ' <span class="tag host">★ Host</span>' : ''}${a.is_team ? ' <span class="tag team">◆ Team</span>' : ''}${a.is_regular ? ' <span class="tag reg">★ Pillar</span>' : ''}</span> ${pill(a.status)}</summary>
     <div class="ae" style="margin-top:12px">${esc(a.email)} · ${esc(a.phone)}</div>
     <div class="ad"><b>${esc(a.experience)}</b>${a.where_played ? ' — ' + esc(a.where_played) : ''}<br>
       Waiver: ${a.waiver_ok ? '✓ confirmed' : '✗ not confirmed'} · applied ${esc(fmtWhen(a.created_at))}</div>
@@ -4177,7 +4177,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
       <label style="margin-bottom:2px">Role</label>
       <div class="levels">
         <label class="lvl"><input type="radio" name="role" value="" checked> Approved only — can check in</label>
-        <label class="lvl"><input type="radio" name="role" value="regular"> ★ Core — early access to join before you open the run</label>
+        <label class="lvl"><input type="radio" name="role" value="regular"> ★ Pillar — early access to join before you open the run</label>
         <label class="lvl"><input type="radio" name="role" value="team"> ◆ Team — helps run it, auto-seated each week</label>
       </div>
       <p class="tally-note" style="margin:8px 0 0">If the email already exists on file, this just approves that record (and sets the role) instead of duplicating it.</p>
@@ -4195,7 +4195,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
     ${invites.length ? `<details class="announce-compose"><summary>Pending invites (${invites.length})</summary>
         <ul class="annlog">
           ${invites.map(iv => `<li>
-            <div class="annlog-b">${esc(iv.full_name || '(no name yet)')}${iv.phone ? ' · ' + esc(iv.phone) : ''}${iv.email ? ' · ' + esc(iv.email) : ''}${iv.role ? ` <span class="tag ${iv.role === 'team' ? 'team' : 'reg'}">${iv.role === 'team' ? '◆ Team' : '★ Core'}</span>` : ''}</div>
+            <div class="annlog-b">${esc(iv.full_name || '(no name yet)')}${iv.phone ? ' · ' + esc(iv.phone) : ''}${iv.email ? ' · ' + esc(iv.email) : ''}${iv.role ? ` <span class="tag ${iv.role === 'team' ? 'team' : 'reg'}">${iv.role === 'team' ? '◆ Team' : '★ Pillar'}</span>` : ''}</div>
             <div class="annlog-m" style="margin-bottom:8px">Created ${esc(fmtWhen(iv.created_at))} by ${esc(iv.created_by)} · not used yet</div>
             <input readonly value="${esc(iv.link)}" style="font-size:16px" onclick="this.select()">
             <div style="height:6px"></div>
