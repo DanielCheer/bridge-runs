@@ -1884,6 +1884,13 @@ function runDayFor(req, gate) {
 }
 app.get('/checkin', requireLogin, (req, res) => {
   const email = req.userEmail;
+  // Basketball is apply-to-join. Someone without the role who hasn't applied yet gets the SIGNUP
+  // FORM (not a dead-end status page); someone who already applied (pending/rejected) sees their
+  // status. Approved players + admins fall through to the roster.
+  const meApp = applicantByEmail(email);
+  const meStatus = meApp?.status || 'none';
+  if (!isAdmin(email) && meStatus !== 'approved')
+    return meStatus === 'none' ? res.send(intakePage()) : res.redirect('/status');
   const gate = requirePlayer(req, res);
   if (!gate) return;
   setRunCookie(req, res, 1); // opening basketball → the neutral pages' Chat tab points at basketball
@@ -4917,7 +4924,7 @@ function genericTick(programId) {
 }
 const PROGRAM_DEFS = {
   1: {
-    key: 'basketball', emoji: '🏀', displayName: 'Basketball', alwaysActive: true,
+    key: 'basketball', emoji: '🏀', displayName: 'ADV Basketball', alwaysActive: true,
     paths: { run: '/checkin', chat: '/chat', season: '/season' }, seasonLabel: 'Season board',
     // Per-program config (Phase 3a foundation): the single source the unified engine will read
     // so a new run = a config row, not cloned code. Capacities are HOST-EDITABLE at runtime

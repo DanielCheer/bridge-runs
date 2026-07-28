@@ -2706,7 +2706,7 @@ export function runJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, 
     <div class="card rail" style="margin-top:12px">
       <span class="eyebrow">Join the run</span>
       <h3 style="margin:4px 0 8px">Want in on ${sport.toLowerCase()}?</h3>
-      <p class="lead" style="margin:0 0 14px">Join to check in each week and chat with the ${sport.toLowerCase()} crew — it's separate from the basketball run.${runLabel ? ` Next run: <b>${esc(wdayFull(runDate))}, ${esc(runLabel)}</b>.` : ''}</p>
+      <p class="lead" style="margin:0 0 14px">Join to check in each week and chat with the ${sport.toLowerCase()} crew — it's its own run, with its own check-in and chat.${runLabel ? ` Next run: <b>${esc(wdayFull(runDate))}, ${esc(runLabel)}</b>.` : ''}</p>
       <form method="POST" action="${runBase}/join-run"><button class="btn primary" type="submit">${sportEmoji} Join ${sport.toLowerCase()}</button></form>
     </div>
   ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: 1 }));
