@@ -4176,7 +4176,27 @@ app.post('/pickleball/date', requireLogin, (req, res) => {
   const d = String(req.body.date || '').trim();
   const oldRd = pkRunDate();
   if (!d) {   // clear → back to the weekly standing Tuesday
-    db.prepare("DELETE FROM app_settings WHERE key IN ('pk_run_date','pk_run_base')").run();
+    // Clearing the explicit date must MIGRATE any seated roster back onto the reverted
+    // standing Tuesday, in ONE txn with the settings clear — exactly like basketball's
+    // /admin/rundate reset (server.js ~3305/3321). Without this the roster is stranded on
+    // the abandoned explicit date, and once that date passes pkEnsureWeek archives it into
+    // `attendance` as a run that never happened (permanent phantom season-board credit).
+    db.exec('BEGIN');
+    try {
+      db.prepare("DELETE FROM app_settings WHERE key IN ('pk_run_date','pk_run_base')").run();
+      const newRd = pkDefaultDate();   // the reverted standing Tuesday (settings now cleared)
+      if (newRd !== oldRd) {
+        db.prepare('UPDATE checkins SET run_date = ? WHERE run_date = ? AND program_id = 2').run(newRd, oldRd);
+        db.prepare('UPDATE OR IGNORE regular_optout SET run_date = ? WHERE run_date = ? AND program_id = 2').run(newRd, oldRd);
+        const st = db.prepare('SELECT is_open, cancelled FROM run_state WHERE run_date = ? AND program_id = 2').get(oldRd);
+        if (st) {
+          db.prepare("INSERT INTO run_state (run_date, is_open, cancelled, program_id) VALUES (?,?,?,2) ON CONFLICT(run_date, program_id) DO UPDATE SET is_open = excluded.is_open, cancelled = excluded.cancelled").run(newRd, st.is_open, st.cancelled);
+          db.prepare('DELETE FROM run_state WHERE run_date = ? AND program_id = 2').run(oldRd);
+        }
+        for (const k of ['pk_autoopen_done', 'pk_autoping_done', 'pk_autolock_done']) if (getSetting(k) === oldRd) setSetting(k, newRd);
+      }
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); console.error(`[pk-date] clear FAILED: ${e.message}`); throw e; }
     return res.redirect('/pickleball?pkset=date');
   }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || isNaN(new Date(d + 'T12:00:00'))) return res.redirect('/pickleball?pkerr=datebad');
