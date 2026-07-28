@@ -2564,19 +2564,22 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
 // Pickleball JOIN PROMPT — shown when an approved member who hasn't joined pickleball opens
 // the run. Joining is opt-in (separate from basketball approval): tap Join → become a member →
 // see the run + chat. Chat tab stays on basketball here (they're not a pickleball member yet).
-export function pkJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
-  return HEAD('Join Pickleball — The Bridge', 'has-tabs pk') + header(`<b>PICKLEBALL</b>${esc(email)}`, '', ann, '') + `
+// Program-generic join prompt. Defaults reproduce PICKLEBALL exactly; pkJoinPage is a wrapper.
+export function runJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null,
+  runBase = '/pickleball', theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒' }) {
+  return HEAD(`Join ${sport} — The Bridge`, `has-tabs ${theme}`) + header(`<b>${sport.toUpperCase()}</b>${esc(email)}`, '', ann, '') + `
     ${backToRuns}
     <div class="rule"></div>
-    <div class="phead"><h1>Pickleball 🥒</h1></div>
+    <div class="phead"><h1>${sport} ${sportEmoji}</h1></div>
     <div class="card rail" style="margin-top:12px">
       <span class="eyebrow">Join the run</span>
-      <h3 style="margin:4px 0 8px">Want in on pickleball?</h3>
-      <p class="lead" style="margin:0 0 14px">Join to check in each week and chat with the pickleball crew — it's separate from the basketball run.${runLabel ? ` Next run: <b>${esc(wdayFull(runDate))}, ${esc(runLabel)}</b>.` : ''}</p>
-      <form method="POST" action="/pickleball/join-run"><button class="btn primary" type="submit">🥒 Join pickleball</button></form>
+      <h3 style="margin:4px 0 8px">Want in on ${sport.toLowerCase()}?</h3>
+      <p class="lead" style="margin:0 0 14px">Join to check in each week and chat with the ${sport.toLowerCase()} crew — it's separate from the basketball run.${runLabel ? ` Next run: <b>${esc(wdayFull(runDate))}, ${esc(runLabel)}</b>.` : ''}</p>
+      <form method="POST" action="${runBase}/join-run"><button class="btn primary" type="submit">${sportEmoji} Join ${sport.toLowerCase()}</button></form>
     </div>
   ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: 1 }));
 }
+export function pkJoinPage(state) { return runJoinPage(state); }
 
 // Pickleball run — a SEPARATE, hidden run on its own pk_* tables. Dedicated view (reuses the
 // shell + avatar + list styles); does not touch the basketball checkinPage. Native POST forms.
