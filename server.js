@@ -3998,42 +3998,46 @@ function programGate(programId, req, res) {
   return { a, admin, canOperate: admin };
 }
 function pkGate(req, res) { return programGate(2, req, res); }
-// Hoisted — pkEnsureWeek runs on every /runs + /pickleball GET, /pickleball/join, and the 60s tick.
-const stmtPkPastDates = db.prepare('SELECT DISTINCT run_date FROM checkins WHERE program_id = 2 AND run_date <= ?');
-const stmtPkArchiveIns = db.prepare('INSERT OR IGNORE INTO attendance (run_date, email, name, program_id) VALUES (?,?,?,2)');
-const stmtPkDelCheckinsByDate = db.prepare('DELETE FROM checkins WHERE run_date = ? AND program_id = 2');
-const stmtPkDelStateByDate = db.prepare('DELETE FROM run_state WHERE run_date = ? AND program_id = 2');
-const stmtPkFloorForArchive = db.prepare('SELECT email, name FROM checkins WHERE run_date = ? AND program_id = 2 ORDER BY sort_order ASC, id ASC LIMIT ?');
-const stmtPkSweepState = db.prepare('DELETE FROM run_state WHERE run_date < ? AND program_id = 2');
-const stmtPkSweepOptout = db.prepare('DELETE FROM regular_optout WHERE run_date < ? AND program_id = 2');
-// Lazy rollover (mirrors basketball's ensureWeek): once an EXPLICIT pk_run_date passes, archive
-// the floor into attendance (program 2), purge past rows, and revert to the default (next basketball date).
-function pkEnsureWeek() {
+// Hoisted rollover statements — program-generic (bind program_id at call). ensureWeekFor runs on
+// every /runs + opt-in-run GET, on join, and the 60s tick.
+const stmtRollPastDates = db.prepare('SELECT DISTINCT run_date FROM checkins WHERE program_id = ? AND run_date <= ?');
+const stmtRollArchiveIns = db.prepare('INSERT OR IGNORE INTO attendance (run_date, email, name, program_id) VALUES (?,?,?,?)');
+const stmtRollDelCheckinsByDate = db.prepare('DELETE FROM checkins WHERE run_date = ? AND program_id = ?');
+const stmtRollDelStateByDate = db.prepare('DELETE FROM run_state WHERE run_date = ? AND program_id = ?');
+const stmtRollFloorForArchive = db.prepare('SELECT email, name FROM checkins WHERE run_date = ? AND program_id = ? ORDER BY sort_order ASC, id ASC LIMIT ?');
+const stmtRollSweepState = db.prepare('DELETE FROM run_state WHERE run_date < ? AND program_id = ?');
+const stmtRollSweepOptout = db.prepare('DELETE FROM regular_optout WHERE run_date < ? AND program_id = ?');
+// Lazy rollover for an opt-in run (mirrors basketball's ensureWeek): once a finished run passes,
+// archive its floor into attendance, purge past rows, and clear a spent explicit date back to the
+// weekly standing day. Program-generic — cap, end hour and the date keys come from config;
+// pkEnsureWeek is a thin wrapper.
+function ensureWeekFor(programId) {
+  const cfg = P(programId).config;
   const today = ymdLocal();
   const now = new Date();
-  // A run counts as OVER once its end time (PK_END_H) passes on run day — so today's run is
-  // archived that same night and the cycle rolls forward, letting check-in reopen at 8 PM.
-  const endedToday = now.getHours() >= PK_END_H ? today : null;
+  // A run counts as OVER once its end time (config.endHour) passes on run day — so today's run is
+  // archived that same night and the cycle rolls forward, letting check-in reopen that evening.
+  const endedToday = now.getHours() >= cfg.endHour ? today : null;
   const isPast = rd => rd < today || rd === endedToday;
-  // Archive + purge ANY finished pickleball run so the floor is recorded to attendance (program 2)
-  // and stale rows never accumulate.
-  const pastDates = stmtPkPastDates.all(today).map(r => r.run_date).filter(isPast);
+  // Archive + purge ANY finished run so the floor is recorded to attendance and stale rows never accumulate.
+  const pastDates = stmtRollPastDates.all(programId, today).map(r => r.run_date).filter(isPast);
   for (const rd of pastDates) {
-    const floor = stmtPkFloorForArchive.all(rd, PK_CAP);
-    for (const p of floor) if (!/@guest\.local$/.test(p.email)) stmtPkArchiveIns.run(rd, p.email, p.name);
-    stmtPkDelCheckinsByDate.run(rd); stmtPkDelStateByDate.run(rd);
+    const floor = stmtRollFloorForArchive.all(rd, programId, cfg.cap);
+    for (const p of floor) if (!/@guest\.local$/.test(p.email)) stmtRollArchiveIns.run(rd, p.email, p.name, programId);
+    stmtRollDelCheckinsByDate.run(rd, programId); stmtRollDelStateByDate.run(rd, programId);
   }
-  // Sweep stale run_state for past runs that had NO check-ins (a zero-join or cancelled week
-  // never appears in pastDates above, so its is_open/cancelled row would leak forever).
-  stmtPkSweepState.run(today);
-  stmtPkSweepOptout.run(today);   // sit-outs are per-week → clear past ones so renewal resumes
+  // Sweep stale run_state for past runs that had NO check-ins (a zero-join or cancelled week never
+  // appears in pastDates above, so its is_open/cancelled row would leak forever).
+  stmtRollSweepState.run(today, programId);
+  stmtRollSweepOptout.run(today, programId);   // sit-outs are per-week → clear past ones so renewal resumes
   // Clear a passed explicit override back to the weekly standing day.
-  const set = getSetting('pk_run_date');
-  if (set && isPast(set)) delSetting('pk_run_date');
-  // Clear a consumed standing-Tuesday skip once that Tuesday is itself past (see /pickleball/date).
-  const base = getSetting('pk_run_base');
-  if (base && base < today) delSetting('pk_run_base');
+  const set = getSetting(cfg.keys.runDate);
+  if (set && isPast(set)) delSetting(cfg.keys.runDate);
+  // Clear a consumed standing-day skip once that day is itself past (see /pickleball/date).
+  const base = getSetting(cfg.keys.runBase);
+  if (base && base < today) delSetting(cfg.keys.runBase);
 }
+function pkEnsureWeek() { return ensureWeekFor(2); }
 app.get('/pickleball', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
   // Not a member yet (and not an admin, who operates it) → show a JOIN PROMPT instead of the
