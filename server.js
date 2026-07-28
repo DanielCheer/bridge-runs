@@ -392,6 +392,10 @@ const RUN_DOW = 3;
 const OPEN_DAYS_BEFORE = 2, OPEN_H = 17;
 // "T17:00:00" — the local-time suffix for an hour. Shared by both programs' schedules.
 const hhLocal = h => `T${String(h).padStart(2, '0')}:00:00`;
+// Test seam: override "now" for the auto-scheduler so its clock phases (auto open/ping/lock) are
+// drivable in tests. Unset in prod → real Date.now(). Precedent: FORCE_HELD_RELEASED.
+const TEST_NOW = (process.env.TEST_NOW && !isNaN(new Date(process.env.TEST_NOW).getTime())) ? new Date(process.env.TEST_NOW).getTime() : null;
+function schedNow() { return TEST_NOW != null ? TEST_NOW : Date.now(); }
 // The date check-in opens for run `rd`.
 const openDateFor = (rd) => shiftYmd(rd, -OPEN_DAYS_BEFORE);
 function nextRunDefault(d = new Date()) {
@@ -3729,6 +3733,16 @@ setInterval(() => {
   } catch (e) { console.error(`[interval] rollover/expiry FAILED: ${e.message}`); }
 }, 60000).unref();
 
+// Test-only: synchronously run every program's scheduler tick (rollover + auto open/ping/lock).
+// Mounted ONLY when ENABLE_TEST_TICK=1 so it can never exist in prod — lets the harness drive the
+// clock phases (paired with TEST_NOW) without waiting for the 60s interval. Precedent: FORCE_HELD_RELEASED.
+if (process.env.ENABLE_TEST_TICK === '1') {
+  app.post('/admin/test/tick', requireAdmin, (req, res) => {
+    for (const p of PROGRAMS.values()) p.tick();
+    res.json({ ok: true, now: schedNow() });
+  });
+}
+
 // This week's run as a calendar file (.ics). Floating local time; reflects the host's
 // per-week day/time override. Cancelled → STATUS:CANCELLED so an already-added event clears.
 app.get('/run.ics', requireLogin, (req, res) => {
@@ -3766,8 +3780,8 @@ const PK_CAP = Number(process.env.PK_CAP || 20), PK_WAIT = Number(process.env.PK
 // Hoisted like their basketball twins (stmtRunIsOpen / stmtRun / stmtLatestAnnouncement) —
 // node:sqlite has NO statement cache, so these re-compiled SQL on EVERY /poll tick for every
 // signed-in viewer (pkProgramActive also runs on every /runs and /profile render).
-const stmtPkIsOpen = db.prepare('SELECT is_open FROM run_state WHERE run_date = ? AND program_id = 2');
-const stmtPkIsCancelled = db.prepare('SELECT cancelled FROM run_state WHERE run_date = ? AND program_id = 2');
+const stmtRunOpenById = db.prepare('SELECT is_open FROM run_state WHERE run_date = ? AND program_id = ?');
+const stmtRunCancelledById = db.prepare('SELECT cancelled FROM run_state WHERE run_date = ? AND program_id = ?');
 const stmtPkRoster = db.prepare(`
     SELECT c.email, c.name, c.sort_order, c.id, c.confirmed_at,
            a.id AS applicant_id, a.is_host, a.is_team, a.is_regular
@@ -3821,9 +3835,13 @@ function pkDefaultDate() { return programDefaultDate(2); }
 // Manual per-week override (config.keys.runDate) else the weekly standing day.
 function programRunDate(programId) { return getSetting(P(programId).config.keys.runDate) || programDefaultDate(programId); }
 function pkRunDate() { return programRunDate(2); }
-function pkIsOpen(rd) { const r = stmtPkIsOpen.get(rd); return !!(r && r.is_open); }
-function pkIsCancelled(rd) { const r = stmtPkIsCancelled.get(rd); return !!(r && r.cancelled); }
-function pkSetState(rd, field, val) { db.prepare(`INSERT INTO run_state (run_date, ${field}, program_id) VALUES (?, ?, 2) ON CONFLICT(run_date, program_id) DO UPDATE SET ${field} = excluded.${field}`).run(rd, val ? 1 : 0); }
+// Run-state read/write — program-generic (bind program_id); the pk* names stay thin wrappers.
+function runOpenFor(programId, rd) { const r = stmtRunOpenById.get(rd, programId); return !!(r && r.is_open); }
+function runCancelledFor(programId, rd) { const r = stmtRunCancelledById.get(rd, programId); return !!(r && r.cancelled); }
+function setRunStateFor(programId, rd, field, val) { db.prepare(`INSERT INTO run_state (run_date, ${field}, program_id) VALUES (?, ?, ?) ON CONFLICT(run_date, program_id) DO UPDATE SET ${field} = excluded.${field}`).run(rd, val ? 1 : 0, programId); }
+function pkIsOpen(rd) { return runOpenFor(2, rd); }
+function pkIsCancelled(rd) { return runCancelledFor(2, rd); }
+function pkSetState(rd, field, val) { return setRunStateFor(2, rd, field, val); }
 // Partition a SIMPLE (no offer-window) run's roster into floor / waitlist by sort order — the
 // immediate first-come model (pickleball). Reads P(id).config.cap for the floor size; program-
 // scoped roster query. pkPartition keeps the program-2 entry so its call sites are unchanged.
@@ -3939,54 +3957,58 @@ function dropFromPickleball(email) {
   pkNotifyPromotion(rd, email);
   db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = 2').run(rd, email);
 }
-// Weekly auto open/lock/ping for pickleball (runs on the shared 60s interval), keyed to the
-// standing Tuesday (pkRunDate). Check-in OPENS the moment the prior run ends (PK_END_H the
-// previous Tuesday) so members re-queue the same night, the floor gets a CONFIRM PING the
-// night before (PK_PING_H, day before), and the roster LOCKS 30 min before start (PK_LOCK). Each
-// fires once per cycle (app_settings markers keyed to rd). Season-gated + membership-scoped
-// (only opt-in pickleball members are pushed — never the whole club). Skipped while hidden
-// or cancelled. Manual open/close/date still work anytime.
-function pkAutoRunState() {
-  if (!pkProgramActive()) return;
-  const rd = pkRunDate();
-  if (!rd || pkIsCancelled(rd)) return;
-  const opener = pkSeasonStart();
-  if (opener && rd < opener) return;   // never fire before the season opener (pkRunDate is gated, this is belt-and-suspenders)
-  const now = Date.now();
+// Weekly auto open/ping/lock for an opt-in run (runs on the shared 60s interval), keyed to the
+// program's run date. Check-in OPENS the moment the prior run ends (config.endHour, openOffsetDays
+// before run day) so members re-queue the same night, the floor gets a CONFIRM PING the night
+// before (config.pingHour / pingDowOffset), and the roster LOCKS at config.lockTime. Each fires
+// once per cycle (app_settings markers config.keys.auto*). Season-gated + membership-scoped (only
+// members are pushed — never the whole club). Skipped while hidden or cancelled. Manual open/close/
+// date still work anytime. Program-generic — pkAutoRunState is a thin wrapper.
+function autoRunStateFor(programId) {
+  const cfg = P(programId).config;
+  if (!programActive(programId)) return;
+  const rd = programRunDate(programId);
+  if (!rd || runCancelledFor(programId, rd)) return;
+  const opener = programSeasonStart(programId);
+  if (opener && rd < opener) return;   // never fire before the season opener (run date is gated, this is belt-and-suspenders)
+  const now = schedNow();
   const hh = hhLocal;
-  const openAt = new Date(shiftYmd(rd, -7) + hh(PK_END_H)).getTime();          // prior run's end (prev Tue 9 PM) → reopen
-  const pingAt = new Date(shiftYmd(rd, -PK_PING_DOW_OFFSET) + hh(PK_PING_H)).getTime(); // night before (Mon 8 PM)
-  const lockAt = new Date(rd + 'T' + PK_LOCK + ':00').getTime();                // roster locks 30 min before start (Tue 5:30 PM)
+  const openAt = new Date(shiftYmd(rd, cfg.openOffsetDays) + hh(cfg.endHour)).getTime();       // prior run's end → reopen
+  const pingAt = new Date(shiftYmd(rd, -cfg.pingDowOffset) + hh(cfg.pingHour)).getTime();       // the night before
+  const lockAt = new Date(rd + 'T' + cfg.lockTime + ':00').getTime();                           // roster locks before start
+  const runUrl = P(programId).paths.run;
   // OPEN (once) — from the prior run's end through lock.
-  if (now >= openAt && now < lockAt && getSetting('pk_autoopen_done') !== rd) {
-    setSetting('pk_autoopen_done', rd);
-    if (!pkIsOpen(rd)) {
-      pkSetState(rd, 'is_open', 1);
-      const added = pkSeatRenewers(rd);
-      audit('system', 'system', 'pk:autoopen', `${rd} +${added} auto`);
-      setImmediate(() => sendPush(pkMemberEmails(), { title: 'Pickleball check-in is open', body: `Check-in is open for ${runWeekday(rd)}, ${runLabelFor(rd)} pickleball — grab your spot 🥒`, url: '/pickleball', tag: 'pkqueueopen' }));
-      console.log(`[pk-autoopen] opened pickleball check-in for ${rd} (auto-added ${added})`);
+  if (now >= openAt && now < lockAt && getSetting(cfg.keys.autoopen) !== rd) {
+    setSetting(cfg.keys.autoopen, rd);
+    if (!runOpenFor(programId, rd)) {
+      setRunStateFor(programId, rd, 'is_open', 1);
+      const added = seatRenewers(programId, rd);
+      audit('system', 'system', `${cfg.logTag}:autoopen`, `${rd} +${added} auto`);
+      setImmediate(() => sendPush(programMemberEmails(programId), { title: cfg.copy.openTitle, body: cfg.copy.openBody(rd), url: runUrl, tag: `${cfg.logTag}queueopen` }));
+      console.log(`[${cfg.logTag}-autoopen] opened ${cfg.logTag} check-in for ${rd} (auto-added ${added})`);
     }
   }
   // CONFIRM PING (once) — the night before, ping unconfirmed floor to confirm or drop.
-  if (now >= pingAt && now < lockAt && getSetting('pk_autoping_done') !== rd) {
-    setSetting('pk_autoping_done', rd);
-    if (pkIsOpen(rd) && !pkIsCancelled(rd)) {
-      const floor = pkPartition(rd).floor.filter(p => !/@guest\.local$/.test(p.email) && !p.confirmed_at).map(p => p.email);
+  if (now >= pingAt && now < lockAt && getSetting(cfg.keys.autoping) !== rd) {
+    setSetting(cfg.keys.autoping, rd);
+    if (runOpenFor(programId, rd) && !runCancelledFor(programId, rd)) {
+      const part = partitionFor(programId, rd);
+      const floorRows = cfg.offerWindow ? part.floorReal : part.floor;
+      const floor = floorRows.filter(p => !/@guest\.local$/.test(p.email) && !p.confirmed_at).map(p => p.email);
       if (floor.length) {
-        setImmediate(() => sendPush(floor, { title: 'Confirm your pickleball spot', body: `You're on the floor for ${runWeekday(rd)} pickleball. Tap to confirm — or leave to free your spot.`, url: '/pickleball', tag: 'pkconfirm' }));
-        audit('system', 'system', 'pk:autoping', String(floor.length));
-        console.log(`[pk-autoping] pinged ${floor.length} unconfirmed pickleball floor player(s) for ${rd}`);
+        setImmediate(() => sendPush(floor, { title: cfg.copy.confirmTitle, body: cfg.copy.confirmBody(rd), url: runUrl, tag: `${cfg.logTag}confirm` }));
+        audit('system', 'system', `${cfg.logTag}:autoping`, String(floor.length));
+        console.log(`[${cfg.logTag}-autoping] pinged ${floor.length} unconfirmed ${cfg.logTag} floor player(s) for ${rd}`);
       }
     }
   }
   // LOCK (once) — at run start.
-  if (now >= lockAt && getSetting('pk_autolock_done') !== rd) {
-    setSetting('pk_autolock_done', rd);
-    if (pkIsOpen(rd)) { pkSetState(rd, 'is_open', 0); audit('system', 'system', 'pk:autolock', rd); }
+  if (now >= lockAt && getSetting(cfg.keys.autolock) !== rd) {
+    setSetting(cfg.keys.autolock, rd);
+    if (runOpenFor(programId, rd)) { setRunStateFor(programId, rd, 'is_open', 0); audit('system', 'system', `${cfg.logTag}:autolock`, rd); }
   }
 }
-// Access gate: approved players + admins. HIDDEN while program 2 is inactive → admins only.
+function pkAutoRunState() { return autoRunStateFor(2); }
 // Access gate for an opt-in run (pickleball, volleyball): approved players + admins in; a hidden
 // program 404s for everyone but admins. Operator = admin for now. programGate is program-generic;
 // pkGate stays a thin wrapper so call sites are untouched.
@@ -4377,7 +4399,15 @@ const PROGRAM_DEFS = {
       cap: PK_CAP, waitlist: PK_WAIT, prereg: 0,
       dow: PK_DOW, startHour: PK_START_H, endHour: PK_END_H,         // Tue 6–8 PM
       pingHour: PK_PING_H, pingDowOffset: PK_PING_DOW_OFFSET, lockTime: PK_LOCK,
-      keys: { runDate: 'pk_run_date', runBase: 'pk_run_base', seasonStart: 'pk_season_start' },  // app_settings keys for this program's dates
+      keys: { runDate: 'pk_run_date', runBase: 'pk_run_base', seasonStart: 'pk_season_start',
+              autoopen: 'pk_autoopen_done', autoping: 'pk_autoping_done', autolock: 'pk_autolock_done' },  // app_settings keys
+      logTag: 'pk', openOffsetDays: -7,   // audit/push/log prefix; reopen openOffsetDays before run day at endHour
+      copy: {
+        openTitle: 'Pickleball check-in is open',
+        openBody: (rd) => `Check-in is open for ${runWeekday(rd)}, ${runLabelFor(rd)} pickleball — grab your spot 🥒`,
+        confirmTitle: 'Confirm your pickleball spot',
+        confirmBody: (rd) => `You're on the floor for ${runWeekday(rd)} pickleball. Tap to confirm — or leave to free your spot.`,
+      },
       theme: 'pk', access: 'opt-in', approval: 'invite',
       tiers: ['team', 'host'], offerWindow: false,
       autoRenew: { from: 'members' },   // any opt-in member (program_membership.auto_renew) renews; team seated first, then non-team fill
