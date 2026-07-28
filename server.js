@@ -4226,7 +4226,7 @@ const PK_CAP = Number(process.env.PK_CAP || 20), PK_WAIT = Number(process.env.PK
 const stmtRunOpenById = db.prepare('SELECT is_open FROM run_state WHERE run_date = ? AND program_id = ?');
 const stmtRunCancelledById = db.prepare('SELECT cancelled FROM run_state WHERE run_date = ? AND program_id = ?');
 const stmtPkRoster = db.prepare(`
-    SELECT c.email, c.name, c.sort_order, c.id, c.confirmed_at, c.auto_seated,
+    SELECT c.email, c.name, c.sort_order, c.id, c.confirmed_at, c.auto_seated, c.group_id,
            a.id AS applicant_id, a.is_host, a.is_team, a.is_regular
     FROM checkins c LEFT JOIN applicants a ON a.email = c.email
     WHERE c.run_date = ? AND c.program_id = ? ORDER BY c.sort_order ASC, c.id ASC`);
@@ -4293,6 +4293,14 @@ function simplePartition(programId, rd) {
   // (guests have no applicant row → applicant_id null → non-tappable, matches basketball).
   const rows = stmtPkRoster.all(rd, programId);
   const cap = P(programId).config.cap;
+  // Queue-with-friends (volleyball): keep a party (shared group_id) atomic — it boards only if it
+  // fits entirely in the remaining floor, else the whole party waits and smaller units behind it
+  // fill the gap. group_id is NULL for everyone when groupQueue is off (pickleball) → packParties
+  // is byte-identical to the plain slice (the reduction-proof), so pk is untouched.
+  if (groupQueueFeature(programId)) {
+    const { floor, wait } = packParties(rows, cap);
+    return { floor, wait, rows };
+  }
   return { floor: rows.slice(0, cap), wait: rows.slice(cap), rows };
 }
 function pkPartition(rd) { return partitionFor(2, rd); }
@@ -5178,9 +5186,14 @@ const PROGRAM_DEFS = {
   },
   // Volleyball — the Phase-4 acceptance test: adding a program is PURE CONFIG (this block + a
   // program row + a CSS theme). Ships HIDDEN (program.active=0); publish = flip active + set the
-  // season start in September. Cap 21 (3×7), waitlist 6, queue ON (offerWindow → the auto-offer
-  // loop), opt-in, org-team tier only. Day/time are PLACEHOLDER (Fri ~6–9 PM) — config, finalize
-  // before publish. Uses the generic engine end-to-end; runs routes are registered by mountRunProgram.
+  // season start in September. Cap 21 (3×7), waitlist 6, opt-in, org-team tier only. Day/time are
+  // PLACEHOLDER (Fri ~6–9 PM) — config, finalize before publish. Uses the generic engine end-to-end;
+  // routes are registered by mountRunProgram.
+  // SIMPLE seating model (offerWindow:false, like pickleball): a freed floor spot promotes the top
+  // waitlister IMMEDIATELY — no 3h email-offer/claim window. Chosen over the offer model because the
+  // offer-window claim route + offer UI were never wired for vb AND offers fought the queue-with-
+  // friends parties (a single freed seat can't be offered to a multi-person party). groupQueue stays
+  // ON: packParties (in simplePartition) keeps a party atomic on the floor.
   3: {
     key: 'volleyball', emoji: '🏐', displayName: 'Volleyball',
     paths: { run: '/volleyball', chat: '/volleyball/chat', season: '/volleyball/season' }, seasonLabel: 'Volleyball season',
@@ -5202,7 +5215,7 @@ const PROGRAM_DEFS = {
       },
       theme: 'vb', access: 'opt-in', approval: 'invite',
       bannerPath: path.join(__dirname, 'public', 'vb-banner.jpg'), bannerPublic: '/vb-banner.jpg',
-      tiers: ['team', 'host'], offerWindow: true,
+      tiers: ['team', 'host'], offerWindow: false,   // SIMPLE model — immediate waitlist promotion (see block comment)
       autoRenew: { from: 'members' },
       autoRenewPenalty: { strikes: 3, pauseWeeks: 2 },   // ENABLED: 3 consecutive no-shows (auto-seated, never confirmed) → auto-renew pauses 2 weeks. Tunable.
       mentionTag: 'vbmention', chatSeqKey: 'vb_chat_seq',
