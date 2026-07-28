@@ -493,6 +493,34 @@ migrateToPhase2(db);
   if (!cc.includes('auto_seated')) db.exec('ALTER TABLE checkins ADD COLUMN auto_seated INTEGER NOT NULL DEFAULT 0');
 }
 
+// --- Social graph (2026-07, PHASE 6 — friends / follow / block) -------------
+// UNIVERSAL, person-to-person (NOT run- or program-scoped): one edge table serves every
+// relationship kind so a new kind is just a new `kind` value, never a new table.
+//   kind='friend'  — a MUTUAL tie stored as ONE directed row: from_email = the requester,
+//                    to_email = the target. status 'requested' until the target accepts →
+//                    'accepted'. Queried BIDIRECTIONALLY (a friendship is one row, either way).
+//   kind='follow'  — a one-way notify tie (from_email follows to_email); always 'accepted'.
+//   kind='block'   — a one-way safety valve (from_email blocked to_email); always 'accepted'.
+//                    Consumed as a seating/team invariant (a blocked pair is never auto-placed
+//                    together) and auto-removes any friendship/follow in EITHER direction.
+// Additive + migration-guarded (CREATE TABLE IF NOT EXISTS), a brand-new table the Phase-2
+// migration never rebuilds — placed AFTER migrateToPhase2 so it's independent of that rebuild.
+// rekeyEmailTx below carries a person's edges (both columns) on an email change; the person
+// hard-delete path purges both directions. Indexed both ways for O(log n) directory lookups.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS social_edges (
+    from_email TEXT NOT NULL,
+    to_email   TEXT NOT NULL,
+    kind       TEXT NOT NULL,                        -- 'friend' | 'follow' | 'block'
+    status     TEXT NOT NULL DEFAULT 'accepted',     -- friend: 'requested'->'accepted'; follow/block: 'accepted'
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT,                                 -- last status change (e.g. accept time)
+    PRIMARY KEY (from_email, to_email, kind)
+  );
+  CREATE INDEX IF NOT EXISTS idx_social_to   ON social_edges(to_email, kind, status);
+  CREATE INDEX IF NOT EXISTS idx_social_from ON social_edges(from_email, kind, status);
+`);
+
 // Prune stale magic-link tokens on startup. A token is dead once it's been used
 // OR has expired — keeping them forever just grows the table unbounded (a fresh
 // row is written on every /login). Unused-and-still-valid tokens are preserved
@@ -558,6 +586,24 @@ function rekeyEmailTx(oldEmail, newEmail) {
       db.prepare(`DELETE FROM ${t} WHERE email = ?`).run(newEmail);
       db.prepare(`UPDATE ${t} SET email = ? WHERE email = ?`).run(newEmail, oldEmail);
     }
+    // social_edges (Phase 6): a directed graph keyed on BOTH from_email AND to_email, so it can't
+    // ride the single-column EMAIL_KEYED_TABLES loop — it needs a bespoke, collision-safe merge.
+    // Merging oldEmail INTO newEmail: (1) drop any edge directly between the two addresses (it would
+    // become a self-loop after the merge); (2) drop newEmail's rows that would PK-collide with a
+    // carried oldEmail row — the migrating person's own edge wins, matching the loop's doctrine above;
+    // (3) carry both columns. Steps 1-2 make step 3 collision-free. Correlated-DELETE verified under
+    // node:sqlite. (A rare status downgrade — new 'accepted' losing to old 'requested' on a collision —
+    // is acceptable on an already-rare identity edit.)
+    db.prepare('DELETE FROM social_edges WHERE (from_email=? AND to_email=?) OR (from_email=? AND to_email=?)')
+      .run(oldEmail, newEmail, newEmail, oldEmail);
+    db.prepare(`DELETE FROM social_edges WHERE from_email=? AND EXISTS
+      (SELECT 1 FROM social_edges o WHERE o.from_email=? AND o.to_email=social_edges.to_email AND o.kind=social_edges.kind)`)
+      .run(newEmail, oldEmail);
+    db.prepare(`DELETE FROM social_edges WHERE to_email=? AND EXISTS
+      (SELECT 1 FROM social_edges o WHERE o.to_email=? AND o.from_email=social_edges.from_email AND o.kind=social_edges.kind)`)
+      .run(newEmail, oldEmail);
+    db.prepare('UPDATE social_edges SET from_email=? WHERE from_email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE social_edges SET to_email=?   WHERE to_email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE announcements         SET author=?      WHERE author=?').run(newEmail, oldEmail); // "posted by" resolves to their name
     // Old-address sign-in tokens are INVALIDATED, not carried — they were emailed to an
     // address the person may no longer control, so a lingering valid link/code is a risk.

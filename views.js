@@ -2430,7 +2430,7 @@ export function profileCard({ p, stats, canContact = false, isSelf = false }) {
     <div class="pcbtns">${isSelf ? `<a class="btn ghost sm" href="/profile">Edit profile</a>` : `<a class="btn primary sm" href="/messages/${p.id}">Message</a>`}<a class="btn ghost sm" href="/u/${p.id}">Full profile →</a></div>`;
 }
 
-export function profilePage({ p, stats, isSelf = false, canContact = false, runDate = '', hours = '8:30–10:30 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null, back = '/chat' }) {
+export function profilePage({ p, stats, isSelf = false, canContact = false, rel = 'none', following = false, runDate = '', hours = '8:30–10:30 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null, back = '/chat' }) {
   const badges = [
     p.is_host ? '<span class="bdg host">★ Host</span>' : '',
     p.is_team ? '<span class="bdg team">◆ Team</span>' : (p.is_regular ? '<span class="bdg core">★ Core</span>' : ''),
@@ -2451,6 +2451,16 @@ export function profilePage({ p, stats, isSelf = false, canContact = false, runD
   if (canContact && !p.is_host) prowBtns.push(`<a class="btn ghost" href="sms:${esc(p.phone)}">Text</a>`);
   if (isSelf) prowBtns.push(`<a class="btn ghost" href="/profile">Edit profile</a>`);
   const prow = prowBtns.length ? `<div class="prow">${prowBtns.join('')}</div>` : '';
+  // Friend / block controls (Phase 6) — only for another approved, non-guest member who hasn't
+  // blocked me. friendBtn renders the state-appropriate swapform(s) (Add / Accept / Friends+Remove /
+  // cancel / Unblock); a Block control sits alongside except when I've already blocked them.
+  let frControls = '';
+  if (!isSelf && p.status === 'approved' && !/@guest\.local$/.test(p.email) && rel !== 'blocked_by') {
+    const blockCtl = rel === 'blocked' ? ''
+      : `<form class="swapform frbtn" method="POST" action="/friends/block"><input type="hidden" name="id" value="${p.id}"><input type="hidden" name="back" value="/u/${p.id}"><button class="btn ghost sm" type="submit">Block</button></form>`;
+    const followCtl = rel === 'blocked' ? '' : followBtn(p.id, following, '/u/' + p.id);
+    frControls = `<div class="fract" style="margin-top:12px;gap:8px">${friendBtn(p.id, rel, '/u/' + p.id)}${followCtl}${blockCtl}</div>`;
+  }
   return HEAD('Profile — Adv Runs', 'has-tabs') + header('', wdayShort(runDate), ann, hours) + WELCOME_MODAL + `
     <div class="rule"></div>
     <a class="pback" href="${esc(back)}">‹ Back</a>
@@ -2468,7 +2478,133 @@ export function profilePage({ p, stats, isSelf = false, canContact = false, runD
     </div>
     ${contact}
     ${prow}
+    ${frControls}
   ` + footWithTabs(tabNav(isSelf ? 'profile' : '', { dm: dmUnread, group: groupUnread, groupMention }));
+}
+
+// ---------- FRIENDS (Phase 6: social graph home) ----------
+// Relationship action button(s): a set of `.swapform` POSTs (already in the SPA interceptor
+// selector) whose route redirects back to `back` and is swapped in place — no full reload.
+// `rel` is the viewer's relationship toward this person (see relationshipTo in server.js).
+// Reused on the /friends rows AND on a player's full profile.
+function friendBtn(id, rel, back = '/friends') {
+  const f = (action, label, cls) =>
+    `<form class="swapform frbtn" method="POST" action="/friends/${action}"><input type="hidden" name="id" value="${id}"><input type="hidden" name="back" value="${esc(back)}"><button class="btn ${cls}" type="submit">${label}</button></form>`;
+  switch (rel) {
+    case 'friends':    return `<span class="frchip">✓ Friends</span>${f('remove', 'Remove', 'ghost sm')}`;
+    case 'incoming':   return `${f('accept', '✓ Accept', 'primary sm')}${f('decline', 'Decline', 'ghost sm')}`;
+    case 'outgoing':   return f('decline', 'Requested — cancel', 'ghost sm');
+    case 'blocked':    return f('unblock', 'Unblock', 'ghost sm');
+    case 'blocked_by':
+    case 'self':       return '';
+    default:           return f('request', '＋ Add friend', 'primary sm');
+  }
+}
+
+// One-way follow control (Javelin-style). `following` = do I already follow them. When I don't
+// AND `backLabel` is set (the Followers list), it reads "Follow back" instead of "Follow".
+function followBtn(id, following, back = '/friends', backLabel = false) {
+  const action = following ? 'unfollow' : 'follow';
+  const label = following ? 'Following ✓' : (backLabel ? 'Follow back' : '＋ Follow');
+  const cls = following ? 'ghost sm' : 'primary sm';
+  return `<form class="swapform frbtn" method="POST" action="/friends/${action}"><input type="hidden" name="id" value="${id}"><input type="hidden" name="back" value="${esc(back)}"><button class="btn ${cls}" type="submit">${label}</button></form>`;
+}
+
+// Friends home — directory search, incoming requests, friends' games, your friends,
+// pending sent, and a collapsed blocked list. All person-scoped (not run-scoped). Every row
+// links to /u/:id; every action is a swapform that swaps back into this page. Self-contained
+// styles (scoped .fr*) so it needs no new global CSS.
+export function friendsPage({ q = '', results = [], friends = [], incoming = [], outgoing = [], blocked = [], followers = [], following = [], games = [], dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null }) {
+  const BACK = '/friends';
+  const dateLabel = rd => esc(new Date(rd + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }));
+  // A person row: avatar + name (→ /u/:id) + a right-side action string (friend and/or follow control).
+  const personRow = (p, actions) => `<div class="mrow frrow">
+      <a class="mav" href="/u/${p.id}" aria-label="${esc(p.name)}">${avatarInner(p.email, p.name)}</a>
+      <a class="mtx" href="/u/${p.id}"><b class="mnm">${esc(p.name)}</b></a>
+      <span class="fract">${actions}</span>
+    </div>`;
+  const section = (title, count, inner) => `<div class="subhead frsub">${esc(title)}${count ? ` <span class="frn">${count}</span>` : ''}</div>${inner}`;
+
+  const searchBlock = `
+    <form class="frsearch" method="GET" action="/friends" role="search">
+      <input type="search" name="q" value="${esc(q)}" placeholder="Search players by name…" autocomplete="off" aria-label="Search players">
+      <button class="btn primary sm" type="submit">Search</button>
+    </form>
+    ${q ? (results.length
+      ? `<div class="mlist">${results.map(r => personRow(r, friendBtn(r.id, r.rel, BACK) + ((r.rel === 'blocked' || r.rel === 'blocked_by') ? '' : followBtn(r.id, r.following, BACK)))).join('')}</div>`
+      : `<div class="frempty">No players found for “${esc(q)}”.</div>`) : ''}`;
+
+  const incomingBlock = incoming.length
+    ? section('Friend requests', incoming.length, `<div class="mlist">${incoming.map(p => personRow(p, friendBtn(p.id, 'incoming', BACK))).join('')}</div>`)
+    : '';
+
+  const followersBlock = followers.length
+    ? section('Followers', followers.length, `<div class="mlist">${followers.map(p => personRow(p, followBtn(p.id, p.followsBack, BACK, true))).join('')}</div>`)
+    : '';
+
+  const gamesBlock = games.length
+    ? section("Friends' games", 0, `<div class="frgames">${games.map(g => `
+        <div class="frgame">
+          <div class="frgh"><span class="frge">${g.emoji || '🏀'}</span><b>${esc(g.programName)}</b> · <span>${dateLabel(g.runDate)}</span></div>
+          <div class="frgf">${g.friends.map(f => `<span class="frgp"><span class="mav sm">${avatarInner(f.email, f.name)}</span>${esc((f.name || '').split(' ')[0])}</span>`).join('')}</div>
+          <a class="btn ghost sm" href="${esc(g.href)}">View run →</a>
+        </div>`).join('')}</div>`)
+    : '';
+
+  const friendsBlock = section('Your friends', friends.length,
+    friends.length
+      ? `<div class="mlist">${friends.map(p => personRow(p, friendBtn(p.id, 'friends', BACK))).join('')}</div>`
+      : `<div class="frempty"><b>No friends yet</b><p>Search a player above and tap “Add friend”. Once they accept, you'll see each other's upcoming games here.</p></div>`);
+
+  const followingBlock = following.length
+    ? `<details class="frdetails"><summary>Following (${following.length})</summary><div class="mlist">${following.map(p => personRow(p, followBtn(p.id, true, BACK))).join('')}</div></details>`
+    : '';
+
+  const outgoingBlock = outgoing.length
+    ? `<details class="frdetails"><summary>Pending sent (${outgoing.length})</summary><div class="mlist">${outgoing.map(p => personRow(p, friendBtn(p.id, 'outgoing', BACK))).join('')}</div></details>`
+    : '';
+
+  const blockedBlock = blocked.length
+    ? `<details class="frdetails"><summary>Blocked (${blocked.length})</summary><div class="mlist">${blocked.map(p => personRow(p, friendBtn(p.id, 'blocked', BACK))).join('')}</div></details>`
+    : '';
+
+  return HEAD('Friends — Adv Runs', 'has-tabs') + header('', '', ann, '') + `
+    <div class="rule"></div>
+    <div class="frwrap">
+      <div class="frtitle"><h1>Friends</h1></div>
+      ${searchBlock}
+      ${incomingBlock}
+      ${followersBlock}
+      ${gamesBlock}
+      ${friendsBlock}
+      ${followingBlock}
+      ${outgoingBlock}
+      ${blockedBlock}
+    </div>
+    <style>
+      .frwrap{padding:0 2px}
+      .frtitle h1{font-size:22px;margin:14px 2px 10px}
+      .frsearch{display:flex;gap:8px;margin:0 0 14px}
+      .frsearch input{flex:1;min-width:0;padding:11px 13px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);font-size:15px}
+      .frsub{display:flex;align-items:center;gap:7px;margin-top:20px}
+      .frn{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--accent,#22615A);color:#fff;font-size:12px;font-weight:700}
+      .frwrap .mlist{max-height:none;overflow:visible}
+      .frrow{align-items:center}
+      .frrow .mtx{flex:1;min-width:0}
+      .frempty{color:var(--muted);font-size:14px;padding:12px 2px;line-height:1.5}
+      .frempty b{color:var(--ink);display:block;margin-bottom:2px}
+      .frempty p{margin:0}
+      .frgames{display:flex;flex-direction:column;gap:10px}
+      .frgame{border:1px solid var(--line);border-radius:14px;padding:12px 13px;background:var(--card)}
+      .frgh{font-size:15px;margin-bottom:8px}.frgh span{color:var(--muted)}
+      .frge{margin-right:5px}
+      .frgf{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px}
+      .frgp{display:inline-flex;align-items:center;gap:6px;font-size:13px}
+      .frgp .mav.sm{width:26px;height:26px;font-size:11px}
+      .frdetails{margin-top:16px}
+      .frdetails summary{cursor:pointer;color:var(--muted);font-size:14px;padding:6px 2px}
+    </style>
+  ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention, program: chatProgram }));
 }
 
 // Runs hub — the launcher that lists every run the viewer can see (Basketball always;
@@ -2836,7 +2972,7 @@ function inboxRows(me, threads) {
 }
 
 // ---------- PROFILE (own editable tab) ----------
-export function profileTabPage({ a, stats, saved = false, error = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, canOperate = false, announcementLog = [], iAmHost = false, threads = [], photoMsg = '', ann = null }) {
+export function profileTabPage({ a, stats, saved = false, error = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, canOperate = false, announcementLog = [], iAmHost = false, threads = [], photoMsg = '', ann = null, friendCount = 0, friendReqIn = 0, followerCount = 0 }) {
   // The own-profile tab is a chromeless editor (its own .bar, no masthead), so the
   // global announcements bell lives in the .bar rather than the .mast here. Same
   // button + panel + JS as every other page (one shared affordance, one live dot).
@@ -2930,6 +3066,12 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
       <p class="tally-note" id="pushnote" style="margin:6px 0 10px">Spot offers, announcements and mentions — right on your phone.</p>
       <button class="btn ghost sm" type="button" id="pushbtn">Enable notifications</button>
     </div>
+    <a href="/friends" style="display:flex;align-items:center;gap:12px;margin-top:16px;padding:12px 13px;border:1px solid var(--line);border-radius:14px;background:var(--card);text-decoration:none;color:inherit">
+      <span style="font-size:22px;line-height:1">👥</span>
+      <span style="flex:1;min-width:0"><b style="display:block;font-family:var(--head);font-size:15px;color:var(--ink)">Friends</b><small style="color:var(--muted);font-size:12.5px">${friendCount ? esc(String(friendCount)) + ' friend' + (friendCount === 1 ? '' : 's') : 'Find & add players'}${followerCount ? ' · ' + followerCount + ' follower' + (followerCount === 1 ? '' : 's') : ''}${friendReqIn > 0 ? ' · ' + friendReqIn + ' request' + (friendReqIn === 1 ? '' : 's') : ''}</small></span>
+      ${friendReqIn > 0 ? `<span class="mdot">${friendReqIn > 9 ? '9+' : friendReqIn}</span>` : ''}
+      <span style="color:var(--muted);font-size:20px">›</span>
+    </a>
     ${inbox}
     ${annHistory}
     ${annSheet}

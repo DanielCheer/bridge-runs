@@ -703,6 +703,11 @@ textarea#phones{width:100%;background:#fff;border:1px solid var(--line);border-r
 .mempty b{font-family:var(--anton);font-size:19px;color:var(--ink);display:block}
 .mempty p{color:var(--muted);font-size:13px;margin:5px auto 0;max-width:38ch;line-height:1.45}
 .mempty .btn{max-width:280px;margin:0 auto}
+/* Friends (Phase 6) — shared relationship-action controls, reused on /friends + /u/:id */
+.fract{display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap}
+.frbtn{margin:0}
+.frchip{font-size:13px;font-weight:600;color:var(--muted);white-space:nowrap}
+.mav.sm{width:26px;height:26px;font-size:11px}
 
 /* ---- thread page (own layout: fixed top bar + composer, no bottom tabs) ---- */
 body.thread-page .wrap{padding-bottom:calc(96px + env(safe-area-inset-bottom));padding-top:60px}
