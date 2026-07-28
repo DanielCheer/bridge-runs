@@ -3939,14 +3939,19 @@ function pkSeatRenewers(rd) { return seatRenewers(2, rd); }
 // re-slices by order — pickleball has no offer/claim window, it's immediate first-come). Push
 // that person so they actually know a spot opened. CALL THIS BEFORE deleting the leaver, passing
 // their email — returns nothing, just notifies the promoted waitlister (if any, non-guest).
-function pkNotifyPromotion(rd, leavingEmail) {
-  const part = pkPartition(rd);
+// Simple-program promotion: notify the first waitlister that a floor spot just freed. Program-
+// generic (copy/paths from config); only used by non-offer-window programs (offer-window ones send
+// a held offer via createOffer instead). pkNotifyPromotion stays a wrapper.
+function notifyPromotionFor(programId, rd, leavingEmail) {
+  const part = partitionFor(programId, rd);
   if (!part.floor.some(p => p.email === leavingEmail)) return; // leaver was on the waitlist → no floor spot frees
   const next = part.wait[0];                                   // first waitlister → promoted once the leaver goes
   if (!next || /@guest\.local$/.test(next.email)) return;
-  setImmediate(() => sendPush([next.email], { title: "You're in for pickleball 🥒", body: `A spot opened — you're on the floor for ${runWeekday(rd)}, ${runLabelFor(rd)} pickleball.`, url: '/pickleball', tag: 'pkpromo' }));
-  audit('system', 'system', 'pk:promote', next.email);
+  const cfg = P(programId).config;
+  setImmediate(() => sendPush([next.email], { title: cfg.copy.promoTitle, body: cfg.copy.promoBody(rd), url: P(programId).paths.run, tag: `${cfg.logTag}promo` }));
+  audit('system', 'system', `${cfg.logTag}:promote`, next.email);
 }
+function pkNotifyPromotion(rd, leavingEmail) { return notifyPromotionFor(2, rd, leavingEmail); }
 // Pull someone off the pickleball floor for THIS cycle, promoting the waitlist behind them —
 // the pickleball twin of the checkins delete + offer-onward that suspend/reject already do for
 // basketball. Notify first: once the row is gone, pkNotifyPromotion can't tell a floor leaver
@@ -4141,6 +4146,32 @@ function runPublish(programId, req, res) {
   audit(req.userEmail, 'admin', req.body.on === '0' ? `${cfg.logTag}:hide` : `${cfg.logTag}:publish`, '');
   res.redirect(P(programId).paths.run);
 }
+// A member leaves the run (self sit-out). Offer-window programs offer the freed floor spot onward
+// (capture the offeree BEFORE the delete); simple programs notify the first waitlister. Records a
+// per-week sit-out so an auto-renew member isn't re-seated on a later open.
+function runLeave(programId, req, res) {
+  const base = P(programId).paths.run, cfg = P(programId).config;
+  const g = programGate(programId, req, res); if (!g) return;
+  const rd = programRunDate(programId);
+  const offeree = cfg.offerWindow ? offereeForFloorLeave(rd, req.userEmail, programId) : null;
+  if (!cfg.offerWindow) notifyPromotionFor(programId, rd, req.userEmail); // simple: notify next before the row goes
+  db.prepare('INSERT OR IGNORE INTO regular_optout (run_date, email, program_id) VALUES (?, ?, ?)').run(rd, req.userEmail, programId);
+  db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = ?').run(rd, req.userEmail, programId);
+  if (offeree) createOffer(rd, offeree, req, programId);
+  res.redirect(base);
+}
+// Operator pulls someone off the floor for THIS cycle (no sit-out recorded — an operator action,
+// not the player opting out). Same offer-vs-notify split as runLeave.
+function runRemove(programId, req, res) {
+  const base = P(programId).paths.run, cfg = P(programId).config;
+  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const rd = programRunDate(programId), em = String(req.body.email || '').toLowerCase();
+  const offeree = cfg.offerWindow ? offereeForFloorLeave(rd, em, programId) : null;
+  if (!cfg.offerWindow) notifyPromotionFor(programId, rd, em);
+  db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = ?').run(rd, em, programId);
+  if (offeree) createOffer(rd, offeree, req, programId);
+  res.redirect(base);
+}
 
 app.get('/pickleball', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
@@ -4248,17 +4279,7 @@ app.get('/pickleball/run.ics', requireLogin, (req, res) => {
   res.send(ics);
 });
 app.post('/pickleball/join', requireLogin, (req, res) => runJoin(2, req, res));
-app.post('/pickleball/leave', requireLogin, (req, res) => {
-  const g = pkGate(req, res); if (!g) return;
-  const rd = pkRunDate();
-  pkNotifyPromotion(rd, req.userEmail); // tell the next waitlister they're in (before the row goes)
-  // Record a sit-out for THIS week so an auto-renew member who leaves isn't re-seated by a
-  // later pkSeatRenewers (manual re-open) — mirrors basketball's regular_optout. Cleared when
-  // they re-join, and purged on weekly rollover, so their standing renewal resumes next week.
-  db.prepare('INSERT OR IGNORE INTO regular_optout (run_date, email, program_id) VALUES (?, ?, 2)').run(rd, req.userEmail);
-  db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = 2').run(rd, req.userEmail);
-  res.redirect('/pickleball');
-});
+app.post('/pickleball/leave', requireLogin, (req, res) => runLeave(2, req, res));
 app.post('/pickleball/open', requireLogin, (req, res) => runOpen(2, req, res));
 app.post('/pickleball/close', requireLogin, (req, res) => runClose(2, req, res));
 app.post('/pickleball/cancel', requireLogin, (req, res) => runCancel(2, req, res));
@@ -4337,7 +4358,7 @@ app.post('/pickleball/guest', requireLogin, (req, res) => {
   }
   res.redirect('/pickleball');
 });
-app.post('/pickleball/remove', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(), em = String(req.body.email || '').toLowerCase(); pkNotifyPromotion(rd, em); db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = 2').run(rd, em); res.redirect('/pickleball'); });
+app.post('/pickleball/remove', requireLogin, (req, res) => runRemove(2, req, res));
 app.post('/pickleball/bump', requireLogin, (req, res) => runBump(2, req, res));
 app.post('/pickleball/publish', requireAdmin, (req, res) => runPublish(2, req, res));
 // Post a pickleball announcement — operator only. Stored in announcements (program 2)
@@ -4476,6 +4497,8 @@ const PROGRAM_DEFS = {
         openBody: (rd) => `Check-in is open for ${runWeekday(rd)}, ${runLabelFor(rd)} pickleball — grab your spot 🥒`,
         confirmTitle: 'Confirm your pickleball spot',
         confirmBody: (rd) => `You're on the floor for ${runWeekday(rd)} pickleball. Tap to confirm — or leave to free your spot.`,
+        promoTitle: "You're in for pickleball 🥒",
+        promoBody: (rd) => `A spot opened — you're on the floor for ${runWeekday(rd)}, ${runLabelFor(rd)} pickleball.`,
       },
       theme: 'pk', access: 'opt-in', approval: 'invite',
       tiers: ['team', 'host'], offerWindow: false,
