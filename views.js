@@ -2613,6 +2613,56 @@ export function friendsPage({ q = '', results = [], blocked = [], followers = []
   ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention, program: chatProgram }));
 }
 
+// Daily KJV verse for the runs hub — deterministic by calendar day (same for everyone that day,
+// rotates at midnight). Curated toward strength, brotherhood, perseverance, and running the race.
+const KJV_VERSES = [
+  { text: 'I can do all things through Christ which strengtheneth me.', ref: 'Philippians 4:13' },
+  { text: 'But they that wait upon the LORD shall renew their strength; they shall mount up with wings as eagles; they shall run, and not be weary; and they shall walk, and not faint.', ref: 'Isaiah 40:31' },
+  { text: 'Iron sharpeneth iron; so a man sharpeneth the countenance of his friend.', ref: 'Proverbs 27:17' },
+  { text: 'Be strong and of a good courage; be not afraid, neither be thou dismayed: for the LORD thy God is with thee whithersoever thou goest.', ref: 'Joshua 1:9' },
+  { text: 'Know ye not that they which run in a race run all, but one receiveth the prize? So run, that ye may obtain.', ref: '1 Corinthians 9:24' },
+  { text: 'Let us run with patience the race that is set before us.', ref: 'Hebrews 12:1' },
+  { text: 'Two are better than one; because they have a good reward for their labour.', ref: 'Ecclesiastes 4:9' },
+  { text: 'A friend loveth at all times, and a brother is born for adversity.', ref: 'Proverbs 17:17' },
+  { text: 'And whatsoever ye do, do it heartily, as to the Lord, and not unto men.', ref: 'Colossians 3:23' },
+  { text: 'The LORD is my strength and my shield; my heart trusted in him, and I am helped.', ref: 'Psalm 28:7' },
+  { text: 'I have fought a good fight, I have finished my course, I have kept the faith.', ref: '2 Timothy 4:7' },
+  { text: 'Wherefore comfort yourselves together, and edify one another, even as also ye do.', ref: '1 Thessalonians 5:11' },
+  { text: 'Let all your things be done with charity.', ref: '1 Corinthians 16:14' },
+  { text: 'This is my commandment, That ye love one another, as I have loved you.', ref: 'John 15:12' },
+  { text: 'Behold, how good and how pleasant it is for brethren to dwell together in unity!', ref: 'Psalm 133:1' },
+  { text: 'Trust in the LORD with all thine heart; and lean not unto thine own understanding.', ref: 'Proverbs 3:5' },
+  { text: 'The joy of the LORD is your strength.', ref: 'Nehemiah 8:10' },
+  { text: 'Wait on the LORD: be of good courage, and he shall strengthen thine heart.', ref: 'Psalm 27:14' },
+  { text: 'Let us not be weary in well doing: for in due season we shall reap, if we faint not.', ref: 'Galatians 6:9' },
+  { text: 'Bear ye one another’s burdens, and so fulfil the law of Christ.', ref: 'Galatians 6:2' },
+  { text: 'The LORD shall fight for you, and ye shall hold your peace.', ref: 'Exodus 14:14' },
+  { text: 'Watch ye, stand fast in the faith, quit you like men, be strong.', ref: '1 Corinthians 16:13' },
+  { text: 'For God hath not given us the spirit of fear; but of power, and of love, and of a sound mind.', ref: '2 Timothy 1:7' },
+  { text: 'Commit thy works unto the LORD, and thy thoughts shall be established.', ref: 'Proverbs 16:3' },
+  { text: 'A merry heart doeth good like a medicine.', ref: 'Proverbs 17:22' },
+  { text: 'In all thy ways acknowledge him, and he shall direct thy paths.', ref: 'Proverbs 3:6' },
+  { text: 'Whatsoever thy hand findeth to do, do it with thy might.', ref: 'Ecclesiastes 9:10' },
+  { text: 'The steps of a good man are ordered by the LORD.', ref: 'Psalm 37:23' },
+  { text: 'Finally, be ye all of one mind, having compassion one of another, love as brethren.', ref: '1 Peter 3:8' },
+  { text: 'For where two or three are gathered together in my name, there am I in the midst of them.', ref: 'Matthew 18:20' },
+  { text: 'Greater love hath no man than this, that a man lay down his life for his friends.', ref: 'John 15:13' },
+  { text: 'Be strong in the Lord, and in the power of his might.', ref: 'Ephesians 6:10' },
+  { text: 'He giveth power to the faint; and to them that have no might he increaseth strength.', ref: 'Isaiah 40:29' },
+  { text: 'Cast thy burden upon the LORD, and he shall sustain thee.', ref: 'Psalm 55:22' },
+  { text: 'And let us consider one another to provoke unto love and to good works.', ref: 'Hebrews 10:24' },
+  { text: 'This is the day which the LORD hath made; we will rejoice and be glad in it.', ref: 'Psalm 118:24' },
+  { text: 'Thy word is a lamp unto my feet, and a light unto my path.', ref: 'Psalm 119:105' },
+  { text: 'Let brotherly love continue.', ref: 'Hebrews 13:1' },
+  { text: 'The LORD is good, a strong hold in the day of trouble; and he knoweth them that trust in him.', ref: 'Nahum 1:7' },
+  { text: 'Fear thou not; for I am with thee: be not dismayed; for I am thy God.', ref: 'Isaiah 41:10' },
+];
+function dailyVerse() {
+  const d = new Date();
+  const dayIndex = Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000);
+  return KJV_VERSES[((dayIndex % KJV_VERSES.length) + KJV_VERSES.length) % KJV_VERSES.length];
+}
+
 // Runs hub — the launcher that lists every run the viewer can see (Basketball always;
 // Pickleball for admins always, for members once it's published). Tapping a card opens
 // that run's check-in page. `runs` = [{ key, emoji, name, href, runDate, dateLabel,
@@ -2682,6 +2732,9 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       .rhcount{font-weight:800;font-size:15px;font-variant-numeric:tabular-nums;color:var(--ink,#20211c)}
       .rhslash{font-weight:500;color:var(--muted)}
       .rharrow{font-size:24px;color:var(--muted);flex:none;margin-left:-2px}
+      .hubverse{max-width:36ch;margin:34px auto 6px;text-align:center;padding:0 14px}
+      .hubverse-t{font-size:15px;line-height:1.55;color:var(--ink);font-style:italic;margin:0}
+      .hubverse-r{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:9px 0 0;font-weight:700}
       @media (prefers-color-scheme:dark){
         .rhpill.green{background:#183a25;color:#8fe0ab}
         .rhpill.grey{background:#2a2a28;color:#b7b6ae}
@@ -2697,6 +2750,7 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
     <div class="rhlist">
       ${runs.map(card).join('')}
     </div>
+    ${(() => { const v = dailyVerse(); return `<div class="hubverse"><p class="hubverse-t">“${esc(v.text)}”</p><p class="hubverse-r">— ${esc(v.ref)} · KJV</p></div>`; })()}
     ${canJoin ? firstRunTour : ''}
   ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: chatProgram }));
 }
