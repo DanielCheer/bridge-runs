@@ -2943,6 +2943,7 @@ app.post('/checkin/promote', requireApprover, (req, res) => {
 // (basketball auto-renews only the team; "no waiver, no play" preserved by the shared engine).
 function autoJoinTeam(runDate) {
   if (runIsCancelled(runDate) || runIsLocked(runDate)) return;
+  liftExpiredPauses(1);              // clear elapsed auto-renew pauses before re-seating (dark w/o P(1).config.autoRenewPenalty)
   seatRenewers(1, runDate);
 }
 
@@ -3712,6 +3713,17 @@ function autoRunState() {
         console.log(`[autoping] pinged ${targets.length} unconfirmed floor player(s) for ${rd}`);
       }
     }
+    // PENALTY ASSESS (once, after the run ENDS) — strike auto-seated no-shows. DARK until
+    // P(1).config.autoRenewPenalty is set (assessRenewPenalties no-ops without it); judge at the run's
+    // END (host-set run_end), not the 2 PM lock — confirms come in right up to game time. Lives inside
+    // this now>=closeAt block because it `return`s below (any code after the return never runs post-2PM).
+    if (P(1).config.autoRenewPenalty) {
+      const assessAt = new Date(rd + 'T' + runTimesFor(rd).end + ':00').getTime();
+      if (now >= assessAt && getSetting('arassess_done') !== rd) {
+        setSetting('arassess_done', rd);
+        assessRenewPenalties(1, rd);
+      }
+    }
     return;
   }
   // Auto-OPEN at Wednesday 5 PM (once), only before the close time.
@@ -3790,7 +3802,7 @@ const PK_CAP = Number(process.env.PK_CAP || 20), PK_WAIT = Number(process.env.PK
 const stmtRunOpenById = db.prepare('SELECT is_open FROM run_state WHERE run_date = ? AND program_id = ?');
 const stmtRunCancelledById = db.prepare('SELECT cancelled FROM run_state WHERE run_date = ? AND program_id = ?');
 const stmtPkRoster = db.prepare(`
-    SELECT c.email, c.name, c.sort_order, c.id, c.confirmed_at,
+    SELECT c.email, c.name, c.sort_order, c.id, c.confirmed_at, c.auto_seated,
            a.id AS applicant_id, a.is_host, a.is_team, a.is_regular
     FROM checkins c LEFT JOIN applicants a ON a.email = c.email
     WHERE c.run_date = ? AND c.program_id = ? ORDER BY c.sort_order ASC, c.id ASC`);
@@ -3918,6 +3930,20 @@ function runTeamAssign(programId, req, res) {
   else assignTeam(programId, rd, em, n, req.userEmail);
   res.redirect(base);
 }
+// Operator/admin: forgive a member's auto-renew penalty — clear strikes + lift any pause. The safety
+// valve for a false strike or a member with a good reason. Program-generic; works for any run that
+// enabled config.autoRenewPenalty (harmless no-op otherwise — state stays empty).
+function runPenaltyClear(programId, req, res) {
+  const base = P(programId).paths.run;
+  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const em = String(req.body.email || '').toLowerCase();
+  if (em) {
+    stmtPmEnsureRow.run(programId, em);
+    db.prepare('UPDATE program_membership SET ar_strikes = 0, ar_paused_until = NULL WHERE program_id = ? AND email = ?').run(programId, em);
+    audit(req.userEmail, req.actorRole || (g.admin ? 'admin' : 'host'), `${P(programId).config.logTag || 'run'}:arclear`, em);  // row-less admin has no actorRole
+  }
+  res.redirect(base);
+}
 // Operator: round-robin the UNASSIGNED floor players into the emptiest teams so a run never starts half-formed.
 function runTeamFill(programId, req, res) {
   const base = P(programId).paths.run;
@@ -3986,7 +4012,7 @@ function pkEmailRecipients() { return programEmailRecipients(2); }
 // opt-out gate EVERY seat path — the auto-seat waiver hole, closed once, must not reopen generically.
 function seatRenewers(programId, rd) {
   if (!rd) return 0;
-  const cfg = P(programId).config, total = cfg.cap + cfg.waitlist, today = ymdLocal();
+  const cfg = P(programId).config, total = cfg.cap + cfg.waitlist, today = ymdLocal(new Date(schedNow()));  // schedNow so the auto-renew pause window honours the TEST_NOW seam (== real time in prod)
   const insTeam = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, sort_order, program_id, auto_seated) VALUES (?,?,?,?,?,1)');
   const insR = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, program_id, auto_seated) VALUES (?,?,?,?,1)');
   let team = [], nonTeam = [];
@@ -4001,9 +4027,13 @@ function seatRenewers(programId, rd) {
     team = renewers.filter(r => r.is_team); nonTeam = renewers.filter(r => !r.is_team);
   } else { // 'team' — only the org team auto-renews (basketball); opt-out checked per-row (matches autoJoinTeam)
     const optedOut = db.prepare('SELECT 1 FROM regular_optout WHERE run_date = ? AND email = ? AND program_id = ?');
-    team = db.prepare(`SELECT email, full_name FROM applicants
-      WHERE is_team = 1 AND status = 'approved' AND auto_renew = 1 AND COALESCE(suspended,0) = 0 AND COALESCE(waiver_ok,0) = 1`)
-      .all().filter(t => !optedOut.get(rd, t.email, programId));
+    // Paused auto-renewers (Phase 5.5) are skipped too — a repeat no-show loses the guarantee until the
+    // pause lifts (state on program_membership; NULL/absent for everyone until the penalty is enabled).
+    team = db.prepare(`SELECT a.email, a.full_name FROM applicants a
+      LEFT JOIN program_membership pm ON pm.program_id = ? AND pm.email = a.email
+      WHERE a.is_team = 1 AND a.status = 'approved' AND a.auto_renew = 1 AND COALESCE(a.suspended,0) = 0 AND COALESCE(a.waiver_ok,0) = 1
+        AND (pm.ar_paused_until IS NULL OR pm.ar_paused_until <= ?)`)
+      .all(programId, today).filter(t => !optedOut.get(rd, t.email, programId));
   }
   let added = 0;
   // Team first, top priority — negative sort_order so they float above any first-come joiners.
@@ -4017,6 +4047,66 @@ function seatRenewers(programId, rd) {
   const rows = db.prepare('SELECT id FROM checkins WHERE run_date = ? AND program_id = ? ORDER BY sort_order ASC, id ASC').all(rd, programId);
   if (rows.length > total) { const del = db.prepare('DELETE FROM checkins WHERE id = ?'); for (const r of rows.slice(total)) del.run(r.id); }
   return added;
+}
+// ---------- AUTO-RENEW PENALTY (Phase 5.5) ----------
+// A member with auto-renew ON is GUARANTEED a weekly seat (seatRenewers auto-seats them). If they
+// then GHOST it — auto-seated, still on the floor when the run ends, never confirmed and never sat
+// out — they burned a spot a waitlister could have had. config.autoRenewPenalty = { strikes, pauseWeeks }:
+// `strikes` consecutive ghosts pause their auto-renew for `pauseWeeks` run-weeks (they can still check
+// in by hand). A confirmed show clears the streak; opting out or sitting out early is NOT a strike —
+// that's the polite path we WANT. State lives on program_membership for EVERY program: basketball's
+// team auto-renew flag is on applicants, but its penalty STATE is lazily rowed into program_membership
+// here, so ONE engine serves both autoRenew.from sources. Feature-flagged — no autoRenewPenalty on a
+// program's config → assess/lift no-op and nothing is ever written (dark until a program opts in).
+const stmtPmEnsureRow = db.prepare("INSERT OR IGNORE INTO program_membership (program_id, email, status, role) VALUES (?, ?, 'approved', 'approved')");
+const stmtPmStrikeState = db.prepare('SELECT ar_strikes FROM program_membership WHERE program_id = ? AND email = ?');
+const stmtPmSetStrikes = db.prepare("UPDATE program_membership SET ar_strikes = ?, ar_strike_at = datetime('now') WHERE program_id = ? AND email = ?");
+const stmtPmPauseAR = db.prepare("UPDATE program_membership SET ar_strikes = 0, ar_paused_until = ?, ar_strike_at = datetime('now') WHERE program_id = ? AND email = ?");
+const stmtPmResetStrikes = db.prepare('UPDATE program_membership SET ar_strikes = 0 WHERE program_id = ? AND email = ? AND ar_strikes > 0');
+const stmtPmPausedFloor = db.prepare('SELECT email, ar_strikes, ar_paused_until FROM program_membership WHERE program_id = ? AND (ar_strikes > 0 OR ar_paused_until IS NOT NULL)');
+// Assess ONE finished run's auto-seated floor for no-shows (call once, after the run ends). Strikes
+// the ghosts, pauses repeat offenders, clears the streak for anyone who confirmed. Program-generic.
+function assessRenewPenalties(programId, rd) {
+  const cfg = P(programId).config, pen = cfg.autoRenewPenalty;
+  if (!pen || !rd) return;
+  const part = partitionFor(programId, rd);
+  const floor = cfg.offerWindow ? part.floorReal : part.floor;
+  const struck = [], paused = [];
+  for (const p of floor) {
+    if (/@guest\.local$/.test(p.email) || !p.auto_seated) continue;   // only the auto-renew GUARANTEE is policed
+    if (p.confirmed_at) { stmtPmResetStrikes.run(programId, p.email); continue; }  // showed → streak cleared
+    stmtPmEnsureRow.run(programId, p.email);                            // lazy row (basketball team members may lack one)
+    const next = ((stmtPmStrikeState.get(programId, p.email) || {}).ar_strikes || 0) + 1;
+    if (next >= pen.strikes) { const until = shiftYmd(rd, pen.pauseWeeks * 7); stmtPmPauseAR.run(until, programId, p.email); paused.push({ email: p.email, until }); }
+    else { stmtPmSetStrikes.run(next, programId, p.email); struck.push({ email: p.email, n: next }); }
+  }
+  if (!struck.length && !paused.length) return;
+  const sport = P(programId).displayName, runUrl = P(programId).paths.run, tag = cfg.logTag || 'run';
+  for (const s of struck) setImmediate(() => sendPush([s.email], { title: `${sport}: auto-renew strike ${s.n} of ${pen.strikes}`, body: `You were auto-added but didn't confirm or sit out. ${pen.strikes - s.n} more no-show${pen.strikes - s.n === 1 ? '' : 's'} and your weekly auto-renew pauses — tap Sit out early if you can't make it.`, url: runUrl, tag: `${tag}arstrike` }));
+  for (const s of paused) setImmediate(() => sendPush([s.email], { title: `${sport}: auto-renew paused`, body: `After repeated no-shows your weekly auto-renew is paused until ${runLabelFor(s.until)}. You can still check in by hand anytime.`, url: runUrl, tag: `${tag}arpause` }));
+  audit('system', 'system', `${tag}:arpenalty`, `${rd} struck=${struck.length} paused=${paused.length}`);
+}
+// Lift expired pauses for a program (call at the weekly open). Clears ar_paused_until once it's in the
+// past and tells the member their auto-renew is back. seatRenewers already re-seats them (its filter
+// admits ar_paused_until <= today); this tidies the flag + notifies. No-op without the feature.
+function liftExpiredPauses(programId) {
+  const cfg = P(programId).config;
+  if (!cfg.autoRenewPenalty) return;
+  const today = ymdLocal(new Date(schedNow()));   // schedNow so the pause window honours TEST_NOW (== real time in prod)
+  const lifted = db.prepare('SELECT email FROM program_membership WHERE program_id = ? AND ar_paused_until IS NOT NULL AND ar_paused_until <= ?').all(programId, today);
+  if (!lifted.length) return;
+  db.prepare('UPDATE program_membership SET ar_paused_until = NULL WHERE program_id = ? AND ar_paused_until IS NOT NULL AND ar_paused_until <= ?').run(programId, today);
+  const sport = P(programId).displayName, runUrl = P(programId).paths.run;
+  for (const r of lifted) setImmediate(() => sendPush([r.email], { title: `${sport}: auto-renew is back on`, body: `Your weekly auto-renew is active again — you'll be auto-added to the next run.`, url: runUrl, tag: `${cfg.logTag || 'run'}arlift` }));
+  audit('system', 'system', `${cfg.logTag || 'run'}:arlift`, String(lifted.length));
+}
+// Penalty state for a program's floor, keyed by email → { ar_strikes, ar_paused_until } — for the
+// operator roster badge (only auto-seated ghosts ever have state). {} when the feature's off.
+function penaltyStateFor(programId) {
+  if (!P(programId).config.autoRenewPenalty) return {};
+  const out = {};
+  for (const r of stmtPmPausedFloor.all(programId)) out[r.email] = { strikes: r.ar_strikes, until: r.ar_paused_until };
+  return out;
 }
 // Shared by the scheduled auto-open AND the manual "Open check-in". Pickleball is on the unified
 // seating engine (Phase 3c); basketball's autoJoinTeam converges at its own cutover.
@@ -4073,6 +4163,7 @@ function autoRunStateFor(programId) {
     setSetting(cfg.keys.autoopen, rd);
     if (!runOpenFor(programId, rd)) {
       setRunStateFor(programId, rd, 'is_open', 1);
+      liftExpiredPauses(programId);            // a paused auto-renewer whose window elapsed rejoins the guarantee
       const added = seatRenewers(programId, rd);
       audit('system', 'system', `${cfg.logTag}:autoopen`, `${rd} +${added} auto`);
       setImmediate(() => sendPush(programMemberEmails(programId), { title: cfg.copy.openTitle, body: cfg.copy.openBody(rd), url: runUrl, tag: `${cfg.logTag}queueopen` }));
@@ -4097,6 +4188,16 @@ function autoRunStateFor(programId) {
   if (now >= lockAt && getSetting(cfg.keys.autolock) !== rd) {
     setSetting(cfg.keys.autolock, rd);
     if (runOpenFor(programId, rd)) { setRunStateFor(programId, rd, 'is_open', 0); audit('system', 'system', `${cfg.logTag}:autolock`, rd); }
+  }
+  // PENALTY ASSESS (once, after the run ENDS) — strike auto-seated no-shows. Confirms are allowed right
+  // up to game time, so judge at the run's end (config.endHour), not at lock. Feature-flagged: the
+  // marker is only ever touched for a program that opted in (config.autoRenewPenalty + keys.arassess).
+  if (cfg.autoRenewPenalty) {
+    const assessAt = new Date(rd + hh(cfg.endHour)).getTime();
+    if (now >= assessAt && getSetting(cfg.keys.arassess) !== rd) {
+      setSetting(cfg.keys.arassess, rd);
+      assessRenewPenalties(programId, rd);
+    }
   }
 }
 function pkAutoRunState() { return autoRunStateFor(2); }
@@ -4446,6 +4547,7 @@ function runGetPage(programId, req, res) {
     dmUnread: unreadCount(req.userEmail), groupUnread: chatUnreadFor(programId, req.userEmail), groupMention: chatMentionUnreadFor(programId, req.userEmail, g.a ? g.a.id : 0), ann: null,
     runBase: base, programId, theme: cfg.theme, sport: prog.displayName, sportEmoji: prog.emoji, dayName: DAY_NAMES[cfg.dow], pollKey: prog.key,
     teamsCfg: teamsFeature(programId), teamRows: teamsFeature(programId) ? runTeamsFor(programId, rd) : [], teamsOpen: teamsFeature(programId) ? teamsOpen(programId, rd) : false,
+    penaltyState: g.canOperate ? penaltyStateFor(programId) : {},   // operator-only: {email: {strikes, until}} for the roster badge + forgive button
   }));
 }
 
@@ -4563,6 +4665,7 @@ const PROGRAM_DEFS = {
       theme: 'default', access: 'apply', approval: 'council',
       tiers: ['team', 'core', 'host'], offerWindow: true,
       autoRenew: { from: 'team' },   // only the org team (applicants.is_team) auto-renews; no non-team fill
+      // autoRenewPenalty: { strikes: 3, pauseWeeks: 2 },   // DARK — add to police team no-shows (autoRunState assess + seatRenewers skip already wired; marker app_settings 'arassess_done')
       mentionTag: 'mention', chatSeqKey: 'chat_seq',   // push-dedup tag + app_settings key for this room
       features: { teams: false, groupQueue: false },
     },
@@ -4589,7 +4692,7 @@ const PROGRAM_DEFS = {
       dow: PK_DOW, startHour: PK_START_H, endHour: PK_END_H,         // Tue 6–8 PM
       pingHour: PK_PING_H, pingDowOffset: PK_PING_DOW_OFFSET, lockTime: PK_LOCK,
       keys: { runDate: 'pk_run_date', runBase: 'pk_run_base', seasonStart: 'pk_season_start',
-              autoopen: 'pk_autoopen_done', autoping: 'pk_autoping_done', autolock: 'pk_autolock_done' },  // app_settings keys
+              autoopen: 'pk_autoopen_done', autoping: 'pk_autoping_done', autolock: 'pk_autolock_done', arassess: 'pk_arassess_done' },  // app_settings keys
       logTag: 'pk', openOffsetDays: -7,   // audit/push/log prefix; reopen openOffsetDays before run day at endHour
       copy: {
         openTitle: 'Pickleball check-in is open',
@@ -4604,6 +4707,7 @@ const PROGRAM_DEFS = {
       bannerPath: PK_BANNER_PATH, bannerPublic: '/pk-banner.jpg',   // own banner file + its public URL (fallback /gym.jpg)
       tiers: ['team', 'host'], offerWindow: false,
       autoRenew: { from: 'members' },   // any opt-in member (program_membership.auto_renew) renews; team seated first, then non-team fill
+      // autoRenewPenalty: { strikes: 3, pauseWeeks: 2 },   // DARK — add to enable no-show strikes (engine + keys.arassess ready)
       mentionTag: 'pkmention', chatSeqKey: 'pk_chat_seq',
       features: { teams: false, groupQueue: false },
     },
@@ -4624,7 +4728,7 @@ const PROGRAM_DEFS = {
       dow: 5, startHour: 18, endHour: 21,          // Fri 6–9 PM (PLACEHOLDER — owner to finalize 6:30–9:30)
       pingHour: 20, pingDowOffset: 1, lockTime: '18:00',   // confirm ping Thu 8 PM, roster locks 6 PM
       keys: { runDate: 'vb_run_date', runBase: 'vb_run_base', seasonStart: 'vb_season_start',
-              autoopen: 'vb_autoopen_done', autoping: 'vb_autoping_done', autolock: 'vb_autolock_done' },
+              autoopen: 'vb_autoopen_done', autoping: 'vb_autoping_done', autolock: 'vb_autolock_done', arassess: 'vb_arassess_done' },
       logTag: 'vb', openOffsetDays: -7,
       copy: {
         openTitle: 'Volleyball check-in is open',
@@ -4639,6 +4743,7 @@ const PROGRAM_DEFS = {
       bannerPath: path.join(__dirname, 'public', 'vb-banner.jpg'), bannerPublic: '/vb-banner.jpg',
       tiers: ['team', 'host'], offerWindow: true,
       autoRenew: { from: 'members' },
+      autoRenewPenalty: { strikes: 3, pauseWeeks: 2 },   // ENABLED: 3 consecutive no-shows (auto-seated, never confirmed) → auto-renew pauses 2 weeks. Tunable.
       mentionTag: 'vbmention', chatSeqKey: 'vb_chat_seq',
       features: { teams: { count: 3, size: 7, opensAt: 'lock', selfServe: true }, groupQueue: false },  // 3×7 (config, not hardcoded)
     },
@@ -4679,6 +4784,7 @@ function mountRunProgram(app, program) {
   app.post(`${b}/team/leave`, requireLogin, (req, res) => runTeamLeave(id, req, res));
   app.post(`${b}/team/assign`, requireLogin, (req, res) => runTeamAssign(id, req, res));
   app.post(`${b}/team/fill`, requireLogin, (req, res) => runTeamFill(id, req, res));
+  app.post(`${b}/penalty/clear`, requireLogin, (req, res) => runPenaltyClear(id, req, res));  // operator: forgive an auto-renew strike/pause
 }
 function buildPrograms() {
   PROGRAMS.clear();
