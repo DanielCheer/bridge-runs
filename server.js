@@ -3716,12 +3716,10 @@ function autoRunState() {
 // interval is safe as-is: it first fires ~60s in, long after buildPrograms() has run.
 setInterval(() => {
   try {
-    const rd = nextRunDate();
-    ensureWeek(rd);
-    expireAndReoffer(rd, null);
-    autoRunState();
-    pkEnsureWeek();      // pickleball weekly rollover (isolated; no-op until its date passes)
-    pkAutoRunState();    // pickleball auto open/close schedule
+    // Each program runs its own per-tick work via its registry tick() — program-generic, so a new
+    // run is picked up with zero scheduler code change. id order (basketball, then pickleball)
+    // preserves the original call sequence, and one try/catch keeps the original error semantics.
+    for (const p of PROGRAMS.values()) p.tick();
   } catch (e) { console.error(`[interval] rollover/expiry FAILED: ${e.message}`); }
 }, 60000).unref();
 
@@ -4319,6 +4317,8 @@ const PROGRAM_DEFS = {
         hidden: false,
       };
     },
+    // Per-tick work for the 60s scheduler loop: rollover + offer-expiry + auto open/close.
+    tick: () => { const rd = nextRunDate(); ensureWeek(rd); expireAndReoffer(rd, null); autoRunState(); },
   },
   2: {
     key: 'pickleball', emoji: '🥒', displayName: 'Pickleball',
@@ -4346,6 +4346,8 @@ const PROGRAM_DEFS = {
         hidden: !pkProgramActive(),
       };
     },
+    // Pickleball has no offer window, so its tick is just rollover + auto open/ping/lock.
+    tick: () => { pkEnsureWeek(); pkAutoRunState(); },
   },
 };
 const stmtProgActiveById = db.prepare('SELECT active FROM program WHERE id = ?');
@@ -4358,7 +4360,7 @@ function buildPrograms() {
       id: row.id, key: def.key, emoji: def.emoji, displayName: def.displayName,
       paths: def.paths, seasonLabel: def.seasonLabel, config: def.config,
       active: def.alwaysActive ? (() => true) : (() => !!(stmtProgActiveById.get(row.id) || {}).active),
-      unread: def.unread, hubCard: def.hubCard,
+      unread: def.unread, hubCard: def.hubCard, tick: def.tick,
     });
   }
   // Hand the view layer the presentation subset so it renders run-aware links (Chat tab href,
