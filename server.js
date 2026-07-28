@@ -4219,6 +4219,33 @@ function runAnnounceRetract(programId, req, res) {
   if (cur) { db.prepare('UPDATE announcements SET archived = 1 WHERE id = ? AND program_id = ?').run(cur.id, programId); audit(req.userEmail, 'admin', `${cfg.logTag}:announce:retract`, String(cur.id)); }
   res.redirect(base);
 }
+// Season-start gate control (operator). Sets/clears the season opener; before it, no weekly runs
+// and nothing auto-fires. Clears rosters/state stranded in the gap (else the next rollover archives
+// them as phantom season-board credits). Query flags stay pkset/pkerr (the GET run page reads them).
+function runSeasonSet(programId, req, res) {
+  const base = P(programId).paths.run, cfg = P(programId).config;
+  const g = programGate(programId, req, res); if (!g) return;
+  if (!g.canOperate) return res.redirect(base);
+  const raw = String(req.body.season || '').trim();
+  if (!raw) { db.prepare('DELETE FROM app_settings WHERE key = ?').run(cfg.keys.seasonStart); audit(req.userEmail, 'admin', `${cfg.logTag}:season-clear`, ''); return res.redirect(base + '?pkset=seasonoff'); }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || isNaN(new Date(raw + 'T12:00:00'))) return res.redirect(base + '?pkerr=seasonbad');
+  const today = ymdLocal();
+  if (raw < today) return res.redirect(base + '?pkerr=seasonpast');
+  const maxD = new Date(); maxD.setFullYear(maxD.getFullYear() + 1);
+  if (raw > ymdLocal(maxD)) return res.redirect(base + '?pkerr=seasonrange');
+  setSetting(cfg.keys.seasonStart, raw);
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM checkins WHERE run_date > ? AND run_date < ? AND program_id = ?').run(today, raw, programId);
+    db.prepare('DELETE FROM regular_optout WHERE run_date > ? AND run_date < ? AND program_id = ?').run(today, raw, programId);
+    db.prepare('DELETE FROM run_state WHERE run_date > ? AND run_date < ? AND program_id = ?').run(today, raw, programId);
+    const setRd = getSetting(cfg.keys.runDate); if (setRd && setRd < raw) delSetting(cfg.keys.runDate);
+    const setBase = getSetting(cfg.keys.runBase); if (setBase && setBase < raw) delSetting(cfg.keys.runBase);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); console.error(`[${cfg.logTag}-season] roster cleanup FAILED: ${e.message}`); throw e; }
+  audit(req.userEmail, 'admin', `${cfg.logTag}:season-set`, raw);
+  res.redirect(base + '?pkset=season');
+}
 
 app.get('/pickleball', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
@@ -4255,35 +4282,7 @@ app.get('/pickleball', requireLogin, (req, res) => {
 });
 // Pickleball season-start gate control (operator = admin) — mirrors /admin/season. Sets/clears
 // app_settings 'pk_season_start'; before it, no weekly pickleball runs and nothing auto-fires.
-app.post('/pickleball/season', requireLogin, (req, res) => {
-  const g = pkGate(req, res); if (!g) return;
-  if (!g.canOperate) return res.redirect('/pickleball');
-  const raw = String(req.body.season || '').trim();
-  if (!raw) { db.prepare("DELETE FROM app_settings WHERE key = 'pk_season_start'").run(); audit(req.userEmail, 'admin', 'pk:season-clear', ''); return res.redirect('/pickleball?pkset=seasonoff'); }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || isNaN(new Date(raw + 'T12:00:00'))) return res.redirect('/pickleball?pkerr=seasonbad');
-  const today = ymdLocal();
-  if (raw < today) return res.redirect('/pickleball?pkerr=seasonpast');
-  const maxD = new Date(); maxD.setFullYear(maxD.getFullYear() + 1);
-  if (raw > ymdLocal(maxD)) return res.redirect('/pickleball?pkerr=seasonrange');
-  setSetting('pk_season_start', raw);
-  // Clear rosters/state for pk runs between now and the opener — the pk twin of /admin/season's
-  // cleanup. pk check-in auto-reopens + auto-seats renewers within a minute of each run ending,
-  // so next Tuesday's roster is almost always populated; left in place, the next rollover archives
-  // that stranded roster into attendance as phantom season-board credits. Only future runs.
-  db.exec('BEGIN');
-  try {
-    db.prepare('DELETE FROM checkins WHERE run_date > ? AND run_date < ? AND program_id = 2').run(today, raw);
-    db.prepare('DELETE FROM regular_optout WHERE run_date > ? AND run_date < ? AND program_id = 2').run(today, raw);
-    db.prepare('DELETE FROM run_state WHERE run_date > ? AND run_date < ? AND program_id = 2').run(today, raw);
-    // A stale explicit pk_run_date/base pointing into the gap would still render as "next run"
-    // (pkRunDate's override branch is NOT season-gated) — clear it when it falls before the opener.
-    const setRd = getSetting('pk_run_date'); if (setRd && setRd < raw) delSetting('pk_run_date');
-    const setBase = getSetting('pk_run_base'); if (setBase && setBase < raw) delSetting('pk_run_base');
-    db.exec('COMMIT');
-  } catch (e) { db.exec('ROLLBACK'); console.error(`[pk-season] roster cleanup FAILED: ${e.message}`); throw e; }
-  audit(req.userEmail, 'admin', 'pk:season-set', raw);
-  res.redirect('/pickleball?pkset=season');
-});
+app.post('/pickleball/season', requireLogin, (req, res) => runSeasonSet(2, req, res));
 // Join the pickleball RUN (membership) — the opt-in from the join prompt. Distinct from the
 // per-week check-in below. Adds a program_membership row, then lands on the run.
 app.post('/pickleball/join-run', requireLogin, (req, res) => runJoinRun(2, req, res));
