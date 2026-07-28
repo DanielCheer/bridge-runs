@@ -65,6 +65,9 @@ export function requireAdmin(req, res, next) {
   const email = currentUser(req);
   if (!isAdmin(email)) return res.status(403).send('Not authorized.');
   req.userEmail = email;
+  req.actorRole = 'admin'; // anyone past this gate IS an admin — so audit()/views reading actorRole
+                           // on a requireAdmin route (e.g. the pickleball/volleyball banner upload)
+                           // get a real role instead of undefined (which crashed audit's bind).
   next();
 }
 

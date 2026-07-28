@@ -19,7 +19,7 @@ import {
   requireLogin, requireAdmin, makeRequireApprover, ADMINS,
 } from './auth.js';
 import {
-  intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, logoutPage, APP_JS,
+  intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, exportPage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap, setProgramMeta,
   STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage, runPage, runsPage, pkChatPage, pkJoinPage, runJoinPage, waiverPage,
   friendsPage, friendsSearchFragment, chatLockedPage, runChatPage,
@@ -3845,6 +3845,62 @@ app.get('/admin/people/export.csv', requireAdmin, (req, res) => {
   const stamp = new Date().toISOString().slice(0, 10);
   res.set('Content-Disposition', `attachment; filename="bridge-people-${stamp}.csv"`);
   res.type('text/csv').send('\uFEFF' + lines.join('\r\n')); // BOM = Excel reads UTF-8
+});
+
+// RFC-4180 CSV cell with spreadsheet-formula-injection neutralized (shared by the exports).
+function csvCell(v) {
+  let s = v == null ? '' : String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;                    // a name like =HYPERLINK(...) can't run as a formula
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+// Export hub (admin-only): attendance CSV per run + a full DB backup. The CSV is the Google-
+// Sheets / Planning-Center import path (paste or File\u2192Import); the .db is an offline backup.
+app.get('/admin/export', requireAdmin, (req, res) => {
+  const programs = [...PROGRAMS.values()].map(p => ({
+    id: p.id, key: p.key, name: p.displayName, emoji: p.emoji, active: p.active(),
+    count: db.prepare('SELECT COUNT(*) n FROM attendance WHERE program_id = ?').get(p.id).n,
+  }));
+  res.send(exportPage({ programs, dmUnread: unreadCount(req.userEmail),
+    groupUnread: groupUnread(req.userEmail), groupMention: groupMentionUnread(req.userEmail, applicantIdOf(req.userEmail)),
+    ann: annPanel(req.userEmail) }));
+});
+// Per-program attendance CSV (run_date, name, email, program). Archived attendance only \u2014
+// the live floor isn't logged until the weekly rollover, matching the season board.
+app.get('/admin/export/attendance.csv', requireAdmin, (req, res) => {
+  const pid = Number(req.query.program) || 0;
+  if (!PROGRAMS.has(pid)) return res.status(404).send('Unknown run');
+  const prog = P(pid);
+  const rows = db.prepare(`SELECT run_date, name, email FROM attendance
+     WHERE program_id = ? ORDER BY run_date DESC, name COLLATE NOCASE ASC`).all(pid);
+  const lines = [['Run date', 'Name', 'Email', 'Program'].join(',')];
+  for (const a of rows) lines.push([a.run_date, a.name, a.email, prog.displayName].map(csvCell).join(','));
+  audit(req.userEmail, 'admin', 'attendance:export', `${prog.key}:${rows.length}`);
+  const stamp = new Date().toISOString().slice(0, 10);
+  res.set('Content-Disposition', `attachment; filename="bridge-attendance-${prog.key}-${stamp}.csv"`);
+  res.type('text/csv').send('\uFEFF' + lines.join('\r\n'));
+});
+// Full DB backup (admin-only). Streams a transactionally-consistent VACUUM INTO snapshot (never
+// the live WAL'd file) written to a UNIQUE transient path \u2014 so it never collides with the
+// scheduled backupNow() (whose second-precision filenames would clash) and has none of its side
+// effects. Deleted after the response. Contains ALL data (chat, DMs, contacts) \u2192 requireAdmin +
+// audited; the page warns to store it securely.
+const EXPORT_TMP_DIR = process.env.BACKUP_DIR || path.join(__dirname, 'backups');
+app.get('/admin/export/db', requireAdmin, (req, res, next) => {
+  let tmp;
+  try {
+    fs.mkdirSync(EXPORT_TMP_DIR, { recursive: true });
+    tmp = path.join(EXPORT_TMP_DIR, `export-${process.pid}-${Date.now()}.db`);
+    db.exec(`VACUUM INTO '${tmp.replace(/'/g, "''")}'`); // consistent copy regardless of WAL state
+  } catch (e) {
+    console.error(`[export:db] snapshot FAILED for ${req.userEmail}: ${e.message}`);
+    return res.status(500).send('Export failed \u2014 check the server log.');
+  }
+  audit(req.userEmail, 'admin', 'db:export', '');
+  const stamp = new Date().toISOString().slice(0, 10);
+  res.download(tmp, `bridge-backup-${stamp}.db`, (err) => {
+    fs.unlink(tmp, () => {}); // best-effort cleanup of the transient snapshot
+    if (err && !res.headersSent) next(err);
+  });
 });
 
 // One form, two outcomes. Admin gives whatever they know (any/all of

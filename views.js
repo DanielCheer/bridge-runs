@@ -4216,6 +4216,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
     <div data-tour="people" style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 0">
       <a class="btn ghost" href="/admin/share" style="margin:0">📱 Share sign-up QR &amp; links</a>
       <a class="btn ghost" href="/admin/people/export.csv" style="margin:0" download>⬇︎ Export people (CSV)</a>
+      <a class="btn ghost" href="/admin/export" style="margin:0">⬇︎ Export &amp; backup</a>
     </div>
 
     <div class="subhead">Add a player</div>
@@ -4295,6 +4296,40 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
       }
     </script>
     ${shareScript()}
+  ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention }));
+}
+
+// ---------- EXPORT (admin: attendance CSV per run + full DB backup) ----------
+export function exportPage({ programs = [], dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+  const attRow = (p) => `<div class="exrow">
+      <span class="exemoji" aria-hidden="true">${p.emoji}</span>
+      <span class="exbody"><b>${esc(p.name)}</b><span class="exsub">${p.count} attendance record${p.count === 1 ? '' : 's'}${p.active ? '' : ' · hidden'}</span></span>
+      <a class="btn ghost sm" href="/admin/export/attendance.csv?program=${p.id}" download>⬇︎ CSV</a>
+    </div>`;
+  return HEAD('Export — The Bridge', 'has-tabs') + header('<b>EXPORT</b>admin', '', ann) + `
+    ${opsNav('people', { isAdmin: true })}
+    <div class="rule"></div>
+    <style>
+      .exrow{display:flex;align-items:center;gap:12px;padding:12px 2px;border-bottom:1px solid var(--line)}
+      .exrow:last-child{border-bottom:0}
+      .exemoji{font-size:22px;width:34px;text-align:center;flex:none}
+      .exbody{flex:1;min-width:0;display:flex;flex-direction:column}
+      .exsub{color:var(--muted);font-size:13px}
+      .exwarn{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-top:10px;color:var(--muted);font-size:13px;line-height:1.5}
+    </style>
+    <span class="eyebrow">Attendance</span>
+    <h1>Export data</h1>
+    <p class="lead">Download attendance as a CSV — open it in Google Sheets (File → Import) or paste into Planning Center. One row per person per run.</p>
+    <div class="card" style="padding:2px 14px">${programs.length ? programs.map(attRow).join('') : '<div class="exsub" style="padding:14px 0">No runs yet.</div>'}</div>
+
+    <div class="subhead" style="margin-top:20px">People</div>
+    <a class="btn ghost" href="/admin/people/export.csv" style="margin:0" download>⬇︎ Export people (CSV)</a>
+
+    <div class="subhead" style="margin-top:20px">Full backup</div>
+    <a class="btn" href="/admin/export/db" style="margin:0" download>⬇︎ Download database (.db)</a>
+    <div class="exwarn">⚠️ The database contains <b>everything</b> — contact details, chat and direct messages. Only download it to a device you control, and store it securely. Every download is logged.</div>
+
+    <div class="foot" style="margin-top:24px"><a href="/admin/people">← Manage people</a> · <a href="/logout">Sign out</a></div>
   ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention }));
 }
 
