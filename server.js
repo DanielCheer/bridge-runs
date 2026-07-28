@@ -3787,7 +3787,7 @@ const stmtPkRoster = db.prepare(`
            a.id AS applicant_id, a.is_host, a.is_team, a.is_regular
     FROM checkins c LEFT JOIN applicants a ON a.email = c.email
     WHERE c.run_date = ? AND c.program_id = ? ORDER BY c.sort_order ASC, c.id ASC`);
-const stmtLatestPkAnnouncement = db.prepare('SELECT id, body, author, at AS created_at FROM announcements WHERE program_id = 2 AND COALESCE(archived,0) = 0 ORDER BY id DESC LIMIT 1');
+const stmtLatestAnnouncementById = db.prepare('SELECT id, body, author, at AS created_at FROM announcements WHERE program_id = ? AND COALESCE(archived,0) = 0 ORDER BY id DESC LIMIT 1');
 function programActive(programId) { const r = stmtProgActiveById.get(programId); return !!(r && r.active); }
 function pkProgramActive() { return programActive(2); }
 // Pickleball's standing day = Tuesday (PK_DOW=2), DECOUPLED from basketball so moving the
@@ -3857,7 +3857,8 @@ function pkPartition(rd) { return partitionFor(2, rd); }
 // AND the auto-lock time (check-in closes at start).
 function pkStartEpoch(rd) { return rd ? new Date(rd + `T${String(PK_START_H).padStart(2, '0')}:00:00`).getTime() : 0; }
 // Latest LIVE pickleball announcement (program 2 rows in the shared announcements table; retracted ones archived).
-function latestPkAnnouncement() { return stmtLatestPkAnnouncement.get() || null; }
+function latestAnnouncementFor(programId) { return stmtLatestAnnouncementById.get(programId) || null; }
+function latestPkAnnouncement() { return latestAnnouncementFor(2); }
 // ---------- PROGRAM MEMBERSHIP + AUDIENCE (program-generic) ----------
 // Opt-in programs (pickleball, volleyball) track membership in program_membership; chat access, the
 // members list, and the push/email audiences all read from it. One set of helpers keyed by program
@@ -4172,6 +4173,52 @@ function runRemove(programId, req, res) {
   if (offeree) createOffer(rd, offeree, req, programId);
   res.redirect(base);
 }
+function runIcs(programId, req, res) {
+  const cfg = P(programId).config;
+  const g = programGate(programId, req, res); if (!g) return;
+  const rd = programRunDate(programId);
+  const dt = (hhmm) => rd.replace(/-/g, '') + 'T' + hhmm + '00';
+  const ics = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//The Bridge Adv Runs//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
+    'BEGIN:VEVENT', `UID:bridge-${cfg.logTag}-${rd}@bridge`, `DTSTAMP:${ymdLocal().replace(/-/g, '')}T000000`,
+    `DTSTART:${dt(String(cfg.startHour).padStart(2, '0') + '00')}`, `DTEND:${dt(String(cfg.endHour).padStart(2, '0') + '00')}`,
+    `SUMMARY:The Bridge — ${P(programId).displayName}`, 'LOCATION:The Bridge · Markham',
+    runCancelledFor(programId, rd) ? 'STATUS:CANCELLED' : 'STATUS:CONFIRMED',
+    'END:VEVENT', 'END:VCALENDAR',
+  ].join('\r\n');
+  res.set('Content-Type', 'text/calendar; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="bridge-${P(programId).key}-${rd}.ics"`);
+  res.send(ics);
+}
+function runAnnounce(programId, req, res) {
+  const base = P(programId).paths.run, cfg = P(programId).config;
+  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const body = (req.body.body || '').trim().slice(0, 1000);
+  if (!body) return res.redirect(base);
+  if (rateLimited(`${cfg.logTag}-announce`, req.userEmail, 6, 10 * 60 * 1000)) return res.redirect(base);
+  const author = (g.a && g.a.full_name) || req.userEmail;
+  // Same-body/same-author within 10s = a double-tap, not a second announcement (the 6-per-10-min
+  // limit is far too coarse to catch it, and each dup costs every member a push + email).
+  if (db.prepare("SELECT 1 FROM announcements WHERE program_id = ? AND body = ? AND author = ? AND at >= datetime('now','-10 seconds') LIMIT 1").get(programId, body, author))
+    return res.redirect(base);
+  db.prepare('INSERT INTO announcements (body, author, program_id) VALUES (?,?,?)').run(body, author, programId);
+  audit(req.userEmail, 'admin', `${cfg.logTag}:announce`, body.slice(0, 60));
+  setImmediate(() => sendPush(programMemberEmails(programId), { title: cfg.copy.annTitle, body: body.slice(0, 140), url: base, tag: `${cfg.logTag}ann` }));
+  if (req.body.email_everyone && emailConfigured) {
+    setImmediate(() => {
+      try { const r = programEmailRecipients(programId); if (r.length) sendAnnouncement(r, body, author).catch(e => console.error(`[${cfg.logTag}-announce] email FAILED: ${e.message}`)); }
+      catch (e) { console.error(`[${cfg.logTag}-announce] email prep FAILED: ${e.message}`); }
+    });
+  }
+  res.redirect(base);
+}
+function runAnnounceRetract(programId, req, res) {
+  const base = P(programId).paths.run, cfg = P(programId).config;
+  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const cur = latestAnnouncementFor(programId);
+  if (cur) { db.prepare('UPDATE announcements SET archived = 1 WHERE id = ? AND program_id = ?').run(cur.id, programId); audit(req.userEmail, 'admin', `${cfg.logTag}:announce:retract`, String(cur.id)); }
+  res.redirect(base);
+}
 
 app.get('/pickleball', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
@@ -4262,22 +4309,7 @@ app.get('/pickleball/season', requireLogin, (req, res) => {
   }));
 });
 // Add the pickleball run to a calendar (.ics). Floating local time; 6–8 PM.
-app.get('/pickleball/run.ics', requireLogin, (req, res) => {
-  const g = pkGate(req, res); if (!g) return;
-  const rd = pkRunDate();
-  const dt = (hhmm) => rd.replace(/-/g, '') + 'T' + hhmm + '00';
-  const ics = [
-    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//The Bridge Adv Runs//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
-    'BEGIN:VEVENT', `UID:bridge-pk-${rd}@bridge`, `DTSTAMP:${ymdLocal().replace(/-/g, '')}T000000`,
-    `DTSTART:${dt(String(PK_START_H).padStart(2, '0') + '00')}`, `DTEND:${dt(String(PK_END_H).padStart(2, '0') + '00')}`,
-    'SUMMARY:The Bridge — Pickleball', 'LOCATION:The Bridge · Markham',
-    pkIsCancelled(rd) ? 'STATUS:CANCELLED' : 'STATUS:CONFIRMED',
-    'END:VEVENT', 'END:VCALENDAR',
-  ].join('\r\n');
-  res.set('Content-Type', 'text/calendar; charset=utf-8');
-  res.set('Content-Disposition', `attachment; filename="bridge-pickleball-${rd}.ics"`);
-  res.send(ics);
-});
+app.get('/pickleball/run.ics', requireLogin, (req, res) => runIcs(2, req, res));
 app.post('/pickleball/join', requireLogin, (req, res) => runJoin(2, req, res));
 app.post('/pickleball/leave', requireLogin, (req, res) => runLeave(2, req, res));
 app.post('/pickleball/open', requireLogin, (req, res) => runOpen(2, req, res));
@@ -4364,39 +4396,10 @@ app.post('/pickleball/publish', requireAdmin, (req, res) => runPublish(2, req, r
 // Post a pickleball announcement — operator only. Stored in announcements (program 2)
 // table, pushed to pickleball members' phones (and emailed if SMTP is set), separate from
 // basketball announcements. Shown as a banner on the pickleball page.
-app.post('/pickleball/announce', requireLogin, (req, res) => {
-  const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball');
-  const body = (req.body.body || '').trim().slice(0, 1000);
-  if (!body) return res.redirect('/pickleball');
-  if (rateLimited('pk-announce', req.userEmail, 6, 10 * 60 * 1000)) return res.redirect('/pickleball');
-  const author = (g.a && g.a.full_name) || req.userEmail;
-  // Same-body/same-author within 10s = a double-tap, not a second announcement. The 6-per-10-min
-  // rate limit is far too coarse to catch it, and each duplicate costs every member a second
-  // push AND a second email blast. Mirrors basketball's /announce guard.
-  if (db.prepare("SELECT 1 FROM announcements WHERE program_id = 2 AND body = ? AND author = ? AND at >= datetime('now','-10 seconds') LIMIT 1").get(body, author))
-    return res.redirect('/pickleball');
-  db.prepare('INSERT INTO announcements (body, author, program_id) VALUES (?,?,2)').run(body, author);
-  audit(req.userEmail, 'admin', 'pk:announce', body.slice(0, 60));
-  // Push is the always-on app-native channel (every pk member's phone), independent of email.
-  setImmediate(() => sendPush(pkMemberEmails(), { title: 'Pickleball announcement', body: body.slice(0, 140), url: '/pickleball', tag: 'pkann' }));
-  // Email is OPT-IN per post (default off) — the operator ticks "Also email everyone", exactly
-  // like basketball's /announce. Recipients still honour the per-player email opt-out.
-  if (req.body.email_everyone && emailConfigured) {
-    setImmediate(() => {
-      try { const r = pkEmailRecipients(); if (r.length) sendAnnouncement(r, body, author).catch(e => console.error(`[pk-announce] email FAILED: ${e.message}`)); }
-      catch (e) { console.error(`[pk-announce] email prep FAILED: ${e.message}`); }
-    });
-  }
-  res.redirect('/pickleball');
-});
+app.post('/pickleball/announce', requireLogin, (req, res) => runAnnounce(2, req, res));
 // Retract the current pickleball announcement — operator only. Archives it so it stops
 // showing on the page (no new push/email; the original notification already went out).
-app.post('/pickleball/announce/retract', requireLogin, (req, res) => {
-  const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball');
-  const cur = latestPkAnnouncement();
-  if (cur) { db.prepare('UPDATE announcements SET archived = 1 WHERE id = ? AND program_id = 2').run(cur.id); audit(req.userEmail, 'admin', 'pk:announce:retract', String(cur.id)); }
-  res.redirect('/pickleball');
-});
+app.post('/pickleball/announce/retract', requireLogin, (req, res) => runAnnounceRetract(2, req, res));
 
 // Terminal error handler — a sync throw (or a forwarded async reject via next(e)) in any route
 // lands here with a 500 instead of a hung socket. Must be the LAST app.use (4-arg signature).
@@ -4499,6 +4502,7 @@ const PROGRAM_DEFS = {
         confirmBody: (rd) => `You're on the floor for ${runWeekday(rd)} pickleball. Tap to confirm — or leave to free your spot.`,
         promoTitle: "You're in for pickleball 🥒",
         promoBody: (rd) => `A spot opened — you're on the floor for ${runWeekday(rd)}, ${runLabelFor(rd)} pickleball.`,
+        annTitle: 'Pickleball announcement',
       },
       theme: 'pk', access: 'opt-in', approval: 'invite',
       tiers: ['team', 'host'], offerWindow: false,
