@@ -3024,7 +3024,11 @@ export function pickleballPage(state) { return runPage(state); }
 // Season board — most runs this calendar year. Top 8 + the viewer's own row (if outside
 // the top). Gentle by design: it celebrates the top and shows you yours, never ranks the
 // bottom. Self-contained inline styles so it needs no new CSS.
-export function seasonPage({ rows, email, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null, title = 'Season Board', subtitle = 'Most runs this calendar year 🏀', program = 1, emptyMsg = 'No runs logged yet this season — get out there 🏀' }) {
+export function seasonPage({ rows, email, dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null, title = 'Season Board', subtitle = 'Most runs this calendar year 🏀', program = 1, theme = '', emptyMsg = 'No runs logged yet this season — get out there 🏀' }) {
+  // Basketball (program 1) is the neutral hub run → it links back to Profile. Every opt-in run
+  // (pickleball, volleyball, …) gets the Runs back-link + its own body theme instead. No per-
+  // program branch — a new run just passes its theme.
+  const optIn = program !== 1;
   const meRow = rows.find(r => r.me);
   const medal = (r) => r === 1 ? '🥇' : r === 2 ? '🥈' : r === 3 ? '🥉' : String(r);
   const rowHtml = (r) => `<div style="display:flex;align-items:center;gap:12px;padding:11px 14px;border:1px solid var(--line);border-radius:12px;margin-top:8px;background:${r.me ? 'var(--teal-tint,#e6efec)' : 'var(--card)'}">
@@ -3035,13 +3039,13 @@ export function seasonPage({ rows, email, dmUnread = 0, groupUnread = 0, groupMe
   const list = rows.length
     ? rows.slice(0, 8).map(rowHtml).join('') + (meRow && meRow.rank > 8 ? `<div style="text-align:center;color:var(--muted);margin:6px 0 0">···</div>${rowHtml(meRow)}` : '')
     : `<div class="foot" style="margin-top:14px">${esc(emptyMsg)}</div>`;
-  return HEAD(`${esc(title)} — The Bridge`, program === 2 ? 'has-tabs pk' : 'has-tabs') + header(`<b>SEASON</b>${esc(email)}`, '', ann) + `
-    ${program === 2 ? backToRuns : ''}
+  return HEAD(`${esc(title)} — The Bridge`, 'has-tabs' + (theme ? ' ' + theme : '')) + header(`<b>SEASON</b>${esc(email)}`, '', ann) + `
+    ${optIn ? backToRuns : ''}
     <div class="rule"></div>
     <div class="phead"><h1>${esc(title)}</h1></div>
     <p class="psub" style="margin:-4px 0 6px;color:var(--muted)">${esc(subtitle)}</p>
     ${list}
-    ${program === 2 ? '' : '<div class="foot" style="margin-top:18px"><a href="/profile">← Back to profile</a></div>'}
+    ${optIn ? '' : '<div class="foot" style="margin-top:18px"><a href="/profile">← Back to profile</a></div>'}
   ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention, program }));
 }
 

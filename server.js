@@ -4749,6 +4749,26 @@ function runSeasonSet(programId, req, res) {
   audit(req.userEmail, 'admin', `${cfg.logTag}:season-set`, raw);
   res.redirect(base + '?pkset=season');
 }
+// Season board (GET) — most runs this calendar year from attendance, member-gated (same bar as the
+// run's chat). Program-generic: the copy (title/subtitle/emptyMsg) + theme all derive from the
+// registry, so a new run needs no season handler — mountRunProgram registers this for it.
+function runGetSeason(programId, req, res) {
+  const g = programGate(programId, req, res); if (!g) return; // login + approved + 404 while hidden
+  const me = req.userEmail, p = P(programId);
+  if (!memberOf(programId, me)) return res.redirect(p.paths.run); // members only — open the run to join first
+  const rows = db.prepare(`SELECT at.email, COUNT(*) n, ap.full_name FROM attendance at
+    LEFT JOIN applicants ap ON ap.email = at.email
+    WHERE at.program_id = ? AND at.run_date >= strftime('%Y-01-01','now') AND at.email NOT LIKE '%@guest.local'
+    GROUP BY at.email ORDER BY n DESC, at.email ASC`).all(programId);
+  const named = rows.map((r, i) => ({ rank: i + 1, name: r.full_name || 'Member', n: r.n, me: r.email.toLowerCase() === me.toLowerCase() }));
+  const a = applicantByEmail(me), cc = p.unread(me, a ? a.id : 0);
+  res.send(seasonPage({
+    rows: named, email: me, program: programId, theme: p.config.theme,
+    title: `${p.displayName} Season`, subtitle: `Most ${p.key} runs this calendar year ${p.emoji}`,
+    emptyMsg: `No ${p.key} runs logged yet this season — get out there ${p.emoji}`,
+    dmUnread: unreadCount(me), groupUnread: cc.group, groupMention: cc.gm, ann: null,
+  }));
+}
 // Operator moves this week's run to another date, or clears back to the standing day. Migrates the
 // roster + state + once-per-cycle markers to the new date (else it's stranded → phantom attendance),
 // and records the consumed standing day as the base of the cycle being MOVED (see the comment below).
@@ -4890,7 +4910,7 @@ app.get('/pickleball/season', requireLogin, (req, res) => {
   const named = rows.map((r, i) => ({ rank: i + 1, name: r.full_name || 'Member', n: r.n, me: r.email.toLowerCase() === me.toLowerCase() }));
   const a = applicantByEmail(me);
   res.send(seasonPage({
-    rows: named, email: me, program: 2,
+    rows: named, email: me, program: 2, theme: 'pk',
     title: 'Pickleball Season', subtitle: 'Most pickleball runs this calendar year 🥒',
     emptyMsg: 'No pickleball runs logged yet this season — get out there 🥒',
     dmUnread: unreadCount(me), groupUnread: pkGroupUnread(me), groupMention: pkGroupMentionUnread(me, a ? a.id : 0), ann: null,
@@ -5265,6 +5285,7 @@ function mountRunProgram(app, program) {
   app.post(`${b}/remove`, requireLogin, (req, res) => runRemove(id, req, res));
   app.post(`${b}/bump`, requireLogin, (req, res) => runBump(id, req, res));
   app.post(`${b}/guest`, requireLogin, (req, res) => runGuest(id, req, res));
+  app.get(`${b}/season`, requireLogin, (req, res) => runGetSeason(id, req, res));
   app.post(`${b}/season`, requireLogin, (req, res) => runSeasonSet(id, req, res));
   app.post(`${b}/announce`, requireLogin, (req, res) => runAnnounce(id, req, res));
   app.post(`${b}/announce/retract`, requireLogin, (req, res) => runAnnounceRetract(id, req, res));
