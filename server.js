@@ -766,15 +766,22 @@ function attendanceStats(email) {
 const stmtUnread = db.prepare('SELECT COUNT(*) n FROM messages WHERE to_email = ? AND read_at IS NULL');
 function unreadCount(email) { return email ? stmtUnread.get(email).n : 0; }
 
-// Run Chat unread: group_messages newer than this viewer's read high-water mark
-// (or ALL of them if they've never opened the room), excluding their own posts.
-// COALESCE('') makes the no-row case count everything — every datetime string
-// sorts after ''. One COUNT per page load, served by idx_group_messages_from.
-const stmtGroupUnread = db.prepare(`
+// --- Unified Run Chat engine (Phase 3b) ------------------------------------------------------
+// ONE program-parameterized engine serves every program's room: each hoisted statement binds
+// program_id at call time, so a single prepared statement covers all programs. The public
+// groupUnread / pkGroupUnread / loadGroupChat / loadPkGroupChat / markGroupRead / notifyMentions
+// (…and pk twins) are THIN WRAPPERS below that pass the program id — so no call site changed.
+// Reads P(programId) for the member roster source (apply=all-approved, opt-in=members) + mention
+// push routing (paths.chat + config.mentionTag). P() is referenced at call time (safe here).
+//
+// Run Chat unread: group_messages newer than this viewer's read high-water mark (or ALL if they've
+// never opened the room), excluding their own posts. One COUNT per page load, served by the PK.
+const stmtChatUnread = db.prepare(`
   SELECT COUNT(*) n FROM group_messages
-  WHERE program_id = 1 AND id > COALESCE((SELECT last_read_id FROM group_reads WHERE email = ? AND program_id = 1), 0)
+  WHERE program_id = ? AND id > COALESCE((SELECT last_read_id FROM group_reads WHERE email = ? AND program_id = ?), 0)
     AND from_email != ?`);
-function groupUnread(email) { return email ? stmtGroupUnread.get(email, email).n : 0; }
+function chatUnreadFor(programId, email) { return email ? stmtChatUnread.get(programId, email, programId, email).n : 0; }
+function groupUnread(email) { return chatUnreadFor(1, email); }
 
 // Badge split: the Messages tab shows DM unread (unreadCount), the Roster tab
 // shows group (Run Chat) unread (groupUnread). Every tab-bearing route feeds both
@@ -828,28 +835,37 @@ function hydrateGroupMessages(me, msgs) {
 
 // Hoisted — the chat re-render path (loadGroupChat) runs on every /chat page fetch, which every
 // open client re-fetches on each fingerprint change (each message × each viewer on a busy night).
-const stmtHasOlderGroup = db.prepare('SELECT 1 FROM group_messages WHERE id < ? AND program_id = 1 LIMIT 1');
-const stmtGroupMsgs = db.prepare('SELECT * FROM ( SELECT * FROM group_messages WHERE program_id = 1 ORDER BY id DESC LIMIT 200 ) ORDER BY id ASC');
-const stmtGroupMembers = db.prepare(`SELECT id, full_name, email, is_host, is_team, is_regular, avatar
+const stmtChatHasOlder = db.prepare('SELECT 1 FROM group_messages WHERE id < ? AND program_id = ? LIMIT 1');
+const stmtChatMsgs = db.prepare('SELECT * FROM ( SELECT * FROM group_messages WHERE program_id = ? ORDER BY id DESC LIMIT 200 ) ORDER BY id ASC');
+const stmtChatOlder = db.prepare('SELECT * FROM ( SELECT * FROM group_messages WHERE id < ? AND program_id = ? ORDER BY id DESC LIMIT 200 ) ORDER BY id ASC');
+// Member roster: an APPLY program (basketball) lists every approved player; an OPT-IN program
+// (pickleball) lists only those who joined it (program_membership). Same columns + sort either way.
+const stmtChatMembersAll = db.prepare(`SELECT id, full_name, email, is_host, is_team, is_regular, avatar
     FROM applicants WHERE status = 'approved' AND email NOT LIKE '%@guest.local'
     ORDER BY is_host DESC, is_team DESC, is_regular DESC, full_name COLLATE NOCASE`);
-const stmtGroupPinned = db.prepare('SELECT * FROM group_messages WHERE pinned_at IS NOT NULL AND program_id = 1 ORDER BY pinned_at DESC LIMIT 5');
-// True if at least one group message exists older than `id` (drives the
-// "Load earlier messages" button — shown only when there is more history).
-function hasOlderGroup(id) {
-  return id ? !!stmtHasOlderGroup.get(id) : false;
+const stmtChatMembersJoined = db.prepare(`SELECT a.id, a.full_name, a.email, a.is_host, a.is_team, a.is_regular, a.avatar
+    FROM program_membership pm JOIN applicants a ON a.email = pm.email
+    WHERE pm.program_id = ? AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local'
+    ORDER BY a.is_host DESC, a.is_team DESC, a.is_regular DESC, a.full_name COLLATE NOCASE`);
+const stmtChatPinned = db.prepare('SELECT * FROM group_messages WHERE pinned_at IS NOT NULL AND program_id = ? ORDER BY pinned_at DESC LIMIT 5');
+function chatMembersFor(programId) {
+  const p = P(programId);
+  return (p && p.config.access === 'opt-in') ? stmtChatMembersJoined.all(programId) : stmtChatMembersAll.all();
 }
+// True if at least one group message exists older than `id` in this program's room (drives the
+// "Load earlier messages" button — shown only when there is more history).
+function hasOlderChat(programId, id) { return id ? !!stmtChatHasOlder.get(id, programId) : false; }
 
-function loadGroupChat(me) {
-  const msgs = stmtGroupMsgs.all();
+function loadChat(programId, me) {
+  const msgs = stmtChatMsgs.all(programId);
   const maps = hydrateGroupMessages(me, msgs);
-  // Member list = the SAME population the "N members" count uses (approved, non-guest).
+  // Member list = the SAME population the "N members" count uses (see chatMembersFor).
   // memberCount is derived from this list's length so the header count and the members
   // overlay can never disagree. Sorted host → team → core → regular, then name.
-  const members = stmtGroupMembers.all();
+  const members = chatMembersFor(programId);
   // Pinned messages — newest pin first, capped. Hydrate their senders too (a pinned
   // message may be older than the loaded 200, so it needs its own sender lookup).
-  const pinned = stmtGroupPinned.all();
+  const pinned = stmtChatPinned.all(programId);
   const pinnedNames = new Map();
   if (pinned.length) {
     const pe = [...new Set(pinned.map(p => p.from_email))];
@@ -857,20 +873,18 @@ function loadGroupChat(me) {
     for (const s of db.prepare(`SELECT email, full_name FROM applicants WHERE email IN (${ph})`).all(...pe)) pinnedNames.set(s.email, s.full_name);
   }
   return { msgs, ...maps, members, memberCount: members.length, pinned, pinnedNames,
-           hasOlder: msgs.length ? hasOlderGroup(msgs[0].id) : false };
+           hasOlder: msgs.length ? hasOlderChat(programId, msgs[0].id) : false };
 }
 
-// One page of scroll-back: the ≤200 messages immediately older than `beforeId`,
-// chronological (id ASC), hydrated the same way. hasOlder reports whether yet
-// more history remains above this page.
-function loadGroupChatOlder(me, beforeId) {
-  const msgs = db.prepare(`
-    SELECT * FROM (
-      SELECT * FROM group_messages WHERE id < ? AND program_id = 1 ORDER BY id DESC LIMIT 200
-    ) ORDER BY id ASC`).all(beforeId);
+// One page of scroll-back: the ≤200 messages immediately older than `beforeId`, chronological
+// (id ASC), hydrated the same way. hasOlder reports whether yet more history remains above.
+function loadChatOlder(programId, me, beforeId) {
+  const msgs = stmtChatOlder.all(beforeId, programId);
   const maps = hydrateGroupMessages(me, msgs);
-  return { msgs, ...maps, hasOlder: msgs.length ? hasOlderGroup(msgs[0].id) : false };
+  return { msgs, ...maps, hasOlder: msgs.length ? hasOlderChat(programId, msgs[0].id) : false };
 }
+function loadGroupChat(me) { return loadChat(1, me); }
+function loadGroupChatOlder(me, beforeId) { return loadChatOlder(1, me, beforeId); }
 
 // Validate a raw comma-separated mention-id string against the applicants table.
 // Returns a canonical comma-separated string of the REAL ids (deduped, capped), or
@@ -883,9 +897,10 @@ function validMentions(raw) {
   const valid = ids.filter(id => real.has(id));
   return valid.length ? valid.join(',') : null;
 }
-// Push a "you were mentioned" notification to each @-mentioned player (never the
-// sender). No-op with no mentions / no subscriptions. Fired in the background.
-function notifyMentions(fromEmail, body, mentions) {
+// Push a "you were mentioned" notification to each @-mentioned player (never the sender). No-op
+// with no mentions / no subscriptions. Fired in the background. Routes to the mentioned program's
+// chat (P(programId).paths.chat) with its own push-dedup tag (config.mentionTag).
+function notifyChatMentions(programId, fromEmail, body, mentions) {
   if (!mentions) return;
   const ids = String(mentions).split(',').map(Number).filter(Boolean);
   if (!ids.length) return;
@@ -896,8 +911,10 @@ function notifyMentions(fromEmail, body, mentions) {
   if (!emails.length) return;
   const sender = applicantByEmail(fromEmail);
   const name = sender ? sender.full_name : 'Someone';
-  setImmediate(() => sendPush(emails, { title: `${name} mentioned you`, body: (body || '').slice(0, 140), url: '/chat', tag: 'mention' }));
+  const p = P(programId);
+  setImmediate(() => sendPush(emails, { title: `${name} mentioned you`, body: (body || '').slice(0, 140), url: p.paths.chat, tag: p.config.mentionTag }));
 }
+function notifyMentions(fromEmail, body, mentions) { return notifyChatMentions(1, fromEmail, body, mentions); }
 
 // DM push: buzz the recipient's phone — otherwise a host DM reaches nobody until they
 // happen to open the app. Coalesced to at most 1 push / 2 min per sender→recipient pair
@@ -919,135 +936,39 @@ function notifyDM(sender, toEmail, preview) {
 // "You were mentioned" count: UNREAD group messages (newer than this viewer's read
 // high-water mark, not their own) whose stored mentions include their applicant id.
 // Reuses the group_reads high-water mark that groupUnread already scopes against.
-const stmtGroupMentions = db.prepare(`
+const stmtChatMentions = db.prepare(`
     SELECT mentions FROM group_messages
-    WHERE program_id = 1 AND id > COALESCE((SELECT last_read_id FROM group_reads WHERE email = ? AND program_id = 1), 0)
+    WHERE program_id = ? AND id > COALESCE((SELECT last_read_id FROM group_reads WHERE email = ? AND program_id = ?), 0)
       AND from_email != ? AND mentions IS NOT NULL AND mentions != ''`); // hoisted — runs on every /poll tick; PK range, not a scan
-function groupMentionUnread(email, applicantId) {
+function chatMentionUnreadFor(programId, email, applicantId) {
   if (!email || !applicantId) return 0;
-  const rows = stmtGroupMentions.all(email, email);
+  const rows = stmtChatMentions.all(programId, email, programId, email);
   const idStr = String(applicantId);
   let n = 0;
   for (const r of rows) if (String(r.mentions).split(',').includes(idStr)) n++;
   return n;
 }
+function groupMentionUnread(email, applicantId) { return chatMentionUnreadFor(1, email, applicantId); }
 // The viewer's applicant id (for mention scoping). NULL for admins with no row.
 function applicantIdOf(email) {
   const a = applicantByEmail(email);
   return a ? a.id : 0;
 }
-// Bump this viewer's Run Chat read high-water mark to now (clears their group-unread).
-const stmtMarkGroupRead = db.prepare(`INSERT INTO group_reads (email, last_read_id, last_read_at, program_id)
-              VALUES (?, (SELECT COALESCE(MAX(id),0) FROM group_messages WHERE program_id = 1), datetime('now'), 1)
+// Bump this viewer's Run Chat read high-water mark to now (clears their group-unread) for a program.
+const stmtMarkChatRead = db.prepare(`INSERT INTO group_reads (email, last_read_id, last_read_at, program_id)
+              VALUES (?, (SELECT COALESCE(MAX(id),0) FROM group_messages WHERE program_id = ?), datetime('now'), ?)
               ON CONFLICT(email, program_id) DO UPDATE SET last_read_id = excluded.last_read_id, last_read_at = excluded.last_read_at`);
-function markGroupRead(me) {
-  stmtMarkGroupRead.run(me);
-}
+function markChatRead(programId, me) { stmtMarkChatRead.run(me, programId, programId); }
+function markGroupRead(me) { return markChatRead(1, me); }
 
-// --- PICKLEBALL chat helpers (ISOLATED clone of the group_* helpers above, scoped to the
-// pk_group_* tables). Nothing here reads/writes basketball chat. Identity population is the
-// SAME approved-non-guest roster (pickleball is open-join). Kept a faithful mirror so the
-// chat view + routes clone cleanly; push notifications point at /pickleball/chat.
-const stmtPkGroupUnread = db.prepare(`
-  SELECT COUNT(*) n FROM group_messages
-  WHERE program_id = 2 AND id > COALESCE((SELECT last_read_id FROM group_reads WHERE email = ? AND program_id = 2), 0)
-    AND from_email != ?`);
-function pkGroupUnread(email) { return email ? stmtPkGroupUnread.get(email, email).n : 0; }
-
-function hydratePkGroupMessages(me, msgs) {
-  const reactions = new Map(), parents = new Map(), senders = new Map();
-  if (msgs.length) {
-    const ids = msgs.map(m => m.id);
-    const ph = ids.map(() => '?').join(',');
-    for (const r of db.prepare(`
-      SELECT group_message_id AS mid, emoji, COUNT(*) AS cnt,
-             SUM(CASE WHEN from_email = ? THEN 1 ELSE 0 END) AS mine
-      FROM group_reactions WHERE group_message_id IN (${ph})
-      GROUP BY group_message_id, emoji ORDER BY group_message_id, emoji`).all(me, ...ids)) {
-      if (!reactions.has(r.mid)) reactions.set(r.mid, []);
-      reactions.get(r.mid).push({ emoji: r.emoji, count: r.cnt, mine: r.mine > 0 });
-    }
-    const replyIds = [...new Set(msgs.map(m => m.reply_to).filter(Boolean))];
-    if (replyIds.length) {
-      const ph2 = replyIds.map(() => '?').join(',');
-      for (const pr of db.prepare(`SELECT id, from_email, body, image, audio, video FROM group_messages WHERE id IN (${ph2})`).all(...replyIds))
-        parents.set(pr.id, pr);
-    }
-    const emails = [...new Set([...msgs.map(m => m.from_email), ...[...parents.values()].map(p => p.from_email)])];
-    const ph3 = emails.map(() => '?').join(',');
-    for (const s of db.prepare(`SELECT id, full_name, email, is_host FROM applicants WHERE email IN (${ph3})`).all(...emails))
-      senders.set(s.email, s);
-  }
-  const mentionNames = new Map();
-  const mentionIds = [...new Set(msgs.flatMap(m =>
-    (m.mentions ? String(m.mentions).split(',') : []).map(Number).filter(Boolean)))];
-  if (mentionIds.length) {
-    const phm = mentionIds.map(() => '?').join(',');
-    for (const r of db.prepare(`SELECT id, full_name FROM applicants WHERE id IN (${phm})`).all(...mentionIds))
-      mentionNames.set(r.id, r.full_name);
-  }
-  return { reactions, parents, senders, mentionNames };
-}
-// Hoisted — same hot chat-render path as loadGroupChat, pickleball twin.
-const stmtHasOlderPkGroup = db.prepare('SELECT 1 FROM group_messages WHERE id < ? AND program_id = 2 LIMIT 1');
-const stmtPkGroupMsgs = db.prepare('SELECT * FROM (SELECT * FROM group_messages WHERE program_id = 2 ORDER BY id DESC LIMIT 200) ORDER BY id ASC');
-const stmtPkGroupMembers = db.prepare(`SELECT a.id, a.full_name, a.email, a.is_host, a.is_team, a.is_regular, a.avatar
-    FROM program_membership pm JOIN applicants a ON a.email = pm.email
-    WHERE pm.program_id = 2 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local'
-    ORDER BY a.is_host DESC, a.is_team DESC, a.is_regular DESC, a.full_name COLLATE NOCASE`);
-const stmtPkGroupPinned = db.prepare('SELECT * FROM group_messages WHERE pinned_at IS NOT NULL AND program_id = 2 ORDER BY pinned_at DESC LIMIT 5');
-function hasOlderPkGroup(id) {
-  return id ? !!stmtHasOlderPkGroup.get(id) : false;
-}
-function loadPkGroupChat(me) {
-  const msgs = stmtPkGroupMsgs.all();
-  const maps = hydratePkGroupMessages(me, msgs);
-  // Members = people who JOINED pickleball (program_membership 2), not the whole approved roster.
-  const members = stmtPkGroupMembers.all();
-  const pinned = stmtPkGroupPinned.all();
-  const pinnedNames = new Map();
-  if (pinned.length) {
-    const pe = [...new Set(pinned.map(p => p.from_email))];
-    const ph = pe.map(() => '?').join(',');
-    for (const s of db.prepare(`SELECT email, full_name FROM applicants WHERE email IN (${ph})`).all(...pe)) pinnedNames.set(s.email, s.full_name);
-  }
-  return { msgs, ...maps, members, memberCount: members.length, pinned, pinnedNames,
-           hasOlder: msgs.length ? hasOlderPkGroup(msgs[0].id) : false };
-}
-function loadPkGroupChatOlder(me, beforeId) {
-  const msgs = db.prepare(`SELECT * FROM (SELECT * FROM group_messages WHERE id < ? AND program_id = 2 ORDER BY id DESC LIMIT 200) ORDER BY id ASC`).all(beforeId);
-  const maps = hydratePkGroupMessages(me, msgs);
-  return { msgs, ...maps, hasOlder: msgs.length ? hasOlderPkGroup(msgs[0].id) : false };
-}
-function notifyPkMentions(fromEmail, body, mentions) {
-  if (!mentions) return;
-  const ids = String(mentions).split(',').map(Number).filter(Boolean);
-  if (!ids.length) return;
-  const ph = ids.map(() => '?').join(',');
-  const rows = db.prepare(`SELECT email FROM applicants WHERE id IN (${ph}) AND email NOT LIKE '%@guest.local'`).all(...ids);
-  const from = String(fromEmail).toLowerCase();
-  const emails = rows.map(r => r.email).filter(e => e.toLowerCase() !== from);
-  if (!emails.length) return;
-  const sender = applicantByEmail(fromEmail);
-  const name = sender ? sender.full_name : 'Someone';
-  setImmediate(() => sendPush(emails, { title: `${name} mentioned you`, body: (body || '').slice(0, 140), url: '/pickleball/chat', tag: 'pkmention' }));
-}
-const stmtPkGroupMentions = db.prepare(`
-    SELECT mentions FROM group_messages
-    WHERE program_id = 2 AND id > COALESCE((SELECT last_read_id FROM group_reads WHERE email = ? AND program_id = 2), 0)
-      AND from_email != ? AND mentions IS NOT NULL AND mentions != ''`);
-function pkGroupMentionUnread(email, applicantId) {
-  if (!email || !applicantId) return 0;
-  const rows = stmtPkGroupMentions.all(email, email);
-  const idStr = String(applicantId);
-  let n = 0;
-  for (const r of rows) if (String(r.mentions).split(',').includes(idStr)) n++;
-  return n;
-}
-const stmtMarkPkGroupRead = db.prepare(`INSERT INTO group_reads (email, last_read_id, last_read_at, program_id)
-              VALUES (?, (SELECT COALESCE(MAX(id),0) FROM group_messages WHERE program_id = 2), datetime('now'), 2)
-              ON CONFLICT(email, program_id) DO UPDATE SET last_read_id = excluded.last_read_id, last_read_at = excluded.last_read_at`);
-function markPkGroupRead(me) { stmtMarkPkGroupRead.run(me); }
+// --- Pickleball chat = the SAME unified engine, program 2. Thin wrappers keep the pk names the
+// pickleball routes + page renders call; the old duplicated pk_ chat helpers are gone (unified above).
+function pkGroupUnread(email) { return chatUnreadFor(2, email); }
+function loadPkGroupChat(me) { return loadChat(2, me); }
+function loadPkGroupChatOlder(me, beforeId) { return loadChatOlder(2, me, beforeId); }
+function notifyPkMentions(fromEmail, body, mentions) { return notifyChatMentions(2, fromEmail, body, mentions); }
+function pkGroupMentionUnread(email, applicantId) { return chatMentionUnreadFor(2, email, applicantId); }
+function markPkGroupRead(me) { return markChatRead(2, me); }
 // Chat gate = page gate + pickleball MEMBERSHIP. You must have opened the pickleball run
 // (which joins you) to access its chat — being an approved basketball player isn't enough.
 // pkIsMember/pkGate are hoisted function declarations, so this resolves despite ordering.
