@@ -1672,17 +1672,22 @@ function groupQueueFeature(programId) { const f = P(programId).config.features; 
 // this is byte-identical to `list.slice(0, capacity)` (proven), so the solo path never changes.
 function packParties(list, capacity) {
   const byGroup = new Map();
-  const units = [];                       // solo/party units in first-appearance (roster) order
-  for (const r of list) {
-    if (r.group_id == null) units.push([r]);
-    else if (byGroup.has(r.group_id)) byGroup.get(r.group_id).push(r);
-    else { const u = [r]; byGroup.set(r.group_id, u); units.push(u); }
-  }
+  const units = [];                       // {rows, anchor} — solo/party units
+  list.forEach((r, i) => {
+    if (r.group_id == null) { units.push({ rows: [r], anchor: i }); }
+    else if (byGroup.has(r.group_id)) { const u = byGroup.get(r.group_id); u.rows.push(r); u.anchor = i; } // anchor = LATEST member's roster position (P1-2)
+    else { const u = { rows: [r], anchor: i }; byGroup.set(r.group_id, u); units.push(u); }
+  });
+  // A party is placed at its LATEST member's position, never its earliest — so a member's early
+  // (e.g. solo) check-in can't drag the whole party onto the floor ahead of the queue and bump a
+  // seated player (P1-2). `list` is pre-sorted, so for all-solos every anchor == its own index →
+  // this stable sort is a no-op and packParties still reduces to list.slice(0, capacity).
+  units.sort((a, b) => a.anchor - b.anchor);
   const floor = [], wait = [];
   let remaining = capacity;
   for (const u of units) {
-    if (u.length <= remaining) { floor.push(...u); remaining -= u.length; }
-    else wait.push(...u);
+    if (u.rows.length <= remaining) { floor.push(...u.rows); remaining -= u.rows.length; }
+    else wait.push(...u.rows);
   }
   return { floor, wait };
 }
@@ -4660,7 +4665,6 @@ const stmtRollPastDates = db.prepare('SELECT DISTINCT run_date FROM checkins WHE
 const stmtRollArchiveIns = db.prepare('INSERT OR IGNORE INTO attendance (run_date, email, name, program_id) VALUES (?,?,?,?)');
 const stmtRollDelCheckinsByDate = db.prepare('DELETE FROM checkins WHERE run_date = ? AND program_id = ?');
 const stmtRollDelStateByDate = db.prepare('DELETE FROM run_state WHERE run_date = ? AND program_id = ?');
-const stmtRollFloorForArchive = db.prepare('SELECT email, name FROM checkins WHERE run_date = ? AND program_id = ? ORDER BY sort_order ASC, id ASC LIMIT ?');
 const stmtRollSweepState = db.prepare('DELETE FROM run_state WHERE run_date < ? AND program_id = ?');
 const stmtRollSweepOptout = db.prepare('DELETE FROM regular_optout WHERE run_date < ? AND program_id = ?');
 // Lazy rollover for an opt-in run (mirrors basketball's ensureWeek): once a finished run passes,
@@ -4678,7 +4682,12 @@ function ensureWeekFor(programId) {
   // Archive + purge ANY finished run so the floor is recorded to attendance and stale rows never accumulate.
   const pastDates = stmtRollPastDates.all(programId, today).map(r => r.run_date).filter(isPast);
   for (const rd of pastDates) {
-    const floor = stmtRollFloorForArchive.all(rd, programId, cfg.cap);
+    // Archive the ACTUAL floor from the partition, not a positional first-cap slice (P2-5): for an
+    // offer-window run that excludes held/unclaimed offers (a spot offered-but-never-claimed is a
+    // no-show, not attendance), and for a queue-with-friends run it respects packParties' atomic
+    // placement (a party that WAITED isn't credited just because a member sits early in sort order).
+    const part = partitionFor(programId, rd);
+    const floor = cfg.offerWindow ? part.floorReal : part.floor;
     for (const p of floor) if (!/@guest\.local$/.test(p.email)) stmtRollArchiveIns.run(rd, p.email, p.name, programId);
     stmtRollDelCheckinsByDate.run(rd, programId); stmtRollDelStateByDate.run(rd, programId);
     clearRunTeams(programId, rd);   // archived run → drop its team assignments
