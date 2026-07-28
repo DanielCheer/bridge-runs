@@ -491,6 +491,11 @@ migrateToPhase2(db);
 {
   const cc = db.prepare('PRAGMA table_info(checkins)').all().map(c => c.name);
   if (!cc.includes('auto_seated')) db.exec('ALTER TABLE checkins ADD COLUMN auto_seated INTEGER NOT NULL DEFAULT 0');
+  // Queue-with-friends (Phase 6b): a checkin's party pointer (signup_groups.id). NULL = solo.
+  // Party-atomic seating groups floor/waitlist decisions by this id so a party is never split.
+  // vb-only via config.features.groupQueue; NULL everywhere until a party checks in → solo ≡ today.
+  // Added AFTER migrateToPhase2 with auto_seated (checkins is rebuilt by that migration).
+  if (!cc.includes('group_id')) db.exec('ALTER TABLE checkins ADD COLUMN group_id INTEGER');
 }
 
 // --- Social graph (2026-07, PHASE 6 — friends / follow / block) -------------
@@ -519,6 +524,37 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_social_to   ON social_edges(to_email, kind, status);
   CREATE INDEX IF NOT EXISTS idx_social_from ON social_edges(from_email, kind, status);
+`);
+
+// --- Queue-with-friends (2026-07, PHASE 6b — a party checks in together) -----
+// A "party" = a set of buddies who sign up for ONE run together and seat ATOMICALLY (all on the
+// floor or all on the waitlist, never split). UNIVERSAL schema (program_id + run_date scoped like
+// every run table) but the FEATURE is config-gated (config.features.groupQueue) — volleyball-only
+// at launch; with it off, no party rows are ever written and checkins.group_id stays NULL → seating
+// is byte-identical to today (reduction-proof: solo-only ≡ current behaviour).
+//   signup_groups        — one row per party: leader + the (program, run_date) it's for.
+//   signup_group_members — invite lifecycle per member: 'invited' → 'joined' | 'declined'.
+// Additive + migration-guarded (brand-new tables the Phase-2 migration never rebuilds). Every
+// email/run-scoped column joins rekeyEmailTx + person-delete + the rollover/cancel/date purges
+// in this same commit (see server.js). A member's checkins.group_id points back here when they're
+// seated as part of the party.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS signup_groups (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    program_id   INTEGER NOT NULL,
+    run_date     TEXT NOT NULL,
+    leader_email TEXT NOT NULL,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_signup_groups_run ON signup_groups(program_id, run_date);
+  CREATE TABLE IF NOT EXISTS signup_group_members (
+    group_id   INTEGER NOT NULL,
+    email      TEXT NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'invited',   -- 'invited' | 'joined' | 'declined'
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (group_id, email)
+  );
+  CREATE INDEX IF NOT EXISTS idx_sgm_email ON signup_group_members(email);
 `);
 
 // Prune stale magic-link tokens on startup. A token is dead once it's been used
@@ -560,7 +596,7 @@ function transact(fn) {
 // keeps their own: drop whatever the target address left behind, then carry. Internal constants
 // — never user input — so interpolating them into SQL is safe.
 const EMAIL_KEYED_TABLES = ['announcement_reads', 'announcement_dismissals', 'regular_optout',
-  'group_reads', 'program_membership', 'team_assignments'];
+  'group_reads', 'program_membership', 'team_assignments', 'signup_group_members'];
 
 // Carry every per-user row from oldEmail to newEmail. Assumes the CALLER already opened a
 // transaction, so the `applicants` row update commits atomically with this cascade — a
@@ -604,6 +640,10 @@ function rekeyEmailTx(oldEmail, newEmail) {
       .run(newEmail, oldEmail);
     db.prepare('UPDATE social_edges SET from_email=? WHERE from_email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE social_edges SET to_email=?   WHERE to_email=?').run(newEmail, oldEmail);
+    // signup_groups leader (Phase 6b) — leader_email isn't the plain `email` column, so it can't ride
+    // the loop above; a straight UPDATE (id is the PK, leader_email non-unique → no collision).
+    // The party's MEMBER rows ride the loop via 'signup_group_members'.
+    db.prepare('UPDATE signup_groups SET leader_email=? WHERE leader_email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE announcements         SET author=?      WHERE author=?').run(newEmail, oldEmail); // "posted by" resolves to their name
     // Old-address sign-in tokens are INVALIDATED, not carried — they were emailed to an
     // address the person may no longer control, so a lingering valid link/code is a risk.

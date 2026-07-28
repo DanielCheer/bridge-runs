@@ -1609,6 +1609,29 @@ function heldReleased(runDate, d = new Date()) {
 // caps + a program-scoped roster query. partitionRun keeps the program-1 (basketball) entry so its
 // ~15 call sites are untouched; a future offer-window program partitions through the SAME code by
 // passing its id — this is the reusable half of the engine (pickleball uses simplePartition).
+// config.features.groupQueue → {maxSize} | falsy. The read pattern mirrors teamsFeature.
+function groupQueueFeature(programId) { const f = P(programId).config.features; return (f && f.groupQueue) || null; }
+// Party-atomic floor packing (Phase 6b, queue-with-friends). Splits an ordered roster slice into
+// floor + waitlist so a PARTY (checkins sharing a group_id) is never split: a party boards only if
+// it fits ENTIRELY in the remaining floor capacity, else the whole party waits and we skip ahead to
+// fill the gap with smaller units behind it. Solos are size-1 units → when NOTHING has a group_id
+// this is byte-identical to `list.slice(0, capacity)` (proven), so the solo path never changes.
+function packParties(list, capacity) {
+  const byGroup = new Map();
+  const units = [];                       // solo/party units in first-appearance (roster) order
+  for (const r of list) {
+    if (r.group_id == null) units.push([r]);
+    else if (byGroup.has(r.group_id)) byGroup.get(r.group_id).push(r);
+    else { const u = [r]; byGroup.set(r.group_id, u); units.push(u); }
+  }
+  const floor = [], wait = [];
+  let remaining = capacity;
+  for (const u of units) {
+    if (u.length <= remaining) { floor.push(...u); remaining -= u.length; }
+    else wait.push(...u);
+  }
+  return { floor, wait };
+}
 function offerPartition(programId, runDate) {
   const cfg = P(programId).config;
   const rows = stmtRun.all(runDate, programId).map(r => ({
@@ -1625,8 +1648,14 @@ function offerPartition(programId, runDate) {
   const offered = active.filter(r => r.offered_at != null);   // held pending-claim spots
   const nonOffered = active.filter(r => r.offered_at == null);
   const floorCapForReal = Math.max(0, cfg.cap - offered.length);  // held spots reserve floor slots
-  const floorReal = nonOffered.slice(0, floorCapForReal);
-  const overflow = nonOffered.slice(floorCapForReal);
+  // Party-atomic split when groupQueue is on; otherwise the exact solo slice (reduction-proof).
+  let floorReal, overflow;
+  if (groupQueueFeature(programId)) {
+    ({ floor: floorReal, wait: overflow } = packParties(nonOffered, floorCapForReal));
+  } else {
+    floorReal = nonOffered.slice(0, floorCapForReal);
+    overflow = nonOffered.slice(floorCapForReal);
+  }
   const waitPlayers = [...overflow, ...heldLate].slice(0, cfg.waitlist);
   return { rows, active, offered, floorReal, overflow, heldLate, waitPlayers };
 }
@@ -3880,6 +3909,16 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
     // Social graph (Phase 6): drop every edge touching this person, in BOTH directions, so a
     // same-email re-registration can't inherit stale friendships/blocks (mirrors the votes purge).
     db.prepare('DELETE FROM social_edges WHERE from_email = ? OR to_email = ?').run(a.email, a.email);
+    // Queue-with-friends (Phase 6b): drop their party memberships, and dissolve any party they LED
+    // — clearing the group pointer off every remaining member's checkin so none dangle.
+    db.prepare('DELETE FROM signup_group_members WHERE email = ?').run(a.email);
+    const ledGroups = db.prepare('SELECT id FROM signup_groups WHERE leader_email = ?').all(a.email).map(r => r.id);
+    if (ledGroups.length) {
+      const gph = ledGroups.map(() => '?').join(',');
+      db.prepare(`UPDATE checkins SET group_id = NULL WHERE group_id IN (${gph})`).run(...ledGroups);
+      db.prepare(`DELETE FROM signup_group_members WHERE group_id IN (${gph})`).run(...ledGroups);
+      db.prepare('DELETE FROM signup_groups WHERE leader_email = ?').run(a.email);
+    }
     refreshAvatarMap(); // drop them from the email→photo registry
     audit(req.userEmail, 'admin', 'people:delete', a.email);
   }
@@ -4090,6 +4129,15 @@ function pkPartition(rd) { return partitionFor(2, rd); }
 // the table is empty. The join/assign routes + the teams panel land next.
 function clearTeamAssignment(programId, rd, email) { db.prepare('DELETE FROM team_assignments WHERE program_id = ? AND run_date = ? AND email = ?').run(programId, rd, email); }
 function clearRunTeams(programId, rd) { db.prepare('DELETE FROM team_assignments WHERE program_id = ? AND run_date = ?').run(programId, rd); }
+// Queue-with-friends (Phase 6b): drop a run's parties + their invites (the run is over/cancelled).
+// checkins for that run are deleted by the caller, so their group_id pointers vanish with them.
+function clearRunParties(programId, rd) {
+  const ids = db.prepare('SELECT id FROM signup_groups WHERE program_id = ? AND run_date = ?').all(programId, rd).map(r => r.id);
+  if (!ids.length) return;
+  const ph = ids.map(() => '?').join(',');
+  db.prepare(`DELETE FROM signup_group_members WHERE group_id IN (${ph})`).run(...ids);
+  db.prepare('DELETE FROM signup_groups WHERE program_id = ? AND run_date = ?').run(programId, rd);
+}
 const stmtRunTeams = db.prepare('SELECT email, team_no, assigned_by FROM team_assignments WHERE program_id = ? AND run_date = ? ORDER BY team_no ASC, created_at ASC');
 function runTeamsFor(programId, rd) { return stmtRunTeams.all(programId, rd); }
 function teamsFeature(programId) { const f = P(programId).config.features; return (f && f.teams) || null; }  // {count,size,opensAt,selfServe} or null
@@ -4450,11 +4498,15 @@ function ensureWeekFor(programId) {
     for (const p of floor) if (!/@guest\.local$/.test(p.email)) stmtRollArchiveIns.run(rd, p.email, p.name, programId);
     stmtRollDelCheckinsByDate.run(rd, programId); stmtRollDelStateByDate.run(rd, programId);
     clearRunTeams(programId, rd);   // archived run → drop its team assignments
+    clearRunParties(programId, rd); // and its queue-with-friends parties (Phase 6b)
   }
   // Sweep stale run_state for past runs that had NO check-ins (a zero-join or cancelled week never
   // appears in pastDates above, so its is_open/cancelled row would leak forever).
   stmtRollSweepState.run(today, programId);
   stmtRollSweepOptout.run(today, programId);   // sit-outs are per-week → clear past ones so renewal resumes
+  // Parties for past runs that never reached check-in (invited-only, no checkins → not in pastDates) also leak; sweep them.
+  db.prepare('DELETE FROM signup_group_members WHERE group_id IN (SELECT id FROM signup_groups WHERE program_id = ? AND run_date < ?)').run(programId, today);
+  db.prepare('DELETE FROM signup_groups WHERE program_id = ? AND run_date < ?').run(programId, today);
   // Clear a passed explicit override back to the weekly standing day.
   const set = getSetting(cfg.keys.runDate);
   if (set && isPast(set)) delSetting(cfg.keys.runDate);
@@ -4535,7 +4587,7 @@ function runCancel(programId, req, res) {
   const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
   const rd = programRunDate(programId), on = req.body.on !== '0';
   setRunStateFor(programId, rd, 'cancelled', on);
-  if (on) { setRunStateFor(programId, rd, 'is_open', 0); db.prepare('DELETE FROM checkins WHERE run_date = ? AND program_id = ?').run(rd, programId); clearRunTeams(programId, rd); }
+  if (on) { setRunStateFor(programId, rd, 'is_open', 0); db.prepare('DELETE FROM checkins WHERE run_date = ? AND program_id = ?').run(rd, programId); clearRunTeams(programId, rd); clearRunParties(programId, rd); }
   res.redirect(base);
 }
 function runPublish(programId, req, res) {
@@ -4663,6 +4715,7 @@ function runDate(programId, req, res) {
       if (newRd !== oldRd) {
         db.prepare('UPDATE checkins SET run_date = ? WHERE run_date = ? AND program_id = ?').run(newRd, oldRd, programId);
         db.prepare('UPDATE OR IGNORE regular_optout SET run_date = ? WHERE run_date = ? AND program_id = ?').run(newRd, oldRd, programId);
+        db.prepare('UPDATE signup_groups SET run_date = ? WHERE run_date = ? AND program_id = ?').run(newRd, oldRd, programId); // parties follow the run (Phase 6b)
         const st = db.prepare('SELECT is_open, cancelled FROM run_state WHERE run_date = ? AND program_id = ?').get(oldRd, programId);
         if (st) {
           db.prepare("INSERT INTO run_state (run_date, is_open, cancelled, program_id) VALUES (?,?,?,?) ON CONFLICT(run_date, program_id) DO UPDATE SET is_open = excluded.is_open, cancelled = excluded.cancelled").run(newRd, st.is_open, st.cancelled, programId);
@@ -4684,6 +4737,7 @@ function runDate(programId, req, res) {
     try {
       db.prepare('UPDATE checkins SET run_date = ? WHERE run_date = ? AND program_id = ?').run(d, oldRd, programId);
       db.prepare('UPDATE OR IGNORE regular_optout SET run_date = ? WHERE run_date = ? AND program_id = ?').run(d, oldRd, programId);
+      db.prepare('UPDATE signup_groups SET run_date = ? WHERE run_date = ? AND program_id = ?').run(d, oldRd, programId); // parties follow the run (Phase 6b)
       const st = db.prepare('SELECT is_open, cancelled FROM run_state WHERE run_date = ? AND program_id = ?').get(oldRd, programId);
       if (st) {
         db.prepare("INSERT INTO run_state (run_date, is_open, cancelled, program_id) VALUES (?,?,?,?) ON CONFLICT(run_date, program_id) DO UPDATE SET is_open = excluded.is_open, cancelled = excluded.cancelled").run(d, st.is_open, st.cancelled, programId);
@@ -4758,6 +4812,7 @@ function runGetPage(programId, req, res) {
     runBase: base, programId, theme: cfg.theme, sport: prog.displayName, sportEmoji: prog.emoji, dayName: DAY_NAMES[cfg.dow], pollKey: prog.key,
     teamsCfg: teamsFeature(programId), teamRows: teamsFeature(programId) ? runTeamsFor(programId, rd) : [], teamsOpen: teamsFeature(programId) ? teamsOpen(programId, rd) : false,
     penaltyState: g.canOperate ? penaltyStateFor(programId) : {},   // operator-only: {email: {strikes, until}} for the roster badge + forgive button
+    partyData: partyPanelFor(programId, rd, req.userEmail),         // queue-with-friends panel (null unless config.features.groupQueue)
   }));
 }
 
@@ -4955,13 +5010,186 @@ const PROGRAM_DEFS = {
       autoRenew: { from: 'members' },
       autoRenewPenalty: { strikes: 3, pauseWeeks: 2 },   // ENABLED: 3 consecutive no-shows (auto-seated, never confirmed) → auto-renew pauses 2 weeks. Tunable.
       mentionTag: 'vbmention', chatSeqKey: 'vb_chat_seq',
-      features: { teams: { count: 3, size: 7, opensAt: 'lock', selfServe: true }, groupQueue: false },  // 3×7 (config, not hardcoded)
+      features: { teams: { count: 3, size: 7, opensAt: 'lock', selfServe: true }, groupQueue: { maxSize: 4 } },  // 3×7 teams; queue-with-friends parties up to 4 (Phase 6b)
     },
     unread: genericUnread(3),
     hubCard: genericHubCard(3),
     tick: genericTick(3),
   },
 };
+// ---------- QUEUE-WITH-FRIENDS (Phase 6b: a party seats atomically) ----------
+// A party = buddies who queue for ONE run together and land together — packParties keeps them
+// unsplit at partition time (floor-together or wait-together, never 2-on/1-off). Gated by
+// config.features.groupQueue (volleyball only): every route below no-ops otherwise, so with the
+// flag off no signup_group rows are written and every checkins.group_id stays NULL → seating is
+// byte-identical to today. Invitees must be accepted FRIENDS and a blocked pair is never allowed
+// into one party (the block invariant, enforced HERE at the mutation boundary; the seating code
+// trusts it). group_id is set ONLY via the explicit party check-in (never a solo join), so a party
+// never grows under seated members — it lands together in one action or waits together.
+const stmtPartyByLeader = db.prepare('SELECT * FROM signup_groups WHERE program_id=? AND run_date=? AND leader_email=?');
+const stmtPartyById     = db.prepare('SELECT * FROM signup_groups WHERE id=?');
+// The party `email` belongs to for this run (leads it, or is an invited/joined member).
+function myParty(programId, rd, email) {
+  email = lc(email);
+  return db.prepare(`SELECT g.* FROM signup_groups g WHERE g.program_id=? AND g.run_date=?
+    AND (g.leader_email=? OR EXISTS (SELECT 1 FROM signup_group_members m
+      WHERE m.group_id=g.id AND m.email=? AND m.status IN ('invited','joined'))) LIMIT 1`)
+    .get(programId, rd, email, email);
+}
+function partyJoinedEmails(groupId) { // leader (implicitly in) + accepted members
+  const g = stmtPartyById.get(groupId); if (!g) return [];
+  const m = db.prepare("SELECT email FROM signup_group_members WHERE group_id=? AND status='joined'").all(groupId).map(r => r.email);
+  return [lc(g.leader_email), ...m];
+}
+function partyAllEmails(groupId) { // leader + everyone still in play (for block checks + size cap)
+  const g = stmtPartyById.get(groupId); if (!g) return [];
+  const m = db.prepare("SELECT email FROM signup_group_members WHERE group_id=? AND status IN ('invited','joined')").all(groupId).map(r => r.email);
+  return [lc(g.leader_email), ...m];
+}
+// Keep checkins.group_id in lockstep with a party's JOINED membership: stamp joined members who
+// have a checkin, clear anyone no longer joined. Called after every membership change + check-in.
+function resyncPartyGroupIds(groupId) {
+  const g = stmtPartyById.get(groupId); if (!g) return;
+  const joined = partyJoinedEmails(groupId);
+  if (joined.length) {
+    const ph = joined.map(() => '?').join(',');
+    db.prepare(`UPDATE checkins SET group_id=? WHERE program_id=? AND run_date=? AND email IN (${ph})`).run(groupId, g.program_id, g.run_date, ...joined);
+    db.prepare(`UPDATE checkins SET group_id=NULL WHERE group_id=? AND email NOT IN (${ph})`).run(groupId, ...joined);
+  } else {
+    db.prepare('UPDATE checkins SET group_id=NULL WHERE group_id=?').run(groupId);
+  }
+}
+// Invite an accepted friend into my party for this run (I lead it; created lazily). Friends-only +
+// block invariant + party-size cap. Returns silently on any violation (swap re-renders the page).
+function runPartyInvite(programId, req, res) {
+  const base = P(programId).paths.run;
+  const g = programGate(programId, req, res); if (!g || !g.a) return res.redirect(base);
+  if (!groupQueueFeature(programId)) return res.redirect(base);
+  const rd = programRunDate(programId), me = lc(req.userEmail);
+  const t = db.prepare('SELECT email, status FROM applicants WHERE id=?').get(Number(req.body.id) || 0);
+  if (!t || t.status !== 'approved' || /@guest\.local$/.test(t.email)) return res.redirect(base);
+  const them = lc(t.email);
+  if (them === me || !areFriends(me, them) || blockedPair(me, them)) return res.redirect(base);
+  let party = stmtPartyByLeader.get(programId, rd, me);
+  if (!party) {
+    const info = db.prepare('INSERT INTO signup_groups (program_id, run_date, leader_email) VALUES (?,?,?)').run(programId, rd, me);
+    party = stmtPartyById.get(info.lastInsertRowid);
+  }
+  if (partyAllEmails(party.id).some(e => e !== them && blockedPair(them, e))) return res.redirect(base); // block invariant
+  const maxSize = groupQueueFeature(programId).maxSize || 4;
+  if (partyAllEmails(party.id).length >= maxSize) return res.redirect(base + '?partyfull=1');
+  db.prepare("INSERT OR IGNORE INTO signup_group_members (group_id, email, status) VALUES (?,?,'invited')").run(party.id, them);
+  res.redirect(base);
+}
+function runPartyAccept(programId, req, res) {
+  const base = P(programId).paths.run, me = lc(req.userEmail);
+  const g = programGate(programId, req, res); if (!g) return res.redirect(base);
+  if (!groupQueueFeature(programId)) return res.redirect(base);
+  const rd = programRunDate(programId), gid = Number(req.body.group) || 0;
+  const party = stmtPartyById.get(gid);
+  if (!party || party.program_id !== programId || party.run_date !== rd) return res.redirect(base);
+  const inv = db.prepare('SELECT status FROM signup_group_members WHERE group_id=? AND email=?').get(gid, me);
+  if (!inv) return res.redirect(base);
+  if (partyAllEmails(gid).some(e => e !== me && blockedPair(me, e))) return res.redirect(base); // block invariant
+  db.prepare("UPDATE signup_group_members SET status='joined' WHERE group_id=? AND email=?").run(gid, me);
+  resyncPartyGroupIds(gid);
+  res.redirect(base);
+}
+function runPartyDecline(programId, req, res) {
+  const base = P(programId).paths.run, me = lc(req.userEmail);
+  const g = programGate(programId, req, res); if (!g) return res.redirect(base);
+  if (!groupQueueFeature(programId)) return res.redirect(base);
+  const gid = Number(req.body.group) || 0;
+  db.prepare("UPDATE signup_group_members SET status='declined' WHERE group_id=? AND email=?").run(gid, me);
+  resyncPartyGroupIds(gid);
+  res.redirect(base);
+}
+// Leave my party. Leader → disband (drop the party + clear every member's group pointer); member → drop out.
+function runPartyLeave(programId, req, res) {
+  const base = P(programId).paths.run, me = lc(req.userEmail);
+  const g = programGate(programId, req, res); if (!g) return res.redirect(base);
+  if (!groupQueueFeature(programId)) return res.redirect(base);
+  const rd = programRunDate(programId);
+  const party = myParty(programId, rd, me);
+  if (!party) return res.redirect(base);
+  if (lc(party.leader_email) === me) {
+    db.prepare('UPDATE checkins SET group_id=NULL WHERE group_id=?').run(party.id);
+    db.prepare('DELETE FROM signup_group_members WHERE group_id=?').run(party.id);
+    db.prepare('DELETE FROM signup_groups WHERE id=?').run(party.id);
+  } else {
+    db.prepare('DELETE FROM signup_group_members WHERE group_id=? AND email=?').run(party.id, me);
+    resyncPartyGroupIds(party.id);
+  }
+  res.redirect(base);
+}
+// Check the WHOLE joined party in together (atomic: all fit in the roster or none are added). The
+// partition then seats them together (packParties). Stamps group_id on new + pre-existing checkins.
+function runPartyCheckin(programId, req, res) {
+  const base = P(programId).paths.run, cfg = P(programId).config;
+  const g = programGate(programId, req, res); if (!g || !g.a) return res.redirect(base);
+  if (!groupQueueFeature(programId)) return res.redirect(base);
+  ensureWeekFor(programId);
+  const rd = programRunDate(programId);
+  if (runCancelledFor(programId, rd) || !runOpenFor(programId, rd)) return res.redirect(base);
+  const party = myParty(programId, rd, req.userEmail);
+  if (!party) return res.redirect(base);
+  if (!partyJoinedEmails(party.id).includes(lc(req.userEmail))) return res.redirect(base); // only a committed member checks the group in
+  const seatable = partyJoinedEmails(party.id).map(e => applicantByEmail(e))
+    .filter(a => a && a.status === 'approved' && a.waiver_ok && !a.suspended && !/@guest\.local$/.test(a.email));
+  const { rows } = partitionFor(programId, rd);
+  const already = new Set(rows.map(r => lc(r.email)));
+  const toAdd = seatable.filter(a => !already.has(lc(a.email)));
+  if (rows.length + toAdd.length > cfg.cap + cfg.waitlist) return res.redirect(base + '?partyfull=1'); // atomic: whole party or none
+  const ins = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, program_id, group_id) VALUES (?,?,?,?,?)');
+  for (const a of toAdd) {
+    joinProgramMembership(programId, a.email);
+    db.prepare('DELETE FROM regular_optout WHERE run_date=? AND email=? AND program_id=?').run(rd, a.email, programId);
+    ins.run(rd, a.email, a.full_name, programId, party.id);
+  }
+  resyncPartyGroupIds(party.id);
+  res.redirect(base);
+}
+
+// Party panel data for the run page (null unless groupQueue is on). Shows my party (members +
+// who's checked in), pending invites to me, and friends I can still invite. Leader-only invites.
+function partyPanelFor(programId, rd, email) {
+  if (!groupQueueFeature(programId)) return null;
+  email = lc(email);
+  const maxSize = groupQueueFeature(programId).maxSize || 4;
+  const checkedIn = new Set(db.prepare('SELECT email FROM checkins WHERE program_id=? AND run_date=?').all(programId, rd).map(r => lc(r.email)));
+  // "My party" for the panel = one I LEAD or have JOINED (a pending invite is NOT my party — it shows
+  // in the invites list so the Accept/Decline buttons render). myParty (incl. invited) is for actions.
+  const g = stmtPartyByLeader.get(programId, rd, email)
+    || db.prepare(`SELECT sg.* FROM signup_groups sg JOIN signup_group_members m ON m.group_id = sg.id
+         WHERE sg.program_id=? AND sg.run_date=? AND m.email=? AND m.status='joined' LIMIT 1`).get(programId, rd, email);
+  let party = null;
+  if (g) {
+    const isLeader = lc(g.leader_email) === email;
+    const memberRows = db.prepare("SELECT email, status FROM signup_group_members WHERE group_id=? AND status<>'declined' ORDER BY created_at").all(g.id);
+    const list = [{ email: lc(g.leader_email), status: 'leader' }, ...memberRows];
+    const dir = peopleByEmails(list.map(m => m.email));
+    party = {
+      id: g.id, isLeader, myStatus: isLeader ? 'leader' : (memberRows.find(m => m.email === email)?.status || 'none'),
+      members: list.map(m => { const p = dir.get(lc(m.email)); return { id: p?.id || 0, name: p?.full_name || m.email, status: m.status, checkedIn: checkedIn.has(lc(m.email)) }; }),
+    };
+  }
+  const invArgs = g ? [email, programId, rd, g.id] : [email, programId, rd];
+  const invRows = db.prepare(`SELECT m.group_id, sg.leader_email FROM signup_group_members m
+    JOIN signup_groups sg ON sg.id = m.group_id
+    WHERE m.email=? AND m.status='invited' AND sg.program_id=? AND sg.run_date=?${g ? ' AND sg.id<>?' : ''}`).all(...invArgs);
+  const invDir = peopleByEmails(invRows.map(r => r.leader_email));
+  const invites = invRows.map(r => ({ groupId: r.group_id, leaderName: invDir.get(lc(r.leader_email))?.full_name || r.leader_email }));
+  let invitable = [];
+  if (!g || lc(g.leader_email) === email) {   // only a (potential) leader invites
+    const inParty = new Set(party ? party.members.map(m => lc(m.email)) : [email]);
+    inParty.add(email);
+    invitable = [...peopleByEmails(friendsOf(email)).values()]
+      .filter(p => p.status === 'approved' && !/@guest\.local$/.test(p.email) && !inParty.has(lc(p.email)))
+      .map(p => ({ id: p.id, name: p.full_name })).sort((a, b) => a.name.localeCompare(b.name));
+  }
+  return { maxSize, party, invites, invitable };
+}
+
 const stmtProgActiveById = db.prepare('SELECT active FROM program WHERE id = ?');
 // Register a program's full run-route set from config (paths + the generic runXxx handlers).
 // Basketball (/checkin/*) and pickleball (/pickleball/*) keep their inline routes for now; other
@@ -4995,6 +5223,12 @@ function mountRunProgram(app, program) {
   app.post(`${b}/team/assign`, requireLogin, (req, res) => runTeamAssign(id, req, res));
   app.post(`${b}/team/fill`, requireLogin, (req, res) => runTeamFill(id, req, res));
   app.post(`${b}/penalty/clear`, requireLogin, (req, res) => runPenaltyClear(id, req, res));  // operator: forgive an auto-renew strike/pause
+  // Queue-with-friends (registered for every program; the handlers no-op unless config.features.groupQueue).
+  app.post(`${b}/party/invite`, requireLogin, (req, res) => runPartyInvite(id, req, res));
+  app.post(`${b}/party/accept`, requireLogin, (req, res) => runPartyAccept(id, req, res));
+  app.post(`${b}/party/decline`, requireLogin, (req, res) => runPartyDecline(id, req, res));
+  app.post(`${b}/party/leave`, requireLogin, (req, res) => runPartyLeave(id, req, res));
+  app.post(`${b}/party/checkin`, requireLogin, (req, res) => runPartyCheckin(id, req, res));
 }
 function buildPrograms() {
   PROGRAMS.clear();

@@ -2721,7 +2721,7 @@ export function pkJoinPage(state) { return runJoinPage(state); }
 // NOT rendered yet — volleyball (offerWindow:true) needs a follow-up increment for that.
 export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM', startLabel = '6 PM', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], offeredPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, myConfirmed = false, iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null,
   runBase = '/pickleball', programId = 2, theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒', dayName = 'Tuesday', pollKey = 'pickleball',
-  teamsCfg = null, teamRows = [], teamsOpen = false, penaltyState = {} }) {
+  teamsCfg = null, teamRows = [], teamsOpen = false, penaltyState = {}, partyData = null }) {
   const full = going >= cap, totalFull = (going + waiting) >= (cap + waitlistCap);
   const rmForm = (p) => `<form method="POST" action="${runBase}/remove" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn leave sm" type="submit">Remove</button></form>`;
   // Tappable name → profile popup (reuses the shared pvOpen + /u/:id/card); guests (no
@@ -2833,6 +2833,31 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
     const mine = myTeam ? `<form method="POST" action="${runBase}/team/leave" style="margin:10px 0 0"><button class="btn ghost sm" type="submit">Leave my team</button></form>` : '';
     return `<div class="infosec teamspanel" style="margin-top:20px"><div class="card"><div class="clab">Teams</div>${teamsOpen ? '' : '<p class="tally-note" style="color:var(--muted);margin:6px 0 10px">Teams open once the roster locks.</p>'}<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">${cols.join('')}</div>${mine}${ops}</div></div>`;
   })();
+  // Queue-with-friends panel (Phase 6b) — renders only when partyData is present (config.features.groupQueue,
+  // volleyball). Empty string otherwise → byte-identical for programs without it. Forms carry .swapform so
+  // invite/accept/decline/check-in/leave swap in place. A party seats atomically (server side).
+  const partyPanel = !partyData ? '' : (() => {
+    const pd = partyData;
+    const f = (action, fields, label, cls) => `<form class="swapform" method="POST" action="${runBase}/party/${action}" style="margin:0">${Object.entries(fields).map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(String(v))}">`).join('')}<button class="btn ${cls}" type="submit">${label}</button></form>`;
+    const picker = (label) => pd.invitable.length
+      ? `<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--muted)">${label}</summary><div style="margin-top:6px">${pd.invitable.map(fr => `<div style="display:flex;align-items:center;gap:8px;padding:3px 0"><span style="flex:1">${esc(fr.name)}</span>${f('invite', { id: fr.id }, '＋ Invite', 'ghost sm')}</div>`).join('')}</div></details>`
+      : `<p class="tally-note" style="color:var(--muted);margin:8px 0 0">Add friends on the Friends tab, then invite them here to queue together.</p>`;
+    const invites = pd.invites.map(iv => `<div style="display:flex;align-items:center;gap:8px;padding:6px 0">
+        <span style="flex:1"><b>${esc(iv.leaderName)}</b> invited you to their group</span>${f('accept', { group: iv.groupId }, '✓ Join', 'primary sm')}${f('decline', { group: iv.groupId }, 'Decline', 'ghost sm')}</div>`).join('');
+    let mine;
+    if (pd.party) {
+      const p = pd.party;
+      const rows = p.members.map(m => `<div style="display:flex;align-items:center;gap:6px;padding:3px 0">
+          <span style="flex:1">${esc(m.name)}${m.status === 'leader' ? ' <span class="tag">Leader</span>' : ''}${m.status === 'invited' ? ' <span class="tag" style="opacity:.55">Invited</span>' : ''}</span>${m.checkedIn ? '<span class="tag" style="background:#2f7169;color:#fff">✓ In</span>' : ''}</div>`).join('');
+      const canInvite = p.isLeader && p.members.length < pd.maxSize;
+      const checkinBtn = isOpen && !cancelled ? f('checkin', {}, '✓ Check in my group', 'primary') : '';
+      const leaveBtn = f('leave', {}, p.isLeader ? 'Disband group' : 'Leave group', 'ghost sm');
+      mine = `<div class="clab">Your group <span style="color:var(--muted);font-weight:600">${p.members.length}/${pd.maxSize}</span></div>${rows}${canInvite ? picker('＋ Invite a friend') : ''}<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">${checkinBtn}${leaveBtn}</div>`;
+    } else {
+      mine = `<div class="clab">Queue with friends</div><p class="tally-note" style="color:var(--muted);margin:6px 0">Invite friends to check in together — your group lands on the floor, or waits, as one.</p>${picker('＋ Invite a friend to start a group')}`;
+    }
+    return `<div class="infosec teamspanel" style="margin-top:20px"><div class="card">${invites ? invites + '<div class="rule" style="margin:8px 0"></div>' : ''}${mine}</div></div>`;
+  })();
   return HEAD(`${sport} — The Bridge`, `has-tabs ${theme}`) + header(`<b>${sport.toUpperCase()}</b>${esc(email)}`, wdayShort(runDate), ann, hours) + `
     ${backToRuns}
     <div class="rule"></div>
@@ -2855,7 +2880,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
     ${myState === 'in' && !cancelled ? (myConfirmed
       ? `<div class="notice good" style="margin-top:10px">✓ <b>You're confirmed</b> for this run — see you there!</div>`
       : `<form method="POST" action="${runBase}/confirm" class="swapform" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming</button></form>`) : ''}
-    ${myState === 'waitlist' && !cancelled ? `<div class="notice warn" style="margin-top:10px">You're <b>#${myWaitPos}</b> on the waitlist. If a spot opens you'll get a notification and move onto the floor — no need to re-check.</div>` : ''}${teamsPanel}
+    ${myState === 'waitlist' && !cancelled ? `<div class="notice warn" style="margin-top:10px">You're <b>#${myWaitPos}</b> on the waitlist. If a spot opens you'll get a notification and move onto the floor — no need to re-check.</div>` : ''}${partyPanel}${teamsPanel}
     ${cancelled ? '' : `<div style="margin-top:12px"><a href="${runBase}/run.ics" style="font-size:13px;color:var(--muted)">📅 Add this run to your calendar</a></div>`}
     ${qrBlock}
     <div style="height:28px"></div>
