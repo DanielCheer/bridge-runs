@@ -3781,8 +3781,9 @@ function pkProgramActive() { return programActive(2); }
 // check-in reopens right after the run ends (PK_END_H), the roster locks at start
 // (PK_START_H), and the floor gets a confirm ping the night before (PK_PING_H, day before).
 const PK_DOW = 2, PK_START_H = 18, PK_END_H = 20, PK_PING_H = 20, PK_PING_DOW_OFFSET = 1, PK_LOCK = '17:30';
-// Season opener (YYYY-MM-DD) or null — same gate shape as basketball's seasonStart().
-function pkSeasonStart() { const s = getSetting('pk_season_start'); return (s && /^\d{4}-\d{2}-\d{2}$/.test(s)) ? s : null; }
+// Season opener (YYYY-MM-DD) or null — program-generic; the key comes from config.keys.seasonStart.
+function programSeasonStart(programId) { const s = getSetting(P(programId).config.keys.seasonStart); return (s && /^\d{4}-\d{2}-\d{2}$/.test(s)) ? s : null; }
+function pkSeasonStart() { return programSeasonStart(2); }
 // "6–8 PM" / "6 PM" — derived from the schedule constants, never written as a literal, so the
 // masthead, the runs hub and the banner caption can't drift from the real hours.
 const pkTimeRange = () => fmtClockRange(`${PK_START_H}:00`, `${PK_END_H}:00`);
@@ -3794,27 +3795,32 @@ function pkNearestDow(dateStr, dow) {
   r.setDate(r.getDate() + (fwd <= 3 ? fwd : fwd - 7));
   return ymdLocal(r);
 }
-// The next standing Tuesday, local. Rolls to next week once the current run has ENDED
-// (>= PK_END_H on run day) so check-in reopens the same night. Season-gated: pre-season it
-// resolves to the first Tuesday on/after the opener (no phantom off-season runs).
-function pkDefaultDate() {
+// The next standing run day (config.dow), local. Rolls to next week once the current run has ENDED
+// (>= config.endHour on run day) so check-in reopens the same night. Season-gated: pre-season it
+// resolves to the first standing day on/after the opener (no phantom off-season runs). Program-
+// generic — the standing day, end hour, base-skip key and season key all come from config.
+function programDefaultDate(programId) {
+  const cfg = P(programId).config, dow = cfg.dow;
   const now = new Date();
-  let add = (PK_DOW - now.getDay() + 7) % 7;
-  if (add === 0 && now.getHours() >= PK_END_H) add = 7;   // run's over tonight → next week
+  let add = (dow - now.getDay() + 7) % 7;
+  if (add === 0 && now.getHours() >= cfg.endHour) add = 7;   // run's over tonight → next week
   const r = new Date(now); r.setDate(r.getDate() + add);
   let d = ymdLocal(r);
-  // Skip a standing Tuesday whose run was MOVED to another day this week (pk_run_base) — else
-  // once the moved run passes, this would resurrect that Tuesday as a phantom run (open+ping).
-  const skip = getSetting('pk_run_base');
+  // Skip a standing day whose run was MOVED to another day this week (runBase key) — else once the
+  // moved run passes, this would resurrect that day as a phantom run (open+ping).
+  const skip = getSetting(cfg.keys.runBase);
   if (skip && d === skip) { const s = new Date(d + 'T12:00:00'); s.setDate(s.getDate() + 7); d = ymdLocal(s); }
-  const opener = pkSeasonStart();
+  const opener = programSeasonStart(programId);
   if (opener && d < opener) {   // pre-season → first standing day on/after the opener
-    const o = new Date(opener + 'T12:00:00'); o.setDate(o.getDate() + ((PK_DOW - o.getDay() + 7) % 7));
+    const o = new Date(opener + 'T12:00:00'); o.setDate(o.getDate() + ((dow - o.getDay() + 7) % 7));
     d = ymdLocal(o);
   }
   return d;
 }
-function pkRunDate() { return getSetting('pk_run_date') || pkDefaultDate(); } // manual per-week override; else the weekly standing Tuesday
+function pkDefaultDate() { return programDefaultDate(2); }
+// Manual per-week override (config.keys.runDate) else the weekly standing day.
+function programRunDate(programId) { return getSetting(P(programId).config.keys.runDate) || programDefaultDate(programId); }
+function pkRunDate() { return programRunDate(2); }
 function pkIsOpen(rd) { const r = stmtPkIsOpen.get(rd); return !!(r && r.is_open); }
 function pkIsCancelled(rd) { const r = stmtPkIsCancelled.get(rd); return !!(r && r.cancelled); }
 function pkSetState(rd, field, val) { db.prepare(`INSERT INTO run_state (run_date, ${field}, program_id) VALUES (?, ?, 2) ON CONFLICT(run_date, program_id) DO UPDATE SET ${field} = excluded.${field}`).run(rd, val ? 1 : 0); }
@@ -4367,6 +4373,7 @@ const PROGRAM_DEFS = {
       cap: PK_CAP, waitlist: PK_WAIT, prereg: 0,
       dow: PK_DOW, startHour: PK_START_H, endHour: PK_END_H,         // Tue 6–8 PM
       pingHour: PK_PING_H, pingDowOffset: PK_PING_DOW_OFFSET, lockTime: PK_LOCK,
+      keys: { runDate: 'pk_run_date', runBase: 'pk_run_base', seasonStart: 'pk_season_start' },  // app_settings keys for this program's dates
       theme: 'pk', access: 'opt-in', approval: 'invite',
       tiers: ['team', 'host'], offerWindow: false,
       autoRenew: { from: 'members' },   // any opt-in member (program_membership.auto_renew) renews; team seated first, then non-team fill
