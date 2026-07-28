@@ -662,7 +662,7 @@ async function writeChatVideo(buf, msgId, ext) {
 // ---- Check-in banner (host-uploaded, cropped in-app) ----------------------
 // The 2:1 hero photo on the check-in page. A host uploads a photo and frames it in the
 // browser (pan/zoom in a 2:1 window); the client sends the source-pixel crop rect and we
-// sharp-crop to the final 2320×1160. BANNER_PATH is env-overridable (tests point elsewhere).
+// sharp-crop to the final 2320×1102 (40:19). BANNER_PATH is env-overridable (tests point elsewhere).
 const BANNER_PATH = process.env.BANNER_PATH || path.join(__dirname, 'public', 'gym.jpg');
 const uploadBanner = multer({ storage: multer.memoryStorage(), limits: { fileSize: 14 * 1024 * 1024, files: 1 } }).single('photo');
 // Cache-bust token = the banner file's mtime, so an upload busts the <img> the moment it's
@@ -3341,7 +3341,7 @@ app.post('/admin/settings', requireAdmin, (req, res) => {
 });
 
 // Check-in banner tool (operators). GET renders the pick + pan/zoom cropper; POST takes the
-// photo + the source-pixel crop rect the browser computed and writes the final 2320×1160 JPEG.
+// photo + the source-pixel crop rect the browser computed and writes the final 2320×1102 JPEG.
 app.get('/admin/banner', requireApprover, (req, res) => {
   res.send(bannerPage({ err: req.query.err || '', bannerVer: bannerVersion() }));
 });
@@ -3364,7 +3364,7 @@ app.post('/admin/banner', requireApprover, (req, res) => {
       width = Math.max(1, Math.min(width, W - left)); height = Math.max(1, Math.min(height, H - top));
       const out = await sharp(file.buffer, { failOn: 'error' }).rotate()
         .extract({ left, top, width, height })
-        .resize(2320, 1160, { fit: 'fill' }) // 2:1 banner — matches .gymbanner/.cropframe CSS
+        .resize(2320, 1102, { fit: 'fill' }) // 40:19 banner — matches .gymbanner/.cropframe CSS
         .jpeg({ quality: 84, mozjpeg: true }).toBuffer();
       await fs.promises.writeFile(BANNER_PATH, out); // async write off the event loop
       audit(req.userEmail, req.actorRole, 'banner:update', `${width}x${height}`);
@@ -3396,7 +3396,7 @@ app.post('/pickleball/banner', requireAdmin, (req, res) => {
       width = Math.max(1, Math.min(width, W - left)); height = Math.max(1, Math.min(height, H - top));
       const out = await sharp(file.buffer, { failOn: 'error' }).rotate()
         .extract({ left, top, width, height })
-        .resize(2320, 1160, { fit: 'fill' })
+        .resize(2320, 1102, { fit: 'fill' })
         .jpeg({ quality: 84, mozjpeg: true }).toBuffer();
       await fs.promises.writeFile(PK_BANNER_PATH, out);
       audit(req.userEmail, req.actorRole, 'pk:banner:update', `${width}x${height}`);
@@ -4808,7 +4808,7 @@ function runGetPage(programId, req, res) {
     season: opener || '', seasonWeekday: opener ? runWeekday(opener) : '', seasonLabel: opener ? runLabelFor(opener) : '',
     preseason: pre, today: ymdLocal(), seasonMax: shiftYmd(ymdLocal(), 365),
     pkMsg: req.query.pkset ? String(req.query.pkset) : (req.query.pkerr || ''),
-    dmUnread: unreadCount(req.userEmail), groupUnread: chatUnreadFor(programId, req.userEmail), groupMention: chatMentionUnreadFor(programId, req.userEmail, g.a ? g.a.id : 0), ann: null,
+    dmUnread: unreadCount(req.userEmail), groupUnread: chatUnreadFor(programId, req.userEmail), groupMention: chatMentionUnreadFor(programId, req.userEmail, g.a ? g.a.id : 0), ann: annPanel(req.userEmail),
     runBase: base, programId, theme: cfg.theme, sport: prog.displayName, sportEmoji: prog.emoji, dayName: DAY_NAMES[cfg.dow], pollKey: prog.key,
     teamsCfg: teamsFeature(programId), teamRows: teamsFeature(programId) ? runTeamsFor(programId, rd) : [], teamsOpen: teamsFeature(programId) ? teamsOpen(programId, rd) : false,
     penaltyState: g.canOperate ? penaltyStateFor(programId) : {},   // operator-only: {email: {strikes, until}} for the roster badge + forgive button

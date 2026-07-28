@@ -80,10 +80,10 @@ html.splashed #splash{display:none}
 const SPLASH_BODY = `<div id="splash" aria-hidden="true">
   <div class="bw">
     <svg class="lg" viewBox="0 0 40 40" fill="none" aria-hidden="true"><circle cx="20" cy="20" r="18" fill="#22615A"/><path d="M20 2v36M2 20h36M7 7c7 5 7 21 0 26M33 7c-7 5-7 21 0 26" stroke="#F8F5EF" stroke-width="1.4" opacity=".9"/></svg>
-    <div class="tt"><b>THE BRIDGE</b><span class="sb">Advanced Basketball Run</span><div class="rl"></div></div>
+    <div class="tt"><b>THE BRIDGE</b><span class="sb">YA Sports</span><div class="rl"></div></div>
   </div>
   <div class="sp"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-  <div class="ft">Markham · 8:30–10:30 PM</div>
+  <div class="ft">5440 16th Ave · Markham</div>
 </div>
 <script>(function(){var s=document.getElementById('splash');if(!s)return;if(document.documentElement.classList.contains('splashed'))return;var done=function(){s.classList.add('hide');try{sessionStorage.setItem('splashed','1');}catch(e){}setTimeout(function(){if(s&&s.parentNode)s.parentNode.removeChild(s);},600);};var r=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches;setTimeout(done,r?500:1500);window.addEventListener('load',function(){setTimeout(done,900);});})();</script>`;
 
@@ -497,7 +497,7 @@ ${VSTEPS_CSS}
 const WALL_BODY = `<div id="installwall" role="dialog" aria-modal="true" aria-label="Install the app">
   <div class="iw-in">
     <div style="text-align:center"><img class="iw-icon" src="/icon-192.png" alt=""></div>
-    <div class="iw-ey">The Bridge Adv Runs</div>
+    <div class="iw-ey">The Bridge</div>
     <h2>Install the app to continue</h2>
     <p class="iw-lead">Bridge Runs lives on your Home Screen — for notifications and the full app. About 20 seconds:</p>
     <div id="iw-safari" class="iw-safari" hidden>📍 You're not in <b>Safari</b>. On iPhone the app installs from Safari only — tap <b>•••</b> or your browser's menu, choose <b>Open in Safari</b>, then follow the steps below.</div>
@@ -543,7 +543,7 @@ ${wall ? WALL_HEAD : ''}
 <link rel="stylesheet" href="/styles.css?v=${CSS_VER}">
 </head><body class="${bodyClass}">${SPLASH_BODY}${wall ? WALL_BODY : ''}<div class="wrap">`;
 
-const FOOTER_LINKS = `<div class="foot">The Bridge Adv Runs · Markham · 8:30–10:30PM</div><div class="foot legalfoot"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/conduct">Conduct</a></div>`;
+const FOOTER_LINKS = `<div class="foot legalfoot"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/conduct">Conduct</a></div>`;
 const FOOT = `${FOOTER_LINKS}</div></body></html>`;
 // Tab-bar pages: render the fixed bottom tab bar as the LAST child of `.wrap`, with the footer
 // text BEFORE it. It must stay inside `.wrap` (the client router swaps `.wrap` — the active-tab
@@ -568,7 +568,7 @@ const BALL = `<svg class="ball" viewBox="0 0 40 40" fill="none" aria-hidden="tru
 const header = (right = '', weekdayShort = '', ann = null, hours = '') => { // hours passed only where there's a run context; blank on other pages
   const { btn, sheet } = annBell(ann);
   return `<div class="mast">
-  <div class="bl">${BALL}<div class="wm"><b>THE BRIDGE</b><span>Adv Runs</span></div></div>
+  <div class="bl">${BALL}<div class="wm"><b>THE BRIDGE</b></div></div>
   <div class="mastr">${btn}<div class="when">${weekdayShort ? `<b>${esc(weekdayShort)}</b>` : ''}<span>${esc(hours)}</span></div></div>
 </div>${sheet}`;
 };
@@ -1611,7 +1611,7 @@ const GAME_FORMAT_CARD = `
 // ---------- INTAKE FORM (public application → council votes) ----------
 export function intakePage({ submitted = false, error = '', alreadyApproved = false } = {}) {
   if (alreadyApproved) {
-    return HEAD('Already approved — Adv Runs', '', { wall: false }) + header() + `
+    return HEAD('Already approved — The Bridge', '', { wall: false }) + header() + `
       <div class="rule"></div>
       <span class="eyebrow">You're already in</span>
       <h1>You're already approved</h1>
@@ -1620,7 +1620,7 @@ export function intakePage({ submitted = false, error = '', alreadyApproved = fa
     ` + FOOT;
   }
   if (submitted) {
-    return HEAD('Applied — Adv Runs', '', { wall: false }) + header() + `
+    return HEAD('Applied — The Bridge', '', { wall: false }) + header() + `
       <div class="rule"></div>
       <span class="eyebrow">You're in the queue</span>
       <h1>Application received</h1>
@@ -1630,7 +1630,7 @@ export function intakePage({ submitted = false, error = '', alreadyApproved = fa
       <a class="btn ghost" href="/">Back</a>
     ` + FOOT;
   }
-  return HEAD('Apply — The Bridge Adv Runs', '', { wall: false }) + header() + `
+  return HEAD('Apply — The Bridge', '', { wall: false }) + header() + `
     <div class="rule"></div>
     <span class="eyebrow">Faith · Ball · Community</span>
     <h1>Faith. Ball. Community.</h1>
@@ -1707,7 +1707,7 @@ export function loginPage({ sent = false, email = '', next = '', devLink = '', d
       <a class="btn ghost" href="/checkin">Back</a>
     ` + FOOT;
   }
-  return HEAD('Sign in — Adv Runs', '', { wall: false }) + header() + `
+  return HEAD('Sign in — The Bridge', '', { wall: false }) + header() + `
     <div class="rule"></div>
     <span class="eyebrow">Approved players</span>
     <h1>Sign in to check in</h1>
@@ -1744,7 +1744,7 @@ export function invitePage({ invalid = false, used = false, checkEmail = false, 
   if (checkEmail) {
     // Invite claimed, but the submitted email wasn't proven (no admin pre-fill match),
     // so we didn't open a session — we emailed a code + link to verify it.
-    return HEAD('Check your email — Adv Runs', '', { wall: false }) + header() + `
+    return HEAD('Check your email — The Bridge', '', { wall: false }) + header() + `
       <div class="rule"></div>
       <span class="eyebrow">Almost there</span>
       <h1>Check your email</h1>
@@ -1758,7 +1758,7 @@ export function invitePage({ invalid = false, used = false, checkEmail = false, 
     ` + FOOT;
   }
   if (invalid) {
-    return HEAD('Invite not found — Adv Runs', '', { wall: false }) + header() + `
+    return HEAD('Invite not found — The Bridge', '', { wall: false }) + header() + `
       <div class="rule"></div>
       <h1>That link isn't valid</h1>
       <p class="lead">This invite link doesn't exist. Double check you copied the whole link, or ask whoever sent it for a fresh one.</p>
@@ -1766,14 +1766,14 @@ export function invitePage({ invalid = false, used = false, checkEmail = false, 
     ` + FOOT;
   }
   if (used) {
-    return HEAD('Invite already used — Adv Runs', '', { wall: false }) + header() + `
+    return HEAD('Invite already used — The Bridge', '', { wall: false }) + header() + `
       <div class="rule"></div>
       <h1>This invite's already been used</h1>
       <p class="lead">Each invite link works once. If that was you, just sign in below. If it wasn't, ask an organizer for a fresh link.</p>
       <a class="btn" href="/login">Sign in</a>
     ` + FOOT;
   }
-  return HEAD("You're invited — Adv Runs", '', { wall: false }) + header() + `
+  return HEAD("You're invited — The Bridge", '', { wall: false }) + header() + `
     <div class="rule"></div>
     <span class="eyebrow">You're pre-approved</span>
     <h1>Finish setting up your spot</h1>
@@ -1889,7 +1889,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
     const pill = status === 'rejected' ? '<span class="pill rejected">Not this season</span>'
       : status === 'pending' ? '<span class="pill pending">Under review</span>'
       : '<span class="pill pending">Not on the list</span>';
-    return HEAD('Check-in — Adv Runs') + header() + `
+    return HEAD('Check-in — The Bridge') + header() + `
       <div class="rule"></div>
       <h1>Not cleared yet</h1>
       <p class="lead">You're signed in as <b>${esc(email)}</b>. ${pill}</p>
@@ -2137,7 +2137,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
       </div>
     </div>` : '';
 
-  return HEAD(`${wdayFull(runDate)} Check-in — Adv Runs`, 'has-tabs') + header(`<b>CHECK-IN</b>${esc(email)}`, wdayShort(runDate), ann, hours) + WELCOME_MODAL + `
+  return HEAD(`${wdayFull(runDate)} Check-in — The Bridge`, 'has-tabs') + header(`<b>CHECK-IN</b>${esc(email)}`, wdayShort(runDate), ann, hours) + WELCOME_MODAL + `
     ${backToRuns}
     ${opsNav('checkin', { isAdmin: viewerIsAdmin, isTeam: iAmTeam })}
     ${canOperate ? `<div id="tgnudge" class="notice" style="margin-top:10px;display:flex;align-items:center;gap:10px;justify-content:space-between">
@@ -2290,7 +2290,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
 // ok=true → they're in for Friday; ok=false → the offer expired / was already claimed.
 export function claimResultPage({ ok = false, runLabel = '', runDate = '', startLabel = '8:30 PM' } = {}) {
   if (ok) {
-    return HEAD("You're in — Adv Runs", '', { wall: false }) + header('', wdayShort(runDate)) + `
+    return HEAD("You're in — The Bridge", '', { wall: false }) + header('', wdayShort(runDate)) + `
       <div class="rule"></div>
       <span class="eyebrow">Spot claimed</span>
       <h1>You're in for ${wdayFull(runDate)} ✓</h1>
@@ -2298,7 +2298,7 @@ export function claimResultPage({ ok = false, runLabel = '', runDate = '', start
       <a class="btn" href="/checkin">Go to check-in →</a>
     ` + FOOT;
   }
-  return HEAD('Offer expired — Adv Runs', '', { wall: false }) + header('', wdayShort(runDate)) + `
+  return HEAD('Offer expired — The Bridge', '', { wall: false }) + header('', wdayShort(runDate)) + `
     <div class="rule"></div>
     <span class="eyebrow">Too late</span>
     <h1>This offer has passed</h1>
@@ -2342,7 +2342,7 @@ export function chatPage({ me, chat, runDate = '', hours = '8:30–10:30 PM', dm
         </div>
       </div>
     </div>`;
-  return HEAD('Run Chat — Adv Runs', 'has-chat') + header('', wdayShort(runDate), ann, hours) + WELCOME_MODAL + `
+  return HEAD('Run Chat — The Bridge', 'has-chat') + header('', wdayShort(runDate), ann, hours) + WELCOME_MODAL + `
     <div class="rule"></div>
     <div class="chatsec chatsec-top">
       <div class="chatsec-h chatsec-tap" role="button" tabindex="0" onclick="memOpen()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();memOpen()}" aria-label="View run members">
@@ -2461,7 +2461,7 @@ export function profilePage({ p, stats, isSelf = false, canContact = false, rel 
     const followCtl = rel === 'blocked' ? '' : followBtn(p.id, following, '/u/' + p.id);
     frControls = `<div class="fract" style="margin-top:12px;gap:8px">${friendBtn(p.id, rel, '/u/' + p.id)}${followCtl}${blockCtl}</div>`;
   }
-  return HEAD('Profile — Adv Runs', 'has-tabs') + header('', wdayShort(runDate), ann, hours) + WELCOME_MODAL + `
+  return HEAD('Profile — The Bridge', 'has-tabs') + header('', wdayShort(runDate), ann, hours) + WELCOME_MODAL + `
     <div class="rule"></div>
     <a class="pback" href="${esc(back)}">‹ Back</a>
     <div class="phead">
@@ -2568,7 +2568,7 @@ export function friendsPage({ q = '', results = [], friends = [], incoming = [],
     ? `<details class="frdetails"><summary>Blocked (${blocked.length})</summary><div class="mlist">${blocked.map(p => personRow(p, friendBtn(p.id, 'blocked', BACK))).join('')}</div></details>`
     : '';
 
-  return HEAD('Friends — Adv Runs', 'has-tabs') + header('', '', ann, '') + `
+  return HEAD('Friends — The Bridge', 'has-tabs') + header('', '', ann, '') + `
     <div class="rule"></div>
     <div class="frwrap">
       <div class="frtitle"><h1>Friends</h1></div>
@@ -3048,7 +3048,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
     : photoMsg === 'removed' ? '<div class="notice good">Photo removed</div>'
     : photoMsg.startsWith('err:') ? `<div class="notice bad">${esc(PHOTO_ERRS[photoMsg.slice(4)] || 'Photo upload failed — try again.')}</div>`
     : '';
-  return HEAD('Your profile — Adv Runs', 'has-tabs') + WELCOME_MODAL + `
+  return HEAD('Your profile — The Bridge', 'has-tabs') + WELCOME_MODAL + `
     <form id="photoform" method="POST" action="/profile/photo" enctype="multipart/form-data" style="display:none">
       <input id="photoinput" type="file" accept="image/*" name="photo" onchange="if(this.files&&this.files[0]){this.form.submit()}">
     </form>
@@ -3431,7 +3431,7 @@ export function threadPage({ me, p, msgs = [], reactions = new Map(), parents = 
     ? composerForm('/messages/' + p.id, 'Message')
     : `<div class="composer disabled">You can no longer message here.</div>`;
 
-  return HEAD('Messages — Adv Runs', 'thread-page') + WELCOME_MODAL + `
+  return HEAD('Messages — The Bridge', 'thread-page') + WELCOME_MODAL + `
     <div class="pbar">
       <a class="pbback" href="/profile" aria-label="Back">${IC_BACK}</a>
       <a class="pbwho" href="/u/${p.id}">
@@ -3841,7 +3841,7 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–
       ).join('')}</div>
     </div>` : '';
 
-  return HEAD('Council — Adv Runs', 'has-tabs') + header(`<b>COUNCIL</b>${viewerIsAdmin ? 'admin' : 'team'}`, wdayShort(runDate), ann, hours) + `
+  return HEAD('Council — The Bridge', 'has-tabs') + header(`<b>COUNCIL</b>${viewerIsAdmin ? 'admin' : 'team'}`, wdayShort(runDate), ann, hours) + `
     ${opsNav('admin', { isAdmin: viewerIsAdmin, isTeam: viewerIsTeam })}${firstRunTour}
     <div class="rule"></div>
     <span class="eyebrow">${applicants.length} ${filter === 'all' ? 'applicant' : filter}${applicants.length===1?'':'s'}</span>
@@ -3884,7 +3884,7 @@ export function statusPage({ email, status }) {
        <a class="btn" href="/">Go to the application</a>
        <div style="height:8px"></div>
        <a class="btn ghost" href="/logout">Sign out &amp; try another email</a>`;
-  return HEAD('Your status — Adv Runs', '', { wall: false }) + header('<b>STATUS</b>' + esc(email)) + `
+  return HEAD('Your status — The Bridge', '', { wall: false }) + header('<b>STATUS</b>' + esc(email)) + `
     <div class="rule"></div>
     ${body}
     ${homeScreenCard}
@@ -3898,7 +3898,7 @@ export function statusPage({ email, status }) {
 // no-JS path (the button below posts). With JS, the delegated handler in HEAD
 // intercepts the "Sign out" link and posts directly, so this page is rarely seen.
 export function logoutPage() {
-  return HEAD('Sign out — Adv Runs', '', { wall: false }) + header('<b>SIGN OUT</b>') + `
+  return HEAD('Sign out — The Bridge', '', { wall: false }) + header('<b>SIGN OUT</b>') + `
     <div class="rule"></div>
     <span class="eyebrow">Passwordless</span>
     <h1>Sign out?</h1>
@@ -3917,7 +3917,7 @@ export function logoutPage() {
 export function confirmActionPage({ title, heading, sub, action, fields = {}, button = 'Continue' }) {
   const hidden = Object.entries(fields)
     .map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(String(v == null ? '' : v))}">`).join('');
-  return HEAD(`${title} — Adv Runs`, '', { wall: false }) + header(`<b>${esc(title.toUpperCase())}</b>`) + `
+  return HEAD(`${title} — The Bridge`, '', { wall: false }) + header(`<b>${esc(title.toUpperCase())}</b>`) + `
     <div class="rule"></div>
     <span class="eyebrow">One tap</span>
     <h1>${esc(heading)}</h1>
@@ -3957,7 +3957,7 @@ export function mdToHtml(md) {
 
 // Legal / policy page in the app shell (privacy, terms, conduct). Public, no install wall.
 export function legalPage(title, html) {
-  return HEAD(`${title} — Adv Runs`, '', { wall: false }) + header(`<b>${esc(title.toUpperCase())}</b>`) + `
+  return HEAD(`${title} — The Bridge`, '', { wall: false }) + header(`<b>${esc(title.toUpperCase())}</b>`) + `
     <div class="rule"></div>
     <div class="legal">${html}</div>
     <div class="foot" style="margin-top:24px"><a href="/">Apply</a> · <a href="/login">Sign in</a></div>
@@ -3967,7 +3967,7 @@ export function legalPage(title, html) {
 // ---------- CHECK-IN BANNER TOOL (operators) ----------
 // Pick a photo → pan/zoom it inside a fixed 3:1 window → save. The window IS the banner
 // crop; the client computes the source-pixel rect and posts it with the file (server crops
-// to 2320×774). Native multipart POST — the submit handler just fills the hidden crop inputs.
+// to 2320×1102, 40:19). Native multipart POST — the submit handler just fills the hidden crop inputs.
 const bannerCropScript = () => `<script>
 (function(){
   var file=document.getElementById('bfile'), stage=document.getElementById('bstage'),
@@ -4029,7 +4029,7 @@ export function bannerPage({ err = '', bannerVer = '0', action = '/admin/banner'
     : err === 'type' ? 'That file isn’t a supported image (JPG, PNG, or WebP).'
     : err === 'crop' ? 'Couldn’t read the crop area — try again.'
     : err ? 'Something went wrong processing the image. Try again.' : '';
-  return HEAD('Change banner — Adv Runs', bodyClass, { wall: false }) + header('<b>BANNER</b>admin', '') + `
+  return HEAD('Change banner — The Bridge', bodyClass, { wall: false }) + header('<b>BANNER</b>admin', '') + `
     <div class="rule"></div>
     <span class="eyebrow">Check-in hero photo</span>
     <h1>Change the banner</h1>
@@ -4090,7 +4090,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
 
   const phoneList = approvedPhones.map(p => `${p.full_name}: ${p.phone}`).join('\n');
 
-  return HEAD('People — Adv Runs', 'has-tabs') + header('<b>PEOPLE</b>admin', '', ann) + `
+  return HEAD('People — The Bridge', 'has-tabs') + header('<b>PEOPLE</b>admin', '', ann) + `
     ${opsNav('people', { isAdmin: true })}${firstRunTour}
     <div class="rule"></div>
     <span class="eyebrow">${people.length} ${q ? 'match' + (people.length===1?'':'es') : 'people'}</span>
@@ -4188,7 +4188,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
 
 // ---------- SHARE (QR + link for the application form) ----------
 export function sharePage({ applyUrl = '', applyQr = '', signInUrl = '', loginQr = '', ann = null, dmUnread = 0, groupUnread = 0, groupMention = 0 }) {
-  return HEAD('Share — Adv Runs', 'has-tabs') + header('<b>SHARE</b>admin', '', ann) + `
+  return HEAD('Share — The Bridge', 'has-tabs') + header('<b>SHARE</b>admin', '', ann) + `
     ${opsNav('people', { isAdmin: true })}
     <div class="rule"></div>
     <span class="eyebrow">Sign-up form</span>
