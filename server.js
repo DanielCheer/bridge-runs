@@ -1618,6 +1618,28 @@ const stmtPollPkChat = db.prepare('SELECT COALESCE(MAX(id),0) mx FROM group_mess
 const stmtPollPkChatReact = db.prepare('SELECT COUNT(*) c, MAX(created_at) mx FROM group_reactions WHERE program_id = 2');
 function bumpChatSeqFor(programId) { const k = P(programId).config.chatSeqKey; setSetting(k, String((Number(getSetting(k)) || 0) + 1)); }
 function bumpPkChatSeq() { return bumpChatSeqFor(2); }
+// Program-generic poll fingerprints (basketball id=1 + pickleball id=2 keep their own hoisted
+// statements/branches above; these serve every OTHER run — e.g. volleyball — so a new run gets
+// live-refresh from the registry, no new /poll branch). Statements bind program_id at call (node:
+// sqlite has no statement cache, so re-preparing per tick would be the scan these hoists avoid).
+const stmtPollChatMaxG = db.prepare('SELECT COALESCE(MAX(id),0) mx FROM group_messages WHERE program_id = ?');
+const stmtPollChatReactG = db.prepare('SELECT COUNT(*) c, MAX(created_at) mx FROM group_reactions WHERE program_id = ?');
+function chatPollFingerprint(programId) {
+  const g = stmtPollChatMaxG.get(programId), rx = stmtPollChatReactG.get(programId);
+  return `${g.mx || 0}:${getSetting(P(programId).config.chatSeqKey) || 0}:${rx.c || 0}:${rx.mx || ''}`;
+}
+function runPollFingerprint(programId) {
+  const cfg = P(programId).config, rd = programRunDate(programId);
+  ensureWeekFor(programId); // no-op until the date advances; never writes offers
+  const part = partitionFor(programId, rd), rows = part.rows || [];
+  // Offer-window runs carry offered/held flags + the held-release boundary; simple runs don't.
+  const order = cfg.offerWindow
+    ? rows.map(r => `${r.id}${r.offered_at != null ? 'o' : ''}${r.held ? 'h' : ''}${r.confirmed_at ? 'c' : ''}`).join(',')
+    : rows.map(r => `${r.id}${r.confirmed_at ? 'c' : ''}`).join(',');
+  const held = cfg.offerWindow ? `${heldReleased(rd) ? 1 : 0}:` : '';
+  const ann = latestAnnouncementFor(programId);
+  return `${rd}:${runOpenFor(programId, rd) ? 1 : 0}:${runCancelledFor(programId, rd) ? 1 : 0}:${held}${order}:${ann ? ann.id : 0}`;
+}
 const stmtPollDM = db.prepare('SELECT MAX(id) mx, COUNT(*) c FROM messages WHERE from_email = ? OR to_email = ?');
 
 // Held late-regulars are released onto the floor from 4pm on the RUN DAY onward — keyed
@@ -2035,6 +2057,16 @@ app.get('/poll', requireLogin, (req, res) => {
   } else if (page === 'profile') {
     const m = stmtPollDM.get(email, email);
     f = `${m.mx || 0}:${m.c || 0}`;
+  } else {
+    // Every OTHER run (e.g. volleyball) — keyed by its own slug (prog.key, the run page's pollKey)
+    // or logTag+"chat" (the chat page's pollPage). Basketball(1)/pickleball(2) are handled by the
+    // literal branches above. A hidden run's fingerprint is withheld from non-admins (matches its
+    // page gate) so it isn't leaked before publish.
+    for (const p of PROGRAMS.values()) {
+      if (p.id < 3 || !(p.active() || isAdmin(email))) continue;
+      if (page === p.key) { f = runPollFingerprint(p.id); break; }
+      if (page === `${p.config.logTag}chat`) { f = chatPollFingerprint(p.id); break; }
+    }
   }
   const aid = applicantIdOf(email);
   // Program-keyed chat unread map: the client reads data-chat-program off the Chat tab / hero
