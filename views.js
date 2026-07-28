@@ -2587,7 +2587,7 @@ export function pkJoinPage(state) { return runJoinPage(state); }
 // pass-through wrapper and the golden master stays byte-identical); a 3rd program calls runPage
 // with its own runBase / theme / sport / etc. NOTE: offer-window UI (offered "claiming" rows) is
 // NOT rendered yet — volleyball (offerWindow:true) needs a follow-up increment for that.
-export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM', startLabel = '6 PM', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, myConfirmed = false, iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null,
+export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM', startLabel = '6 PM', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], offeredPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, myConfirmed = false, iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null,
   runBase = '/pickleball', programId = 2, theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒', dayName = 'Tuesday', pollKey = 'pickleball' }) {
   const full = going >= cap, totalFull = (going + waiting) >= (cap + waitlistCap);
   const rmForm = (p) => `<form method="POST" action="${runBase}/remove" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn leave sm" type="submit">Remove</button></form>`;
@@ -2597,6 +2597,9 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
   const pkRole = (p) => roleBadge({ host: !!p.is_host, team: !!p.is_team, guest: /@guest\.local$/.test(p.email) }); // no core tier in pickleball
   const rowFloor = (p, n) => `<div class="lr"><span class="ln">${n}</span>${nameLink(p, `<span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''}${p.confirmed_at ? ' <span class="tag reg" title="Confirmed coming">✓</span>' : ''}</span>`)}${pkRole(p)}${canOperate ? rmForm(p) : ''}</div>`;
   const rowWait = (p, i) => `<div class="lr"><span class="ln">W${i}</span>${nameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}</span>`)}${canOperate ? `<form method="POST" action="${runBase}/bump" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn sm" type="submit">Bump in</button></form>${rmForm(p)}` : ''}</div>`;
+  // Offer-window programs only: a waitlister who's been offered a freed floor spot (holding it until
+  // they claim or it expires). offeredPlayers is empty for simple programs, so this never renders.
+  const rowOffer = (p) => `<div class="lr"><span class="ln">·</span>${nameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''} <span class="tag">⏳ Claiming</span></span>`)}${canOperate ? rmForm(p) : ''}</div>`;
   let action = '';
   if (cancelled) action = `<button class="btn" type="button" disabled>Run cancelled</button>`;
   else if (myState === 'in') action = `<form method="POST" action="${runBase}/leave"><button class="btn ghost" type="submit">Sit out</button></form>`;
@@ -2663,7 +2666,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
       <div class="wgsheet" role="dialog" aria-modal="true" aria-label="Who's going">
         <div class="wgsheet-h"><b>On the floor · ${going} / ${cap}</b><button class="wgx" type="button" onclick="wgClose()" aria-label="Close">${IC_CLOSE}</button></div>
         <div class="wgsheet-b">
-          ${floorPlayers.length ? floorPlayers.map((p, i) => rowFloor(p, i + 1)).join('') : '<div class="subh">Nobody yet — be the first in.</div>'}
+          ${floorPlayers.length ? floorPlayers.map((p, i) => rowFloor(p, i + 1)).join('') : '<div class="subh">Nobody yet — be the first in.</div>'}${offeredPlayers.length ? `<div class="subh">Holding a spot · offer sent</div>${offeredPlayers.map((p) => rowOffer(p)).join('')}` : ''}
           ${waitPlayers.length ? `<div class="subh">Waitlist · ${waiting}</div>${waitPlayers.map((p, i) => rowWait(p, i + 1)).join('')}` : ''}
         </div>
       </div>
