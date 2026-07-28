@@ -4060,6 +4060,56 @@ function ensureWeekFor(programId) {
   if (base && base < today) delSetting(cfg.keys.runBase);
 }
 function pkEnsureWeek() { return ensureWeekFor(2); }
+
+// ---------- GENERIC RUN-ROUTE HANDLERS (opt-in programs) ----------
+// Each handler body is program-generic (programId + P(id).paths/config); the inline /pickleball/*
+// routes below call them with 2 (byte-identical), and mountRunProgram registers them for a 3rd
+// program under its own paths. Basketball keeps its own /checkin/* routes (migrate post-freeze).
+function runOpen(programId, req, res) {
+  const base = P(programId).paths.run;
+  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const rd = programRunDate(programId); if (runCancelledFor(programId, rd)) return res.redirect(base);
+  setRunStateFor(programId, rd, 'is_open', 1); seatRenewers(programId, rd); res.redirect(base);
+}
+function runClose(programId, req, res) {
+  const base = P(programId).paths.run;
+  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  setRunStateFor(programId, programRunDate(programId), 'is_open', 0); res.redirect(base);
+}
+function runConfirm(programId, req, res) {
+  const base = P(programId).paths.run;
+  const g = programGate(programId, req, res); if (!g) return;
+  const rd = programRunDate(programId), part = partitionFor(programId, rd);
+  const floor = P(programId).config.offerWindow ? part.floorReal : part.floor;
+  if (floor.some(p => p.email === req.userEmail)) {
+    db.prepare("UPDATE checkins SET confirmed_at = datetime('now') WHERE run_date = ? AND email = ? AND program_id = ? AND confirmed_at IS NULL").run(rd, req.userEmail, programId);
+  }
+  res.redirect(base);
+}
+function runAutorenew(programId, req, res) {
+  const base = P(programId).paths.run;
+  const g = programGate(programId, req, res); if (!g) return;
+  if (!memberOf(programId, req.userEmail)) return res.redirect(base);
+  const on = req.body.on === '1' ? 1 : 0;
+  if (on && (!g.a || !g.a.waiver_ok)) return res.redirect('/waiver?next=' + base); // can't auto-seat without the waiver
+  db.prepare('UPDATE program_membership SET auto_renew = ? WHERE program_id = ? AND email = ?').run(on, programId, req.userEmail);
+  res.redirect(base);
+}
+function runJoinRun(programId, req, res) {
+  const g = programGate(programId, req, res); if (!g) return;
+  joinProgramMembership(programId, req.userEmail);
+  setRunCookie(req, res, programId);
+  res.redirect(P(programId).paths.run);
+}
+function runBump(programId, req, res) {
+  const base = P(programId).paths.run;
+  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const rd = programRunDate(programId); if (runCancelledFor(programId, rd)) return res.redirect(base);
+  const row = db.prepare('SELECT MIN(sort_order) m FROM checkins WHERE run_date = ? AND program_id = ?').get(rd, programId);
+  db.prepare('UPDATE checkins SET sort_order = ? WHERE run_date = ? AND email = ? AND program_id = ?').run(((row && row.m) || 0) - 1, rd, String(req.body.email || '').toLowerCase(), programId);
+  res.redirect(base);
+}
+
 app.get('/pickleball', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
   // Not a member yet (and not an admin, who operates it) → show a JOIN PROMPT instead of the
@@ -4126,30 +4176,11 @@ app.post('/pickleball/season', requireLogin, (req, res) => {
 });
 // Join the pickleball RUN (membership) — the opt-in from the join prompt. Distinct from the
 // per-week check-in below. Adds a program_membership row, then lands on the run.
-app.post('/pickleball/join-run', requireLogin, (req, res) => {
-  const g = pkGate(req, res); if (!g) return;
-  pkJoinMembership(req.userEmail);
-  setRunCookie(req, res, 2);
-  res.redirect('/pickleball');
-});
+app.post('/pickleball/join-run', requireLogin, (req, res) => runJoinRun(2, req, res));
 // "I'm coming" confirm — a floor player marks they're showing up (mirrors basketball).
-app.post('/pickleball/confirm', requireLogin, (req, res) => {
-  const g = pkGate(req, res); if (!g) return;
-  const rd = pkRunDate(), part = pkPartition(rd);
-  if (part.floor.some(p => p.email === req.userEmail)) {
-    db.prepare("UPDATE checkins SET confirmed_at = datetime('now') WHERE run_date = ? AND email = ? AND program_id = 2 AND confirmed_at IS NULL").run(rd, req.userEmail);
-  }
-  res.redirect('/pickleball');
-});
+app.post('/pickleball/confirm', requireLogin, (req, res) => runConfirm(2, req, res));
 // Auto-renew toggle — a member opts their spot in/out of the weekly auto-add (self-service).
-app.post('/pickleball/autorenew', requireLogin, (req, res) => {
-  const g = pkGate(req, res); if (!g) return;
-  if (!pkIsMember(req.userEmail)) return res.redirect('/pickleball');
-  const on = req.body.on === '1' ? 1 : 0;
-  if (on && (!g.a || !g.a.waiver_ok)) return res.redirect('/waiver?next=/pickleball'); // can't auto-seat without the waiver
-  db.prepare('UPDATE program_membership SET auto_renew = ? WHERE program_id = 2 AND email = ?').run(on, req.userEmail);
-  res.redirect('/pickleball');
-});
+app.post('/pickleball/autorenew', requireLogin, (req, res) => runAutorenew(2, req, res));
 // Pickleball season board — most pickleball runs this year, from attendance (program 2). Member-gated.
 app.get('/pickleball/season', requireLogin, (req, res) => {
   const g = pkChatGate(req, res); if (!g) return; // members only (same bar as the chat)
@@ -4213,8 +4244,8 @@ app.post('/pickleball/leave', requireLogin, (req, res) => {
   db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = 2').run(rd, req.userEmail);
   res.redirect('/pickleball');
 });
-app.post('/pickleball/open', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(); if (pkIsCancelled(rd)) return res.redirect('/pickleball'); /* un-cancel first — matches /checkin/open */ pkSetState(rd, 'is_open', 1); pkSeatRenewers(rd); res.redirect('/pickleball'); });
-app.post('/pickleball/close', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); pkSetState(pkRunDate(), 'is_open', 0); res.redirect('/pickleball'); });
+app.post('/pickleball/open', requireLogin, (req, res) => runOpen(2, req, res));
+app.post('/pickleball/close', requireLogin, (req, res) => runClose(2, req, res));
 app.post('/pickleball/cancel', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball');
   const rd = pkRunDate(), on = req.body.on !== '0';
@@ -4297,7 +4328,7 @@ app.post('/pickleball/guest', requireLogin, (req, res) => {
   res.redirect('/pickleball');
 });
 app.post('/pickleball/remove', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(), em = String(req.body.email || '').toLowerCase(); pkNotifyPromotion(rd, em); db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = 2').run(rd, em); res.redirect('/pickleball'); });
-app.post('/pickleball/bump', requireLogin, (req, res) => { const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball'); const rd = pkRunDate(); if (pkIsCancelled(rd)) return res.redirect('/pickleball'); const row = db.prepare('SELECT MIN(sort_order) m FROM checkins WHERE run_date = ? AND program_id = 2').get(rd); db.prepare('UPDATE checkins SET sort_order = ? WHERE run_date = ? AND email = ? AND program_id = 2').run(((row && row.m) || 0) - 1, rd, String(req.body.email || '').toLowerCase()); res.redirect('/pickleball'); });
+app.post('/pickleball/bump', requireLogin, (req, res) => runBump(2, req, res));
 app.post('/pickleball/publish', requireAdmin, (req, res) => { db.prepare('UPDATE program SET active = ? WHERE id = 2').run(req.body.on === '0' ? 0 : 1); audit(req.userEmail, 'admin', req.body.on === '0' ? 'pk:hide' : 'pk:publish', ''); res.redirect('/pickleball'); });
 // Post a pickleball announcement — operator only. Stored in announcements (program 2)
 // table, pushed to pickleball members' phones (and emailed if SMTP is set), separate from
