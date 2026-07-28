@@ -2580,36 +2580,41 @@ export function pkJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, g
 
 // Pickleball run — a SEPARATE, hidden run on its own pk_* tables. Dedicated view (reuses the
 // shell + avatar + list styles); does not touch the basketball checkinPage. Native POST forms.
-export function pickleballPage({ email, runDate = '', runLabel = '', hours = '6–8 PM', startLabel = '6 PM', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, myConfirmed = false, iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+// Program-generic run page. Defaults reproduce PICKLEBALL exactly (so pickleballPage below is a
+// pass-through wrapper and the golden master stays byte-identical); a 3rd program calls runPage
+// with its own runBase / theme / sport / etc. NOTE: offer-window UI (offered "claiming" rows) is
+// NOT rendered yet — volleyball (offerWindow:true) needs a follow-up increment for that.
+export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM', startLabel = '6 PM', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, myConfirmed = false, iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null,
+  runBase = '/pickleball', programId = 2, theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒', dayName = 'Tuesday', pollKey = 'pickleball' }) {
   const full = going >= cap, totalFull = (going + waiting) >= (cap + waitlistCap);
-  const rmForm = (p) => `<form method="POST" action="/pickleball/remove" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn leave sm" type="submit">Remove</button></form>`;
+  const rmForm = (p) => `<form method="POST" action="${runBase}/remove" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn leave sm" type="submit">Remove</button></form>`;
   // Tappable name → profile popup (reuses the shared pvOpen + /u/:id/card); guests (no
   // applicant_id) stay plain text. Role badge mirrors the basketball roster.
   const nameLink = (p, inner) => (p.applicant_id && !/@guest\.local$/.test(p.email)) ? `<a class="lrlink" href="/u/${p.applicant_id}" onclick="if(window.pvOpen){pvOpen(${p.applicant_id});return false;}">${inner}</a>` : inner;
   const pkRole = (p) => roleBadge({ host: !!p.is_host, team: !!p.is_team, guest: /@guest\.local$/.test(p.email) }); // no core tier in pickleball
   const rowFloor = (p, n) => `<div class="lr"><span class="ln">${n}</span>${nameLink(p, `<span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''}${p.confirmed_at ? ' <span class="tag reg" title="Confirmed coming">✓</span>' : ''}</span>`)}${pkRole(p)}${canOperate ? rmForm(p) : ''}</div>`;
-  const rowWait = (p, i) => `<div class="lr"><span class="ln">W${i}</span>${nameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}</span>`)}${canOperate ? `<form method="POST" action="/pickleball/bump" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn sm" type="submit">Bump in</button></form>${rmForm(p)}` : ''}</div>`;
+  const rowWait = (p, i) => `<div class="lr"><span class="ln">W${i}</span>${nameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}</span>`)}${canOperate ? `<form method="POST" action="${runBase}/bump" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn sm" type="submit">Bump in</button></form>${rmForm(p)}` : ''}</div>`;
   let action = '';
   if (cancelled) action = `<button class="btn" type="button" disabled>Run cancelled</button>`;
-  else if (myState === 'in') action = `<form method="POST" action="/pickleball/leave"><button class="btn ghost" type="submit">Sit out</button></form>`;
-  else if (myState === 'waitlist') action = `<form method="POST" action="/pickleball/leave"><button class="btn ghost" type="submit">Leave waitlist (#${myWaitPos})</button></form>`;
+  else if (myState === 'in') action = `<form method="POST" action="${runBase}/leave"><button class="btn ghost" type="submit">Sit out</button></form>`;
+  else if (myState === 'waitlist') action = `<form method="POST" action="${runBase}/leave"><button class="btn ghost" type="submit">Leave waitlist (#${myWaitPos})</button></form>`;
   else if (!isOpen) action = `<button class="btn" type="button" disabled>Check-in closed</button>`;
   else if (totalFull) action = `<button class="btn" type="button" disabled>Run &amp; waitlist full</button>`;
-  else if (full) action = `<form method="POST" action="/pickleball/join"><button class="btn primary" type="submit">Join waitlist (${waiting}/${waitlistCap})</button></form>`;
-  else action = `<form method="POST" action="/pickleball/join"><button class="btn primary" type="submit">I'm in</button></form>`;
-  const runToggle = canOperate && !cancelled ? (isOpen ? `<form method="POST" action="/pickleball/close" style="margin:0"><button class="btn leave" type="submit">Close check-in</button></form>` : `<form method="POST" action="/pickleball/open" style="margin:0"><button class="btn primary" type="submit">Open check-in</button></form>`) : '';
+  else if (full) action = `<form method="POST" action="${runBase}/join"><button class="btn primary" type="submit">Join waitlist (${waiting}/${waitlistCap})</button></form>`;
+  else action = `<form method="POST" action="${runBase}/join"><button class="btn primary" type="submit">I'm in</button></form>`;
+  const runToggle = canOperate && !cancelled ? (isOpen ? `<form method="POST" action="${runBase}/close" style="margin:0"><button class="btn leave" type="submit">Close check-in</button></form>` : `<form method="POST" action="${runBase}/open" style="margin:0"><button class="btn primary" type="submit">Open check-in</button></form>`) : '';
 
   // ----- teal scoreboard hero (mirrors the basketball check-in hero) -----
   // "Group chat" button beside the Run pill — links to the Pickleball chat tab; small
   // unread dot when group unread > 0.
-  const chatBtn = `<a class="hchat" href="/pickleball/chat" data-chat-program="2" aria-label="Group chat${groupUnread > 0 ? `, ${groupUnread} unread` : ''}">
+  const chatBtn = `<a class="hchat" href="${runBase}/chat" data-chat-program="${programId}" aria-label="Group chat${groupUnread > 0 ? `, ${groupUnread} unread` : ''}">
         <span class="hci">${GROUP_ICON}</span>Group chat${groupUnread > 0 ? '<span class="hdot" aria-hidden="true"></span>' : ''}
       </a>`;
   // Operator "Add a guest" — sits on the RIGHT of the Checked-in / Waitlist row.
   const addGuest = canOperate
     ? `<details class="hguest">
         <summary>+ Guest</summary>
-        <form method="POST" action="/pickleball/guest" onsubmit="var b=this.querySelector('button');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Adding…';">
+        <form method="POST" action="${runBase}/guest" onsubmit="var b=this.querySelector('button');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Adding…';">
           <input name="name" required maxlength="60" placeholder="Guest name — last-minute add">
           <div style="height:8px"></div>
           <button class="btn sm" type="submit">Add guest to the run</button>
@@ -2619,9 +2624,9 @@ export function pickleballPage({ email, runDate = '', runLabel = '', hours = '6�
   // ----- hero footer (INSIDE the card, like basketball): Post announcement (operators,
   //       LEFT) + Auto-renew pill (members, RIGHT) -----
   const annCompose = canOperate
-    ? `<details class="announce-compose"><summary>📣 Post announcement</summary><form method="POST" action="/pickleball/announce" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Posting…';"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all pickleball members (pushes to their phones)"></textarea><div style="height:8px"></div><label class="lvl" style="margin:0 0 8px"><input type="checkbox" name="email_everyone"> Also email everyone</label><button class="btn sm" type="submit">Post &amp; notify</button></form></details>`
+    ? `<details class="announce-compose"><summary>📣 Post announcement</summary><form method="POST" action="${runBase}/announce" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Posting…';"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all ${sport.toLowerCase()} members (pushes to their phones)"></textarea><div style="height:8px"></div><label class="lvl" style="margin:0 0 8px"><input type="checkbox" name="email_everyone"> Also email everyone</label><button class="btn sm" type="submit">Post &amp; notify</button></form></details>`
     : '';
-  const autoRenewPill = cancelled ? '' : `<form method="POST" action="/pickleball/autorenew" style="margin:0"><input type="hidden" name="on" value="${iAutoRenew ? '0' : '1'}"><button class="arpill${iAutoRenew ? ' on' : ''}" type="submit" title="Auto-join the pickleball run each week">🔁 Auto-renew${iAutoRenew ? ' · ON' : ' · OFF'}</button></form>`;
+  const autoRenewPill = cancelled ? '' : `<form method="POST" action="${runBase}/autorenew" style="margin:0"><input type="hidden" name="on" value="${iAutoRenew ? '0' : '1'}"><button class="arpill${iAutoRenew ? ' on' : ''}" type="submit" title="Auto-join the ${sport.toLowerCase()} run each week">🔁 Auto-renew${iAutoRenew ? ' · ON' : ' · OFF'}</button></form>`;
   const heroFooter = (annCompose || autoRenewPill)
     ? `<div class="hann"><div class="hann-l">${annCompose}</div>${autoRenewPill ? `<div class="hann-r">${autoRenewPill}</div>` : ''}</div>`
     : '';
@@ -2661,11 +2666,11 @@ export function pickleballPage({ email, runDate = '', runLabel = '', hours = '6�
       </div>
     </div>`;
 
-  return HEAD('Pickleball — The Bridge', 'has-tabs pk') + header(`<b>PICKLEBALL</b>${esc(email)}`, wdayShort(runDate), ann, hours) + `
+  return HEAD(`${sport} — The Bridge`, `has-tabs ${theme}`) + header(`<b>${sport.toUpperCase()}</b>${esc(email)}`, wdayShort(runDate), ann, hours) + `
     ${backToRuns}
     <div class="rule"></div>
-    ${hidden ? `<div class="notice" style="margin-top:10px">🔒 <b>Hidden run</b> — only admins can see this. Flip it live when it's ready.${isAdmin ? ` <form method="POST" action="/pickleball/publish" style="display:inline"><button class="btn sm" type="submit" style="margin-left:6px">Make it live</button></form>` : ''}</div>` : (isAdmin ? `<div class="notice good" style="margin-top:10px">✅ <b>Live</b> — members can join. <form method="POST" action="/pickleball/publish" style="display:inline"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit" style="margin-left:6px">Hide again</button></form></div>` : '')}
-    <div class="phead"><h1>Pickleball 🥒</h1></div>
+    ${hidden ? `<div class="notice" style="margin-top:10px">🔒 <b>Hidden run</b> — only admins can see this. Flip it live when it's ready.${isAdmin ? ` <form method="POST" action="${runBase}/publish" style="display:inline"><button class="btn sm" type="submit" style="margin-left:6px">Make it live</button></form>` : ''}</div>` : (isAdmin ? `<div class="notice good" style="margin-top:10px">✅ <b>Live</b> — members can join. <form method="POST" action="${runBase}/publish" style="display:inline"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit" style="margin-left:6px">Hide again</button></form></div>` : '')}
+    <div class="phead"><h1>${sport} ${sportEmoji}</h1></div>
     <p class="psub" style="margin:-4px 0 8px;color:var(--muted)">${cancelled ? 'Cancelled this week' : (runLabel ? `Next: ${esc(wdayFull(runDate))}, ${esc(runLabel)}` : 'No date set')} · ${going}/${cap} in${waiting ? ` · ${waiting} waiting` : ''}</p>
     <div class="gymbanner">
       <img src="${esc(bannerSrc)}?v=${esc(String(bannerVer))}" alt="The Bridge court" width="1160" height="580" fetchpriority="high">
@@ -2675,16 +2680,16 @@ export function pickleballPage({ email, runDate = '', runLabel = '', hours = '6�
           : `<div class="l">Next run<b>${esc(wdayFull(runDate))} · ${esc(runLabel)} · ${esc(startLabel)}</b></div>
         <div class="r"><span>Starts in</span><b class="tick" data-tip="${tipoff}">${esc(fmtCountdown(tipoff))}</b></div>`}
       </div>
-      ${canOperate ? `<a class="bannedit" href="/pickleball/banner" aria-label="Change banner photo">🖼 Change</a>` : ''}
+      ${canOperate ? `<a class="bannedit" href="${runBase}/banner" aria-label="Change banner photo">🖼 Change</a>` : ''}
     </div>
-    ${announcement ? `<div class="notice" style="margin-top:10px;display:flex;align-items:flex-start;gap:8px;justify-content:space-between"><span>📣 <b>Announcement</b> · ${esc(announcement.body)}${announcement.author ? `<span style="color:var(--muted)"> — ${esc(announcement.author)}</span>` : ''}</span>${canOperate ? `<form method="POST" action="/pickleball/announce/retract" style="margin:0;flex-shrink:0"><button class="btn ghost sm" type="submit" title="Retract this announcement">Retract</button></form>` : ''}</div>` : ''}
+    ${announcement ? `<div class="notice" style="margin-top:10px;display:flex;align-items:flex-start;gap:8px;justify-content:space-between"><span>📣 <b>Announcement</b> · ${esc(announcement.body)}${announcement.author ? `<span style="color:var(--muted)"> — ${esc(announcement.author)}</span>` : ''}</span>${canOperate ? `<form method="POST" action="${runBase}/announce/retract" style="margin:0;flex-shrink:0"><button class="btn ghost sm" type="submit" title="Retract this announcement">Retract</button></form>` : ''}</div>` : ''}
     ${hero}
     ${(action || runToggle) ? `<div class="controls">${action}${runToggle}</div>` : ''}
     ${myState === 'in' && !cancelled ? (myConfirmed
       ? `<div class="notice good" style="margin-top:10px">✓ <b>You're confirmed</b> for this run — see you there!</div>`
-      : `<form method="POST" action="/pickleball/confirm" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming</button></form>`) : ''}
+      : `<form method="POST" action="${runBase}/confirm" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming</button></form>`) : ''}
     ${myState === 'waitlist' && !cancelled ? `<div class="notice warn" style="margin-top:10px">You're <b>#${myWaitPos}</b> on the waitlist. If a spot opens you'll get a notification and move onto the floor — no need to re-check.</div>` : ''}
-    ${cancelled ? '' : `<div style="margin-top:12px"><a href="/pickleball/run.ics" style="font-size:13px;color:var(--muted)">📅 Add this run to your calendar</a></div>`}
+    ${cancelled ? '' : `<div style="margin-top:12px"><a href="${runBase}/run.ics" style="font-size:13px;color:var(--muted)">📅 Add this run to your calendar</a></div>`}
     ${qrBlock}
     <div style="height:28px"></div>
     ${locationBlock}
@@ -2699,21 +2704,21 @@ export function pickleballPage({ email, runDate = '', runLabel = '', hours = '6�
         : (pkMsg === 'daterange') ? '<div class="notice bad">Pick a run date within the next 60 days.</div>'
         : (pkMsg === 'datebad') ? '<div class="notice bad">That run date did not look right — try again.</div>' : ''}
       ${preseason
-        ? `<p class="tally-note" style="color:var(--muted);margin:8px 0 0">Runs Tuesdays. Weekly run-date &amp; cancel controls appear once the season starts (${esc(seasonWeekday)}, ${esc(seasonLabel)}).</p>`
-        : `<form method="POST" action="/pickleball/date" style="display:flex;gap:8px;align-items:center;margin:8px 0 0"><input type="date" name="date" value="${esc(runDate)}" style="font-size:16px"><button class="btn ghost sm" type="submit">Set run date</button></form>
+        ? `<p class="tally-note" style="color:var(--muted);margin:8px 0 0">Runs ${dayName}s. Weekly run-date &amp; cancel controls appear once the season starts (${esc(seasonWeekday)}, ${esc(seasonLabel)}).</p>`
+        : `<form method="POST" action="${runBase}/date" style="display:flex;gap:8px;align-items:center;margin:8px 0 0"><input type="date" name="date" value="${esc(runDate)}" style="font-size:16px"><button class="btn ghost sm" type="submit">Set run date</button></form>
       ${cancelled
-        ? `<form method="POST" action="/pickleball/cancel" style="margin-top:10px"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Restore this run</button></form>`
-        : `<form method="POST" action="/pickleball/cancel" style="margin-top:10px" onsubmit="return confirm('Cancel this week\\'s pickleball?')"><button class="btn ghost sm" type="submit">🚫 Cancel this week</button></form>`}`}
+        ? `<form method="POST" action="${runBase}/cancel" style="margin-top:10px"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Restore this run</button></form>`
+        : `<form method="POST" action="${runBase}/cancel" style="margin-top:10px" onsubmit="return confirm('Cancel this week\\'s ${sport.toLowerCase()}?')"><button class="btn ghost sm" type="submit">🚫 Cancel this week</button></form>`}`}
       <div class="rule" style="margin:14px 0 12px"></div>
       <div class="clab" style="margin-bottom:2px">Season</div>
       <p class="tally-note" style="margin:6px 0 10px">${season
         ? `Season starts <b>${esc(seasonWeekday)}, ${esc(seasonLabel)}</b> — no runs and no auto check-in until then.`
-        : `Runs every Tuesday. Set a season start to pause the schedule until the season opens.`}</p>
-      <form method="POST" action="/pickleball/season" style="margin:0">
+        : `Runs every ${dayName}. Set a season start to pause the schedule until the season opens.`}</p>
+      <form method="POST" action="${runBase}/season" style="margin:0">
         <div class="field"><label>Season start</label><input type="date" name="season" value="${esc(season)}" min="${esc(today)}" max="${esc(seasonMax)}" style="font-size:16px;min-height:44px;padding:11px 13px;width:100%;box-sizing:border-box;max-width:100%"></div>
         <button class="btn sm" type="submit" style="margin-top:8px">Set season start</button>
       </form>
-      ${season ? `<form method="POST" action="/pickleball/season" style="margin-top:8px" onsubmit="return confirm('Clear the season start? Runs resume every week right away.');"><input type="hidden" name="season" value=""><button class="btn ghost sm" type="submit">Clear — run every week</button></form>` : ''}
+      ${season ? `<form method="POST" action="${runBase}/season" style="margin-top:8px" onsubmit="return confirm('Clear the season start? Runs resume every week right away.');"><input type="hidden" name="season" value=""><button class="btn ghost sm" type="submit">Clear — run every week</button></form>` : ''}
     </div></div>` : ''}
     ${wgSheet}
     <div id="pvwrap" class="wgwrap pvwrap"><div class="wgscrim" onclick="pvClose()"></div>
@@ -2747,12 +2752,14 @@ export function pickleballPage({ email, runDate = '', runLabel = '', hours = '6�
       window.__pkOnChange=function(){
         if((window.__overlayOpen&&window.__overlayOpen())||(window.__composing&&window.__composing()))return;
         if(!window.fetch||!window.__swapWrap)return;
-        fetch('/pickleball',{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.text();}).then(function(h){document.documentElement.classList.add('noanim');window.__swapWrap(h);}).catch(function(){});
+        fetch('${runBase}',{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.text();}).then(function(h){document.documentElement.classList.add('noanim');window.__swapWrap(h);}).catch(function(){});
       };
-      if(window.__poll)window.__poll('pickleball',window.__pkOnChange);
+      if(window.__poll)window.__poll('${pollKey}',window.__pkOnChange);
     </script>
-  ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: 2 }));
+  ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: programId }));
 }
+// Thin wrapper — runPage's defaults ARE the pickleball values, so this stays byte-identical.
+export function pickleballPage(state) { return runPage(state); }
 
 // Season board — most runs this calendar year. Top 8 + the viewer's own row (if outside
 // the top). Gentle by design: it celebrates the top and shows you yours, never ranks the
