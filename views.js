@@ -283,7 +283,7 @@ window.__pollStop=function(){window.__pollPage=null;window.__pollOnChange=null;}
 // still POSTs and the route 302-redirects as before.
 if(!window.__ckControlsBound){ window.__ckControlsBound=true;
   document.addEventListener('submit',function(e){
-    var form=e.target.closest&&e.target.closest('.controls form, .arform, .hguest form, .wgsheet form, .teamspanel form');
+    var form=e.target.closest&&e.target.closest('.controls form, .arform, .hguest form, .wgsheet form, .teamspanel form, .swapform');
     if(!form)return;
     if(!window.fetch||!window.DOMParser||!window.__swapWrap)return;
     e.preventDefault();
@@ -1954,7 +1954,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
   const confirmCta = (myState === 'in' && !suspended)
     ? (myConfirmed
         ? `<div class="notice good" style="margin-top:10px">✓ Confirmed. Can't make it? Sit out to free your spot for the waitlist.</div>`
-        : `<form method="POST" action="/checkin/confirm" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming</button></form>`)
+        : `<form method="POST" action="/checkin/confirm" class="swapform" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming</button></form>`)
     : '';
   // (The run-day confirm/release ping is now automatic at the 2 PM lock — no host button.)
 
@@ -2629,7 +2629,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
   const annCompose = canOperate
     ? `<details class="announce-compose"><summary>📣 Post announcement</summary><form method="POST" action="${runBase}/announce" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Posting…';"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all ${sport.toLowerCase()} members (pushes to their phones)"></textarea><div style="height:8px"></div><label class="lvl" style="margin:0 0 8px"><input type="checkbox" name="email_everyone"> Also email everyone</label><button class="btn sm" type="submit">Post &amp; notify</button></form></details>`
     : '';
-  const autoRenewPill = cancelled ? '' : `<form method="POST" action="${runBase}/autorenew" style="margin:0"><input type="hidden" name="on" value="${iAutoRenew ? '0' : '1'}"><button class="arpill${iAutoRenew ? ' on' : ''}" type="submit" title="Auto-join the ${sport.toLowerCase()} run each week">🔁 Auto-renew${iAutoRenew ? ' · ON' : ' · OFF'}</button></form>`;
+  const autoRenewPill = cancelled ? '' : `<form method="POST" action="${runBase}/autorenew" class="arform" style="margin:0"><input type="hidden" name="on" value="${iAutoRenew ? '0' : '1'}"><button class="arpill${iAutoRenew ? ' on' : ''}" type="submit" title="Auto-join the ${sport.toLowerCase()} run each week">🔁 Auto-renew${iAutoRenew ? ' · ON' : ' · OFF'}</button></form>`;
   const heroFooter = (annCompose || autoRenewPill)
     ? `<div class="hann"><div class="hann-l">${annCompose}</div>${autoRenewPill ? `<div class="hann-r">${autoRenewPill}</div>` : ''}</div>`
     : '';
@@ -2709,7 +2709,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
     ${(action || runToggle) ? `<div class="controls">${action}${runToggle}</div>` : ''}
     ${myState === 'in' && !cancelled ? (myConfirmed
       ? `<div class="notice good" style="margin-top:10px">✓ <b>You're confirmed</b> for this run — see you there!</div>`
-      : `<form method="POST" action="${runBase}/confirm" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming</button></form>`) : ''}
+      : `<form method="POST" action="${runBase}/confirm" class="swapform" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming</button></form>`) : ''}
     ${myState === 'waitlist' && !cancelled ? `<div class="notice warn" style="margin-top:10px">You're <b>#${myWaitPos}</b> on the waitlist. If a spot opens you'll get a notification and move onto the floor — no need to re-check.</div>` : ''}${teamsPanel}
     ${cancelled ? '' : `<div style="margin-top:12px"><a href="${runBase}/run.ics" style="font-size:13px;color:var(--muted)">📅 Add this run to your calendar</a></div>`}
     ${qrBlock}
