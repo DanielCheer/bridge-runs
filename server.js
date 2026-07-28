@@ -1619,7 +1619,13 @@ function offerPartition(programId, runDate) {
   const waitPlayers = [...overflow, ...heldLate].slice(0, cfg.waitlist);
   return { rows, active, offered, floorReal, overflow, heldLate, waitPlayers };
 }
-function partitionRun(runDate) { return offerPartition(1, runDate); }
+// Select the partition model from config: offer-window programs (basketball, and volleyball later)
+// use the held/offered/floorReal accounting; immediate programs (pickleball) use the simple slice.
+// This is the ONE seam a new program flips via config.offerWindow — no per-program branch elsewhere.
+function partitionFor(programId, rd) {
+  return P(programId).config.offerWindow ? offerPartition(programId, rd) : simplePartition(programId, rd);
+}
+function partitionRun(runDate) { return partitionFor(1, runDate); }
 
 // True if `email` currently occupies a floor slot (a real floor player OR a held
 // offer) — i.e. removing them frees a floor slot that should be offered onward.
@@ -3822,7 +3828,7 @@ function simplePartition(programId, rd) {
   const cap = P(programId).config.cap;
   return { floor: rows.slice(0, cap), wait: rows.slice(cap), rows };
 }
-function pkPartition(rd) { return simplePartition(2, rd); }
+function pkPartition(rd) { return partitionFor(2, rd); }
 // Pickleball run start epoch — the run date at 6 PM local. Drives the countdown banner
 // AND the auto-lock time (check-in closes at start).
 function pkStartEpoch(rd) { return rd ? new Date(rd + `T${String(PK_START_H).padStart(2, '0')}:00:00`).getTime() : 0; }
