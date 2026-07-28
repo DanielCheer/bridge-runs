@@ -2371,12 +2371,14 @@ export function chatPage({ me, chat, runDate = '', hours = '8:30–10:30 PM', dm
   ` + footWithTabs(tabNav('chat', { dm: dmUnread, group: groupUnread, groupMention }));
 }
 
-// Pickleball chat — the pickleball run's own room, an isolated mirror of chatPage on the
-// pk_group_* tables + /pickleball/chat routes. Reuses the shared chatFragment (base-pathed)
-// so the whole message UI (reactions, replies, pins, voice/video, @mentions, poll-patch) is
-// identical. Program-2 tab context → the bottom Chat tab stays on pickleball chat here.
-export function pkChatPage({ me, chat, runDate = '', dmUnread = 0, pkGroupUnread = 0, pkGroupMention = 0, ann = null }) {
+// Run chat — an opt-in run's own room (pickleball, volleyball, …), a program-generic mirror of the
+// basketball chatPage on the SAME unified group_messages tables (keyed by program_id). Reuses the
+// base-pathed chatFragment so the whole message UI (reactions, replies, pins, voice/video, @mentions,
+// poll-patch) is identical. The Chat tab stays on THIS run here (program). Copy/theme/base all come
+// from the caller → a new run needs no new chat page, just its params.
+export function runChatPage({ me, chat, program = 2, theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒', base = '/pickleball/chat', pollPage = 'pkchat', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
   const members = chat.members || [];
+  const low = sport.toLowerCase();
   const memRow = (p) => {
     const flags = { host: !!p.is_host, team: !!p.is_team, regular: !!p.is_regular };
     return `<a class="lr" href="/u/${p.id}">
@@ -2388,24 +2390,24 @@ export function pkChatPage({ me, chat, runDate = '', dmUnread = 0, pkGroupUnread
   const membersSheet = `
     <div id="memwrap" class="wgwrap">
       <div class="wgscrim" onclick="memClose()"></div>
-      <div class="wgsheet" role="dialog" aria-modal="true" aria-label="Pickleball members">
-        <div class="wgsheet-h"><b>Pickleball members · ${members.length}</b><button class="wgx" type="button" onclick="memClose()" aria-label="Close">${IC_CLOSE}</button></div>
+      <div class="wgsheet" role="dialog" aria-modal="true" aria-label="${sport} members">
+        <div class="wgsheet-h"><b>${sport} members · ${members.length}</b><button class="wgx" type="button" onclick="memClose()" aria-label="Close">${IC_CLOSE}</button></div>
         <div class="wgsheet-b">
           ${members.length ? members.map(memRow).join('') : '<div class="subh">No members yet.</div>'}
         </div>
       </div>
     </div>`;
-  return HEAD('Pickleball Chat — The Bridge', 'has-chat pk') + header('', '', ann, '') + WELCOME_MODAL + `
+  return HEAD(`${sport} Chat — The Bridge`, `has-chat ${theme}`) + header('', '', ann, '') + WELCOME_MODAL + `
     ${backToRuns}
     <div class="rule"></div>
     <div class="chatsec chatsec-top">
-      <div class="chatsec-h chatsec-tap" role="button" tabindex="0" onclick="memOpen()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();memOpen()}" aria-label="View pickleball members">
-        <span class="chav">🥒</span>
-        <div class="chatsec-t"><b>Pickleball Chat</b><span>${chat.memberCount} member${chat.memberCount === 1 ? '' : 's'} · talk to the pickleball run</span></div>
+      <div class="chatsec-h chatsec-tap" role="button" tabindex="0" onclick="memOpen()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();memOpen()}" aria-label="View ${low} members">
+        <span class="chav">${sportEmoji}</span>
+        <div class="chatsec-t"><b>${sport} Chat</b><span>${chat.memberCount} member${chat.memberCount === 1 ? '' : 's'} · talk to the ${low} run</span></div>
         <span class="chatsec-chev" aria-hidden="true">›</span>
       </div>
     </div>
-    ${chatFragment({ ...chat, base: '/pickleball/chat', pollPage: 'pkchat', placeholder: 'Message the pickleball run', emptyName: 'Pickleball Chat', emptyMsg: 'This is the start of the pickleball room — say hi 🥒' })}
+    ${chatFragment({ ...chat, base, pollPage, placeholder: `Message the ${low} run`, emptyName: `${sport} Chat`, emptyMsg: `This is the start of the ${low} room — say hi ${sportEmoji}` })}
     ${membersSheet}
     <script>
       window.memOpen=function(){var w=document.getElementById('memwrap');if(w){window.__ovPrev=document.activeElement;w.classList.add('open');document.body.style.overflow='hidden';var sh=w.querySelector('.wgsheet');if(sh){sh.setAttribute('tabindex','-1');try{sh.focus();}catch(e){}}}};
@@ -2415,7 +2417,11 @@ export function pkChatPage({ me, chat, runDate = '', dmUnread = 0, pkGroupUnread
         if(sh&&!still){sh.classList.add('closing');setTimeout(function(){w.classList.remove('open');sh.classList.remove('closing');document.body.style.overflow='';restore();},200);}
         else{w.classList.remove('open');document.body.style.overflow='';restore();}};
     </script>
-  ` + footWithTabs(tabNav('chat', { dm: dmUnread, group: pkGroupUnread, groupMention: pkGroupMention, program: 2 }));
+  ` + footWithTabs(tabNav('chat', { dm: dmUnread, group: groupUnread, groupMention, program }));
+}
+// Pickleball chat page — thin wrapper over the generic (byte-identical params).
+export function pkChatPage({ me, chat, runDate = '', dmUnread = 0, pkGroupUnread = 0, pkGroupMention = 0, ann = null }) {
+  return runChatPage({ me, chat, program: 2, theme: 'pk', sport: 'Pickleball', sportEmoji: '🥒', base: '/pickleball/chat', pollPage: 'pkchat', dmUnread, groupUnread: pkGroupUnread, groupMention: pkGroupMention, ann });
 }
 
 // ---------- PROFILE (view another player) ----------

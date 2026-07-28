@@ -22,7 +22,7 @@ import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap, setProgramMeta,
   STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage, runPage, runsPage, pkChatPage, pkJoinPage, runJoinPage, waiverPage,
-  friendsPage, friendsSearchFragment, chatLockedPage,
+  friendsPage, friendsSearchFragment, chatLockedPage, runChatPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -983,15 +983,19 @@ function markPkGroupRead(me) { return markChatRead(2, me); }
 // Chat gate = page gate + pickleball MEMBERSHIP. You must have opened the pickleball run
 // (which joins you) to access its chat — being an approved basketball player isn't enough.
 // pkIsMember/pkGate are hoisted function declarations, so this resolves despite ordering.
-function pkChatGate(req, res, json) {
-  const g = pkGate(req, res); if (!g) return null;         // pkGate already responded on failure
-  if (!pkIsMember(req.userEmail)) {
+// Chat gate (program-generic) = page gate (login + approved + 404 while hidden) + run MEMBERSHIP.
+// You must have opened the run (which joins you) to reach its chat — being approved elsewhere isn't
+// enough. pkChatGate is a thin wrapper; a new run gets its chat gate for free.
+function runChatGate(programId, req, res, json) {
+  const g = programGate(programId, req, res); if (!g) return null; // programGate already responded on failure
+  if (!memberOf(programId, req.userEmail)) {
     if (json) res.status(403).json({ err: 'notmember' });
-    else res.redirect('/pickleball');                      // open the run first to join
+    else res.redirect(P(programId).paths.run);             // open the run first to join
     return null;
   }
   return g;
 }
+function pkChatGate(req, res, json) { return runChatGate(2, req, res, json); }
 
 // ---------- PROGRAM REGISTRY ----------
 // Every run (basketball, pickleball, …) is one entry in this in-memory map, hydrated at boot
@@ -1612,7 +1616,8 @@ const stmtPollChatReact = db.prepare('SELECT COUNT(*) c, MAX(created_at) mx FROM
 // Pickleball chat poll fingerprint (program 2 on the shared tables; own seq key in app_settings).
 const stmtPollPkChat = db.prepare('SELECT COALESCE(MAX(id),0) mx FROM group_messages WHERE program_id = 2');
 const stmtPollPkChatReact = db.prepare('SELECT COUNT(*) c, MAX(created_at) mx FROM group_reactions WHERE program_id = 2');
-function bumpPkChatSeq() { setSetting('pk_chat_seq', String((Number(getSetting('pk_chat_seq')) || 0) + 1)); }
+function bumpChatSeqFor(programId) { const k = P(programId).config.chatSeqKey; setSetting(k, String((Number(getSetting(k)) || 0) + 1)); }
+function bumpPkChatSeq() { return bumpChatSeqFor(2); }
 const stmtPollDM = db.prepare('SELECT MAX(id) mx, COUNT(*) c FROM messages WHERE from_email = ? OR to_email = ?');
 
 // Held late-regulars are released onto the floor from 4pm on the RUN DAY onward — keyed
@@ -2884,135 +2889,141 @@ app.post('/chat/video', requireLogin, (req, res) => {
   });
 });
 
-// ---------- PICKLEBALL CHAT (isolated mirror of /chat*, on pk_group_* tables) ----------
-// Gated by pkGate: approved members + admins, 404 while the run is hidden. Reuses the
-// shared media pipeline (same /chat-media dir) and the base-pathed chat view.
-app.get('/pickleball/chat', requireLogin, (req, res) => {
-  const g = pkChatGate(req, res); if (!g) return;
-  setRunCookie(req, res, 2);
-  const me = req.userEmail;
-  const chatData = loadPkGroupChat(me);
+// ---------- RUN CHAT (program-generic) ----------
+// An opt-in run's own room on the UNIFIED group_messages tables (keyed by program_id) — the same
+// media pipeline (/chat-media) + base-pathed chat view as basketball. Extracted from the pickleball
+// chat routes so a new run gets its whole chat surface from mountRunProgram. Basketball keeps its
+// own inline /chat (the hub run). Gate = programGate + membership; 404 while the run is hidden.
+// Copy/theme/base/rate-limit-bucket/seq-key all come from the registry — no per-program branch.
+function runChatGet(programId, req, res) {
+  const g = runChatGate(programId, req, res); if (!g) return;
+  setRunCookie(req, res, programId);
+  const me = req.userEmail, p = P(programId);
+  const chatData = loadChat(programId, me);
   const isMod = g.admin || !!(g.a && g.a.is_host);
   const canPin = isMod || !!(g.a && g.a.is_team);
-  if (req.headers['x-prewarm'] !== '1') markPkGroupRead(me);
-  res.send(pkChatPage({
-    me,
-    chat: { me, ...chatData, isMod, canPin, err: req.query.err || '' },
-    runDate: pkRunDate(),
-    dmUnread: unreadCount(me),
-    pkGroupUnread: 0, pkGroupMention: 0,
-    ann: null, // no basketball announcement bell on a pickleball surface (matches the pk check-in page)
+  if (req.headers['x-prewarm'] !== '1') markChatRead(programId, me);
+  res.send(runChatPage({
+    me, chat: { me, ...chatData, isMod, canPin, err: req.query.err || '' },
+    program: programId, theme: p.config.theme, sport: p.displayName, sportEmoji: p.emoji,
+    base: p.paths.chat, pollPage: `${p.config.logTag}chat`,
+    dmUnread: unreadCount(me), groupUnread: 0, groupMention: 0, ann: null,
   }));
-});
-app.post('/pickleball/chat/seen', requireLogin, (req, res) => {
-  const g = pkChatGate(req, res); if (!g) return;
-  markPkGroupRead(req.userEmail);
+}
+function runChatSeen(programId, req, res) {
+  const g = runChatGate(programId, req, res); if (!g) return;
+  markChatRead(programId, req.userEmail);
   res.status(204).end();
-});
-app.get('/pickleball/chat/older', requireLogin, (req, res) => {
-  const g = pkChatGate(req, res); if (!g) return;
+}
+function runChatOlder(programId, req, res) {
+  const g = runChatGate(programId, req, res); if (!g) return;
   const me = req.userEmail;
   const before = parseInt(req.query.before, 10);
   if (!Number.isInteger(before) || before <= 0) return res.status(400).send('');
-  const data = loadPkGroupChatOlder(me, before);
+  const data = loadChatOlder(programId, me, before);
   const isMod = g.admin || !!(g.a && g.a.is_host);
   const canPin = isMod || !!(g.a && g.a.is_team);
-  res.send(chatOlderFragment({ me, ...data, isMod, canPin, base: '/pickleball/chat' }));
-});
-app.post('/pickleball/chat', requireLogin, (req, res) => {
+  res.send(chatOlderFragment({ me, ...data, isMod, canPin, base: P(programId).paths.chat }));
+}
+function runChatPost(programId, req, res) {
+  const cb = P(programId).paths.chat, cfg = P(programId).config;
   uploadChatImage(req, res, async (err) => {
-    const g = pkChatGate(req, res); if (!g) return;
-    if (mutedOut(g, res, { back: '/pickleball/chat' })) return;
+    const g = runChatGate(programId, req, res); if (!g) return;
+    if (mutedOut(g, res, { back: cb })) return;
     const me = req.userEmail;
-    if (err) return res.redirect('/pickleball/chat?err=' + (err.code === 'LIMIT_FILE_SIZE' ? 'big' : 'bad'));
+    if (err) return res.redirect(`${cb}?err=` + (err.code === 'LIMIT_FILE_SIZE' ? 'big' : 'bad'));
     const body = (req.body.body || '').trim().slice(0, 1000);
     const file = req.file;
     const sticker = stickerPath(req.body.sticker);
     let replyTo = Number(req.body.reply_to) || 0;
-    if (replyTo && !db.prepare('SELECT 1 FROM group_messages WHERE id = ? AND program_id = 2').get(replyTo)) replyTo = 0;
+    if (replyTo && !db.prepare('SELECT 1 FROM group_messages WHERE id = ? AND program_id = ?').get(replyTo, programId)) replyTo = 0;
     const mentions = body ? validMentions(req.body.mentions) : null;
     if (sticker) {
-      if (rateLimited('pkchat-media', me, 20, 10 * 60 * 1000)) return res.redirect('/pickleball/chat?err=slow');
-      db.prepare('INSERT INTO group_messages (from_email, body, reply_to, image, program_id) VALUES (?,?,?,?,2)')
-        .run(me, '', replyTo || null, sticker);
-      return res.redirect('/pickleball/chat');
+      if (rateLimited(`${cfg.logTag}chat-media`, me, 20, 10 * 60 * 1000)) return res.redirect(`${cb}?err=slow`);
+      db.prepare('INSERT INTO group_messages (from_email, body, reply_to, image, program_id) VALUES (?,?,?,?,?)')
+        .run(me, '', replyTo || null, sticker, programId);
+      return res.redirect(cb);
     }
     if (file && file.buffer && file.buffer.length) {
-      if (rateLimited('pkchat-media', me, 15, 10 * 60 * 1000)) return res.redirect('/pickleball/chat?err=slow');
-      if (!sniffImage(file.buffer)) return res.redirect('/pickleball/chat?err=type');
+      if (rateLimited(`${cfg.logTag}chat-media`, me, 15, 10 * 60 * 1000)) return res.redirect(`${cb}?err=slow`);
+      if (!sniffImage(file.buffer)) return res.redirect(`${cb}?err=type`);
       let msgId = 0;
       try {
         const jpeg = await processChatImage(file.buffer);
-        const info = db.prepare('INSERT INTO group_messages (from_email, body, reply_to, mentions, program_id) VALUES (?,?,?,?,2)')
-          .run(me, body, replyTo || null, mentions);
+        const info = db.prepare('INSERT INTO group_messages (from_email, body, reply_to, mentions, program_id) VALUES (?,?,?,?,?)')
+          .run(me, body, replyTo || null, mentions, programId);
         msgId = info.lastInsertRowid;
         const imgPath = await writeChatImage(jpeg, msgId);
         db.prepare('UPDATE group_messages SET image = ? WHERE id = ?').run(imgPath, msgId);
-        notifyPkMentions(me, body, mentions);
+        notifyChatMentions(programId, me, body, mentions);
       } catch (e) {
         if (msgId) db.prepare('DELETE FROM group_messages WHERE id = ?').run(msgId);
-        console.error(`[pkchat] image process failed for ${me}: ${e.message}`);
-        return res.redirect('/pickleball/chat?err=bad');
+        console.error(`[${cfg.logTag}chat] image process failed for ${me}: ${e.message}`);
+        return res.redirect(`${cb}?err=bad`);
       }
-      return res.redirect('/pickleball/chat');
+      return res.redirect(cb);
     }
-    if (!body) return res.redirect('/pickleball/chat');
-    if (rateLimited('pkchat-send', me, 30, 10 * 60 * 1000)) return res.redirect('/pickleball/chat?err=slow');
-    db.prepare('INSERT INTO group_messages (from_email, body, reply_to, mentions, program_id) VALUES (?,?,?,?,2)')
-      .run(me, body, replyTo || null, mentions);
-    notifyPkMentions(me, body, mentions);
-    res.redirect('/pickleball/chat');
+    if (!body) return res.redirect(cb);
+    if (rateLimited(`${cfg.logTag}chat-send`, me, 30, 10 * 60 * 1000)) return res.redirect(`${cb}?err=slow`);
+    db.prepare('INSERT INTO group_messages (from_email, body, reply_to, mentions, program_id) VALUES (?,?,?,?,?)')
+      .run(me, body, replyTo || null, mentions, programId);
+    notifyChatMentions(programId, me, body, mentions);
+    res.redirect(cb);
   });
-});
-app.post('/pickleball/chat/react', requireLogin, (req, res) => {
-  const g = pkChatGate(req, res); if (!g) return;
-  if (mutedOut(g, res, { back: '/pickleball/chat' })) return;
+}
+function runChatReact(programId, req, res) {
+  const cb = P(programId).paths.chat, cfg = P(programId).config;
+  const g = runChatGate(programId, req, res); if (!g) return;
+  if (mutedOut(g, res, { back: cb })) return;
   const me = req.userEmail;
   const messageId = Number(req.body.message_id) || 0;
-  if (!db.prepare('SELECT 1 FROM group_messages WHERE id = ? AND program_id = 2').get(messageId)) return res.redirect('/pickleball/chat');
+  if (!db.prepare('SELECT 1 FROM group_messages WHERE id = ? AND program_id = ?').get(messageId, programId)) return res.redirect(cb);
   const emoji = validEmoji(req.body.emoji);
-  if (!emoji) return res.redirect('/pickleball/chat');
-  if (rateLimited('pkchat-react', me, 40, 10 * 60 * 1000)) return res.redirect('/pickleball/chat');
+  if (!emoji) return res.redirect(cb);
+  if (rateLimited(`${cfg.logTag}chat-react`, me, 40, 10 * 60 * 1000)) return res.redirect(cb);
   const existing = db.prepare('SELECT emoji FROM group_reactions WHERE group_message_id = ? AND from_email = ?').get(messageId, me);
   if (existing && existing.emoji === emoji) {
     db.prepare('DELETE FROM group_reactions WHERE group_message_id = ? AND from_email = ?').run(messageId, me);
   } else {
-    db.prepare(`INSERT INTO group_reactions (group_message_id, from_email, emoji, program_id) VALUES (?,?,?,2)
+    db.prepare(`INSERT INTO group_reactions (group_message_id, from_email, emoji, program_id) VALUES (?,?,?,?)
                 ON CONFLICT(group_message_id, from_email) DO UPDATE SET emoji = excluded.emoji, created_at = datetime('now')`)
-      .run(messageId, me, emoji);
+      .run(messageId, me, emoji, programId);
   }
-  res.redirect('/pickleball/chat');
-});
-app.post('/pickleball/chat/delete', requireLogin, (req, res) => {
-  const g = pkChatGate(req, res); if (!g) return;
+  res.redirect(cb);
+}
+function runChatDelete(programId, req, res) {
+  const cb = P(programId).paths.chat;
+  const g = runChatGate(programId, req, res); if (!g) return;
   const me = req.userEmail;
   const messageId = Number(req.body.message_id) || 0;
-  const msg = db.prepare('SELECT id, from_email, image, audio, video FROM group_messages WHERE id = ? AND program_id = 2').get(messageId);
-  if (!msg) return res.redirect('/pickleball/chat');
+  const msg = db.prepare('SELECT id, from_email, image, audio, video FROM group_messages WHERE id = ? AND program_id = ?').get(messageId, programId);
+  if (!msg) return res.redirect(cb);
   const isMod = g.admin || !!(g.a && g.a.is_host);
-  if (!isMod && msg.from_email !== me) return res.redirect('/pickleball/chat');
+  if (!isMod && msg.from_email !== me) return res.redirect(cb);
   db.prepare('DELETE FROM group_reactions WHERE group_message_id = ?').run(messageId);
   db.prepare('DELETE FROM group_messages WHERE id = ?').run(messageId);
-  bumpPkChatSeq();
+  bumpChatSeqFor(programId);
   safeUnlinkChatImage(msg.image); safeUnlinkChatImage(msg.audio); safeUnlinkChatImage(msg.video);
-  res.redirect('/pickleball/chat');
-});
-app.post('/pickleball/chat/pin', requireLogin, (req, res) => {
-  const g = pkChatGate(req, res); if (!g) return;
-  if (mutedOut(g, res, { back: '/pickleball/chat' })) return;
+  res.redirect(cb);
+}
+function runChatPin(programId, req, res) {
+  const cb = P(programId).paths.chat;
+  const g = runChatGate(programId, req, res); if (!g) return;
+  if (mutedOut(g, res, { back: cb })) return;
   const canPin = g.admin || !!(g.a && (g.a.is_host || g.a.is_team));
-  if (!canPin) return res.redirect('/pickleball/chat');
+  if (!canPin) return res.redirect(cb);
   const messageId = Number(req.body.message_id) || 0;
-  const msg = db.prepare('SELECT id, pinned_at FROM group_messages WHERE id = ? AND program_id = 2').get(messageId);
-  if (!msg) return res.redirect('/pickleball/chat');
+  const msg = db.prepare('SELECT id, pinned_at FROM group_messages WHERE id = ? AND program_id = ?').get(messageId, programId);
+  if (!msg) return res.redirect(cb);
   if (msg.pinned_at) db.prepare('UPDATE group_messages SET pinned_at = NULL, pinned_by = NULL WHERE id = ?').run(messageId);
   else db.prepare("UPDATE group_messages SET pinned_at = datetime('now'), pinned_by = ? WHERE id = ?").run(req.userEmail, messageId);
-  bumpPkChatSeq();
-  res.redirect('/pickleball/chat');
-});
-app.post('/pickleball/chat/voice', requireLogin, (req, res) => {
+  bumpChatSeqFor(programId);
+  res.redirect(cb);
+}
+function runChatVoice(programId, req, res) {
+  const cfg = P(programId).config;
   uploadChatAudio(req, res, async (err) => {
-    const g = pkChatGate(req, res, true); if (!g) return;
+    const g = runChatGate(programId, req, res, true); if (!g) return;
     if (mutedOut(g, res, { json: true })) return;
     const me = req.userEmail;
     if (err) return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ err: err.code === 'LIMIT_FILE_SIZE' ? 'big' : 'bad' });
@@ -3020,29 +3031,30 @@ app.post('/pickleball/chat/voice', requireLogin, (req, res) => {
     if (!file || !file.buffer || !file.buffer.length) return res.status(400).json({ err: 'empty' });
     const ext = sniffAudio(file.buffer);
     if (!ext) return res.status(415).json({ err: 'type' });
-    if (rateLimited('pkchat-media', me, 15, 10 * 60 * 1000)) return res.status(429).json({ err: 'slow' });
+    if (rateLimited(`${cfg.logTag}chat-media`, me, 15, 10 * 60 * 1000)) return res.status(429).json({ err: 'slow' });
     let dur = Math.round(Number(req.body.dur) || 0);
     if (!(dur > 0)) dur = 0;
     if (dur > 300) dur = 300;
     let replyTo = Number(req.body.reply_to) || 0;
-    if (replyTo && !db.prepare('SELECT 1 FROM group_messages WHERE id = ? AND program_id = 2').get(replyTo)) replyTo = 0;
-    const info = db.prepare('INSERT INTO group_messages (from_email, body, reply_to, program_id) VALUES (?,?,?,2)')
-      .run(me, '', replyTo || null);
+    if (replyTo && !db.prepare('SELECT 1 FROM group_messages WHERE id = ? AND program_id = ?').get(replyTo, programId)) replyTo = 0;
+    const info = db.prepare('INSERT INTO group_messages (from_email, body, reply_to, program_id) VALUES (?,?,?,?)')
+      .run(me, '', replyTo || null, programId);
     const id = info.lastInsertRowid;
     try {
       const apath = await writeChatAudio(file.buffer, id, ext);
       db.prepare('UPDATE group_messages SET audio = ?, audio_dur = ? WHERE id = ?').run(apath, dur, id);
     } catch (e) {
       db.prepare('DELETE FROM group_messages WHERE id = ?').run(id);
-      console.error(`[pkchat] voice write failed for ${me}: ${e.message}`);
+      console.error(`[${cfg.logTag}chat] voice write failed for ${me}: ${e.message}`);
       return res.status(500).json({ err: 'bad' });
     }
     res.json({ ok: 1 });
   });
-});
-app.post('/pickleball/chat/video', requireLogin, (req, res) => {
+}
+function runChatVideo(programId, req, res) {
+  const cfg = P(programId).config;
   uploadChatVideo(req, res, async (err) => {
-    const g = pkChatGate(req, res, true); if (!g) return;
+    const g = runChatGate(programId, req, res, true); if (!g) return;
     if (mutedOut(g, res, { json: true })) return;
     const me = req.userEmail;
     if (err) return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ err: err.code === 'LIMIT_FILE_SIZE' ? 'big' : 'bad' });
@@ -3050,26 +3062,36 @@ app.post('/pickleball/chat/video', requireLogin, (req, res) => {
     if (!file || !file.buffer || !file.buffer.length) return res.status(400).json({ err: 'empty' });
     const ext = sniffVideo(file.buffer);
     if (!ext) return res.status(415).json({ err: 'type' });
-    if (rateLimited('pkchat-media', me, 15, 10 * 60 * 1000)) return res.status(429).json({ err: 'slow' });
+    if (rateLimited(`${cfg.logTag}chat-media`, me, 15, 10 * 60 * 1000)) return res.status(429).json({ err: 'slow' });
     let dur = Math.round(Number(req.body.dur) || 0);
     if (!(dur > 0)) dur = 0;
     if (dur > 3600) dur = 3600;
     let replyTo = Number(req.body.reply_to) || 0;
-    if (replyTo && !db.prepare('SELECT 1 FROM group_messages WHERE id = ? AND program_id = 2').get(replyTo)) replyTo = 0;
-    const info = db.prepare('INSERT INTO group_messages (from_email, body, reply_to, program_id) VALUES (?,?,?,2)')
-      .run(me, '', replyTo || null);
+    if (replyTo && !db.prepare('SELECT 1 FROM group_messages WHERE id = ? AND program_id = ?').get(replyTo, programId)) replyTo = 0;
+    const info = db.prepare('INSERT INTO group_messages (from_email, body, reply_to, program_id) VALUES (?,?,?,?)')
+      .run(me, '', replyTo || null, programId);
     const id = info.lastInsertRowid;
     try {
       const vpath = await writeChatVideo(file.buffer, id, ext);
       db.prepare('UPDATE group_messages SET video = ?, video_dur = ? WHERE id = ?').run(vpath, dur, id);
     } catch (e) {
       db.prepare('DELETE FROM group_messages WHERE id = ?').run(id);
-      console.error(`[pkchat] video write failed for ${me}: ${e.message}`);
+      console.error(`[${cfg.logTag}chat] video write failed for ${me}: ${e.message}`);
       return res.status(500).json({ err: 'bad' });
     }
     res.json({ ok: 1 });
   });
-});
+}
+// ---------- PICKLEBALL CHAT — delegates to the generic runChat* handlers (program 2) ----------
+app.get('/pickleball/chat', requireLogin, (req, res) => runChatGet(2, req, res));
+app.post('/pickleball/chat/seen', requireLogin, (req, res) => runChatSeen(2, req, res));
+app.get('/pickleball/chat/older', requireLogin, (req, res) => runChatOlder(2, req, res));
+app.post('/pickleball/chat', requireLogin, (req, res) => runChatPost(2, req, res));
+app.post('/pickleball/chat/react', requireLogin, (req, res) => runChatReact(2, req, res));
+app.post('/pickleball/chat/delete', requireLogin, (req, res) => runChatDelete(2, req, res));
+app.post('/pickleball/chat/pin', requireLogin, (req, res) => runChatPin(2, req, res));
+app.post('/pickleball/chat/voice', requireLogin, (req, res) => runChatVoice(2, req, res));
+app.post('/pickleball/chat/video', requireLogin, (req, res) => runChatVideo(2, req, res));
 
 app.post('/checkin/join', requireLogin, (req, res) => {
   const email = req.userEmail;
@@ -5297,6 +5319,16 @@ function mountRunProgram(app, program) {
   app.post(`${b}/season`, requireLogin, (req, res) => runSeasonSet(id, req, res));
   app.get(`${b}/banner`, requireAdmin, (req, res) => runBannerGet(id, req, res));
   app.post(`${b}/banner`, requireAdmin, (req, res) => runBannerPost(id, req, res));
+  // Run chat (own room on the unified group_messages tables) — GET + seen/older + post/react/delete/pin/voice/video.
+  app.get(`${b}/chat`, requireLogin, (req, res) => runChatGet(id, req, res));
+  app.post(`${b}/chat/seen`, requireLogin, (req, res) => runChatSeen(id, req, res));
+  app.get(`${b}/chat/older`, requireLogin, (req, res) => runChatOlder(id, req, res));
+  app.post(`${b}/chat`, requireLogin, (req, res) => runChatPost(id, req, res));
+  app.post(`${b}/chat/react`, requireLogin, (req, res) => runChatReact(id, req, res));
+  app.post(`${b}/chat/delete`, requireLogin, (req, res) => runChatDelete(id, req, res));
+  app.post(`${b}/chat/pin`, requireLogin, (req, res) => runChatPin(id, req, res));
+  app.post(`${b}/chat/voice`, requireLogin, (req, res) => runChatVoice(id, req, res));
+  app.post(`${b}/chat/video`, requireLogin, (req, res) => runChatVideo(id, req, res));
   app.post(`${b}/announce`, requireLogin, (req, res) => runAnnounce(id, req, res));
   app.post(`${b}/announce/retract`, requireLogin, (req, res) => runAnnounceRetract(id, req, res));
   app.post(`${b}/publish`, requireAdmin, (req, res) => runPublish(id, req, res));
