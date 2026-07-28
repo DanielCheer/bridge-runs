@@ -384,6 +384,11 @@ a.score{cursor:pointer}
 .tab .ic{width:22px;height:22px;margin:0 auto 5px;display:block}
 .tab.on{color:var(--orange-dark)}
 .tab.on .ic path,.tab.on .ic circle,.tab.on .ic rect{stroke:var(--orange-dark)}
+/* Locked Chat tab (viewer hasn't joined any run): greyed + a small lock glyph, still tappable
+   → the /chat/locked prompt. Dimmed even when it's the active tab so "locked" always reads. */
+.tab.locked{opacity:.5}
+.tab.locked.on{color:var(--muted)}
+.tablock{position:absolute;top:5px;left:calc(50% + 6px);font-size:11px;line-height:1}
 
 /* ---------- legacy typographic scale (names preserved, retinted) ---------- */
 h1,h2{font-family:var(--anton);margin:0 0 12px;color:var(--ink);letter-spacing:.01em;line-height:1.05;font-weight:400}

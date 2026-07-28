@@ -22,7 +22,7 @@ import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap, setProgramMeta,
   STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage, runPage, runsPage, pkChatPage, pkJoinPage, runJoinPage, waiverPage,
-  friendsPage, friendsSearchFragment,
+  friendsPage, friendsSearchFragment, chatLockedPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1020,6 +1020,32 @@ function runCookie(req) {
   const p = PROGRAMS.get(id);
   return (id > 1 && p && p.active()) ? id : 1;
 }
+// Has the viewer JOINED this run? Drives the run-aware Chat tab: it only unlocks + points at a run
+// the viewer actually belongs to. Opt-in runs (pickleball/volleyball) → membership. A drop-in run
+// (basketball) has no explicit join step, so "joined" = you're on the org team, an admin, or you've
+// checked in at least once (a current OR archived check-in). Admins belong to every run (they run them).
+const stmtEverCheckedInProg = db.prepare('SELECT 1 FROM checkins WHERE program_id = ? AND email = ? LIMIT 1');
+const stmtEverAttendedProg  = db.prepare('SELECT 1 FROM attendance WHERE program_id = ? AND email = ? LIMIT 1');
+function programJoinedBy(programId, email) {
+  if (!email) return false;
+  if (isAdmin(email)) return true;
+  if (P(programId).config.access === 'opt-in') return memberOf(programId, email);
+  const a = applicantByEmail(email);
+  if (a && a.is_team) return true;
+  return !!stmtEverCheckedInProg.get(programId, email) || !!stmtEverAttendedProg.get(programId, email);
+}
+// The program whose chat the Chat tab should open on a run-agnostic page (runs hub, profile,
+// friends, a join prompt). Returns 0 when the viewer has joined NO active run → the tab renders
+// LOCKED (grey + a "join a run first" prompt) instead of silently defaulting to basketball, which
+// is an approved-players-only run. Prefers the last-opened run (cookie) when it's one they've
+// joined; else their lowest-id joined run.
+function chatProgramFor(req) {
+  const email = req.userEmail;
+  const joined = [...PROGRAMS.values()].filter(p => p.active() && programJoinedBy(p.id, email));
+  if (!joined.length) return 0;
+  const ck = Number(req.cookies && req.cookies.bridge_run);
+  return (joined.find(p => p.id === ck) || joined[0]).id;
+}
 // The chat unread counts for a given program — used on the neutral pages so the run-aware
 // Chat tab badge matches the room it will open. Delegates to that program's dispatch.
 function chatCountsFor(program, email, aid) {
@@ -1847,8 +1873,8 @@ app.get('/runs', requireLogin, (req, res) => {
     runs.push({ key: p.key, emoji: p.emoji, name: p.displayName, href: p.paths.run, ...p.hubCard(req) });
   }
 
-  const chatProgram = runCookie(req);
-  const cc = chatCountsFor(chatProgram, email, a ? a.id : 0);
+  const chatProgram = chatProgramFor(req);
+  const cc = chatCountsFor(chatProgram || 1, email, a ? a.id : 0);
   res.send(runsPage({
     email, runs, canJoin, status,
     isAdmin: viewerIsAdmin,
@@ -2043,6 +2069,8 @@ app.get('/u/:id', requireLogin, (req, res) => {
   if (!p || (p.status !== 'approved' && !gate.viewerIsAdmin)) return res.redirect('/checkin');
   // OWNER RULE: operators (admin/team) see full name + phone; regular players don't.
   const canContact = gate.viewerIsAdmin || !!(gate.a && gate.a.is_team);
+  const chatProgram = chatProgramFor(req);
+  const cc = chatCountsFor(chatProgram || 1, req.userEmail, gate.a ? gate.a.id : 0);
   res.send(profilePage({
     p, stats: attendanceStats(p.email), isSelf: p.email === req.userEmail, canContact,
     rel: relationshipTo(req.userEmail, p.email), // friend/block affordance state
@@ -2050,8 +2078,8 @@ app.get('/u/:id', requireLogin, (req, res) => {
     runDate: nextRunDate(),
     hours: runTimeRange(nextRunDate()),
     back: P(runCookie(req)).paths.chat, // Back returns to the run you came from (its own chat room)
-    dmUnread: unreadCount(req.userEmail), groupUnread: groupUnread(req.userEmail),
-    groupMention: groupMentionUnread(req.userEmail, gate.a ? gate.a.id : 0),
+    dmUnread: unreadCount(req.userEmail), groupUnread: cc.group,
+    groupMention: cc.gm, chatProgram, // Chat tab reflects the run they've joined (or locks if none)
     ann: annPanel(req.userEmail),
   }));
 });
@@ -2074,8 +2102,8 @@ app.get('/profile', requireLogin, (req, res) => {
   // to a friendly message in the view. Codes come from the /profile/photo route below.
   const photoMsg = req.query.photo ? String(req.query.photo)
     : (req.query.photoerr ? 'err:' + String(req.query.photoerr) : '');
-  const chatProgram = runCookie(req);
-  const cc = chatCountsFor(chatProgram, a.email, a.id);
+  const chatProgram = chatProgramFor(req);
+  const cc = chatCountsFor(chatProgram || 1, a.email, a.id);
   res.send(profileTabPage({ a, stats: attendanceStats(a.email), saved: req.query.saved === '1', error: '',
     dmUnread: unreadCount(a.email), groupUnread: cc.group, groupMention: cc.gm, chatProgram, canOperate, announcementLog: canOperate ? announcementHistory() : [],
     friendCount: friendsOf(a.email).length, friendReqIn: friendReqIncomingCount(a.email), followerCount: followersOf(a.email).length, // Friends entry-point summary
@@ -2161,6 +2189,7 @@ app.post('/profile', requireLogin, (req, res) => {
   const errProps = {
     a, stats, dmUnread: unreadCount(a.email), groupUnread: groupUnread(a.email), groupMention: groupMentionUnread(a.email, a.id),
     canOperate, iAmHost, announcementLog: canOperate ? announcementHistory() : [], threads: loadInbox(a.email), ann: annPanel(a.email),
+    chatProgram: chatProgramFor(req), // keep the run-aware Chat tab correct on a validation re-render too
   };
   if (!full_name || !phone || !isValidEmail(email))
     return res.send(profileTabPage({ ...errProps, error: 'Name, phone, and a valid email are required.' }));
@@ -2553,11 +2582,12 @@ app.get('/friends', requireLogin, (req, res) => {
   const followers = flwrs.map(e => { const p = shape(e); return p ? { ...p, followsBack: followingSet.has(lc(e)) } : null; })
     .filter(p => p && !iBlocked(me, p.email)); // "Follow back" vs "Following ✓"; hide any I've blocked
   const following = flwng.map(shape).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
-  const cc = chatCountsFor(runCookie(req), gate.a.email, gate.a.id);
+  const chatProgram = chatProgramFor(req);
+  const cc = chatCountsFor(chatProgram || 1, gate.a.email, gate.a.id);
   res.send(friendsPage({
     q, results: searchResultsFor(me, q), blocked, followers, following, games: friendsGamesFor(me),
     dmUnread: unreadCount(gate.a.email), groupUnread: cc.group, groupMention: cc.gm,
-    chatProgram: runCookie(req), ann: annPanel(gate.a.email),
+    chatProgram, ann: annPanel(gate.a.email),
   }));
 });
 // Typeahead fragment for the live search box (returns just the result rows).
@@ -2601,6 +2631,15 @@ app.post('/friends/unfollow', requireLogin, socialRoute((me, them) => doUnfollow
 // Coexists with the 1:1 host DMs above — separate tables, separate routes. All
 // four routes: requireLogin + requirePlayer (approved players + admins). Sender
 // identity comes ONLY from req.userEmail; a body from_email is never trusted.
+
+// Chat is LOCKED until you've joined a run. The run-aware Chat tab points here for a viewer who
+// belongs to no run; it explains why + links to the runs hub. Self-correcting: if they HAVE
+// joined a run (e.g. just did), bounce straight to that run's chat rather than show the lock.
+app.get('/chat/locked', requireLogin, (req, res) => {
+  const pid = chatProgramFor(req);
+  if (pid) return res.redirect(P(pid).paths.chat);
+  res.send(chatLockedPage({ email: req.userEmail, dmUnread: unreadCount(req.userEmail) }));
+});
 
 // The room — its own full page (the Chat tab). Last ~200 messages ASC in bulk +
 // reactions map + reply-parent map + sender map (no N+1). Opening the room UPSERTs
@@ -4790,10 +4829,11 @@ function runGuest(programId, req, res) {
 function runGetPage(programId, req, res) {
   const base = P(programId).paths.run, cfg = P(programId).config, prog = P(programId);
   const g = programGate(programId, req, res); if (!g) return;
-  if (!memberOf(programId, req.userEmail)) {   // not a member yet → opt-in join prompt (Chat tab stays on basketball)
+  if (!memberOf(programId, req.userEmail)) {   // not a member yet → opt-in join prompt (Chat tab reflects joined runs, or locks)
     const me = req.userEmail, mid = applicantIdOf(me);
+    const cp = chatProgramFor(req), cc = chatCountsFor(cp || 1, me, mid);
     return res.send(runJoinPage({ email: me, runDate: programRunDate(programId), runLabel: runLabelFor(programRunDate(programId)),
-      dmUnread: unreadCount(me), groupUnread: groupUnread(me), groupMention: groupMentionUnread(me, mid), ann: null,
+      dmUnread: unreadCount(me), groupUnread: cc.group, groupMention: cc.gm, chatProgram: cp, ann: null,
       runBase: base, theme: cfg.theme, sport: prog.displayName, sportEmoji: prog.emoji }));
   }
   setRunCookie(req, res, programId);

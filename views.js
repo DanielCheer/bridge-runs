@@ -1281,18 +1281,23 @@ const progMeta = (id) => PROGRAM_META[id] || PROGRAM_META[1];
 // data-tab lets the live poll patch the right tab regardless of its (varying) href; the Chat
 // tab also carries data-chat-program so the poll patcher knows which program's unread to show.
 const tabNav = (current, { dm = 0, group = 0, groupMention = 0, program = 1 } = {}) => {
-  const tab = (href, key, label, extra = '', attrs = '') => `<a href="${href}" data-tab="${key}"${attrs} class="tab${current === key ? ' on' : ''}">${ICON[key]}${label}${extra}</a>`;
+  const tab = (href, key, label, extra = '', attrs = '', cls = '') => `<a href="${href}" data-tab="${key}"${attrs} class="tab${current === key ? ' on' : ''}${cls}">${ICON[key]}${label}${extra}</a>`;
   // groupMention > 0 → a DISTINCT "@" marker (teal) instead of the plain orange count,
   // so a mentioned player can tell "you were tagged" from ordinary unread at a glance.
   const badge = (n, mention = 0) => n > 0
     ? `<span class="tabbadge${mention > 0 ? ' mention' : ''}">${mention > 0 ? '@' : ''}${n > 9 ? '9+' : n}</span>`
     : '';
-  // The Chat tab is run-aware: its href + which program's unread it shows both come from the
-  // program registry, so a third run needs no new branch here — just a registry entry.
-  const chatHref = progMeta(program).chat;
+  // program === 0 → the viewer has joined no run: the Chat tab is LOCKED (greyed + a lock glyph,
+  // still tappable → the "join a run first" prompt at /chat/locked). It carries no data-chat-program,
+  // so the live badge patcher leaves it alone. Otherwise the tab is run-aware: its href + which
+  // program's unread it shows both come from the registry, so a new run needs no branch here.
+  const chatLocked = program === 0;
+  const chatHref = chatLocked ? '/chat/locked' : progMeta(program).chat;
+  const chatExtra = chatLocked ? '<span class="tablock" aria-hidden="true">🔒</span>' : badge(group, groupMention);
+  const chatAttrs = chatLocked ? ' data-chat-locked="1"' : ` data-chat-program="${program}"`;
   return `<nav class="tabs"><div class="tabrow">
     ${tab('/runs', 'runs', 'Runs')}
-    ${tab(chatHref, 'chat', 'Chat', badge(group, groupMention), ` data-chat-program="${program}"`)}
+    ${tab(chatHref, 'chat', 'Chat', chatExtra, chatAttrs, chatLocked ? ' locked' : '')}
     ${tab('/profile', 'profile', 'Profile', badge(dm))}
   </div></nav>`;
 };
@@ -2430,7 +2435,7 @@ export function profileCard({ p, stats, canContact = false, isSelf = false }) {
     <div class="pcbtns">${isSelf ? `<a class="btn ghost sm" href="/profile">Edit profile</a>` : `<a class="btn primary sm" href="/messages/${p.id}">Message</a>`}<a class="btn ghost sm" href="/u/${p.id}">Full profile →</a></div>`;
 }
 
-export function profilePage({ p, stats, isSelf = false, canContact = false, rel = 'none', following = false, runDate = '', hours = '8:30–10:30 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null, back = '/chat' }) {
+export function profilePage({ p, stats, isSelf = false, canContact = false, rel = 'none', following = false, runDate = '', hours = '8:30–10:30 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null, back = '/chat' }) {
   const badges = [
     p.is_host ? '<span class="bdg host">★ Host</span>' : '',
     p.is_team ? '<span class="bdg team">◆ Team</span>' : (p.is_regular ? '<span class="bdg core">★ Pillar</span>' : ''),
@@ -2479,7 +2484,7 @@ export function profilePage({ p, stats, isSelf = false, canContact = false, rel 
     ${contact}
     ${prow}
     ${frControls}
-  ` + footWithTabs(tabNav(isSelf ? 'profile' : '', { dm: dmUnread, group: groupUnread, groupMention }));
+  ` + footWithTabs(tabNav(isSelf ? 'profile' : '', { dm: dmUnread, group: groupUnread, groupMention, program: chatProgram }));
 }
 
 // ---------- FRIENDS (Phase 6: social graph home) ----------
@@ -2757,9 +2762,10 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
 
 // Pickleball JOIN PROMPT — shown when an approved member who hasn't joined pickleball opens
 // the run. Joining is opt-in (separate from basketball approval): tap Join → become a member →
-// see the run + chat. Chat tab stays on basketball here (they're not a pickleball member yet).
+// see the run + chat. The Chat tab reflects the runs they HAVE joined (or locks if none) — it
+// never assumes basketball, since this viewer isn't a member of THIS run.
 // Program-generic join prompt. Defaults reproduce PICKLEBALL exactly; pkJoinPage is a wrapper.
-export function runJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null,
+export function runJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null,
   runBase = '/pickleball', theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒' }) {
   return HEAD(`Join ${sport} — The Bridge`, `has-tabs ${theme}`) + header(`<b>${sport.toUpperCase()}</b>${esc(email)}`, '', ann, '') + `
     ${backToRuns}
@@ -2771,7 +2777,7 @@ export function runJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, 
       <p class="lead" style="margin:0 0 14px">Join to check in each week and chat with the ${sport.toLowerCase()} crew — it's its own run, with its own check-in and chat.${runLabel ? ` Next run: <b>${esc(wdayFull(runDate))}, ${esc(runLabel)}</b>.` : ''}</p>
       <form method="POST" action="${runBase}/join-run"><button class="btn primary" type="submit">${sportEmoji} Join ${sport.toLowerCase()}</button></form>
     </div>
-  ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: 1 }));
+  ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: chatProgram }));
 }
 export function pkJoinPage(state) { return runJoinPage(state); }
 
@@ -3952,6 +3958,22 @@ export function statusPage({ email, status }) {
     ${homeScreenCard}
     <div class="foot" style="margin-top:24px"><a href="/logout">Sign out</a></div>
   ` + FOOT;
+}
+
+// ---------- CHAT LOCKED (no run joined yet) ----------
+// The run-aware Chat tab lands here for a viewer who belongs to no run. Greyed tab + this prompt =
+// "join a run to unlock its chat." Self-correcting on the server: anyone who HAS joined a run is
+// bounced to that run's real chat before this ever renders.
+export function chatLockedPage({ email, dmUnread = 0 }) {
+  return HEAD('Chat — The Bridge', 'has-tabs') + header('<b>CHAT</b>' + esc(email)) + `
+    <div class="rule"></div>
+    <div class="card rail" style="margin-top:18px;text-align:center;padding:26px 20px">
+      <div style="font-size:42px;line-height:1">🔒</div>
+      <h1 style="margin:10px 0 6px">Chat is locked</h1>
+      <p class="lead" style="margin:0 auto 18px;max-width:32ch">Join a run to unlock its chat and talk with the group.</p>
+      <a class="btn primary" href="/runs">Browse runs →</a>
+    </div>
+  ` + footWithTabs(tabNav('chat', { dm: dmUnread, program: 0 }));
 }
 
 // Sign-out confirmation. GET /logout renders THIS (a harmless read — no state
