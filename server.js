@@ -3766,7 +3766,6 @@ const PK_CAP = Number(process.env.PK_CAP || 20), PK_WAIT = Number(process.env.PK
 // Hoisted like their basketball twins (stmtRunIsOpen / stmtRun / stmtLatestAnnouncement) —
 // node:sqlite has NO statement cache, so these re-compiled SQL on EVERY /poll tick for every
 // signed-in viewer (pkProgramActive also runs on every /runs and /profile render).
-const stmtPkActive = db.prepare('SELECT active FROM program WHERE id = 2');
 const stmtPkIsOpen = db.prepare('SELECT is_open FROM run_state WHERE run_date = ? AND program_id = 2');
 const stmtPkIsCancelled = db.prepare('SELECT cancelled FROM run_state WHERE run_date = ? AND program_id = 2');
 const stmtPkRoster = db.prepare(`
@@ -3775,7 +3774,8 @@ const stmtPkRoster = db.prepare(`
     FROM checkins c LEFT JOIN applicants a ON a.email = c.email
     WHERE c.run_date = ? AND c.program_id = ? ORDER BY c.sort_order ASC, c.id ASC`);
 const stmtLatestPkAnnouncement = db.prepare('SELECT id, body, author, at AS created_at FROM announcements WHERE program_id = 2 AND COALESCE(archived,0) = 0 ORDER BY id DESC LIMIT 1');
-function pkProgramActive() { const r = stmtPkActive.get(); return !!(r && r.active); }
+function programActive(programId) { const r = stmtProgActiveById.get(programId); return !!(r && r.active); }
+function pkProgramActive() { return programActive(2); }
 // Pickleball's standing day = Tuesday (PK_DOW=2), DECOUPLED from basketball so moving the
 // basketball run (RUN_DOW) never drags pickleball's date along. Weekly auto-schedule:
 // check-in reopens right after the run ends (PK_END_H), the roster locks at start
@@ -3981,13 +3981,17 @@ function pkAutoRunState() {
   }
 }
 // Access gate: approved players + admins. HIDDEN while program 2 is inactive → admins only.
-function pkGate(req, res) {
+// Access gate for an opt-in run (pickleball, volleyball): approved players + admins in; a hidden
+// program 404s for everyone but admins. Operator = admin for now. programGate is program-generic;
+// pkGate stays a thin wrapper so call sites are untouched.
+function programGate(programId, req, res) {
   const a = applicantByEmail(req.userEmail);
   const admin = isAdmin(req.userEmail);
   if (!admin && (!a || a.status !== 'approved')) { res.redirect('/status'); return null; } // row-less admins allowed (matches requirePlayer)
-  if (!pkProgramActive() && !admin) { res.status(404).send('Not found'); return null; } // hidden from everyone but admins
-  return { a, admin, canOperate: admin }; // pickleball operator = admin for now (Daniel)
+  if (!programActive(programId) && !admin) { res.status(404).send('Not found'); return null; } // hidden from everyone but admins
+  return { a, admin, canOperate: admin };
 }
+function pkGate(req, res) { return programGate(2, req, res); }
 // Hoisted — pkEnsureWeek runs on every /runs + /pickleball GET, /pickleball/join, and the 60s tick.
 const stmtPkPastDates = db.prepare('SELECT DISTINCT run_date FROM checkins WHERE program_id = 2 AND run_date <= ?');
 const stmtPkArchiveIns = db.prepare('INSERT OR IGNORE INTO attendance (run_date, email, name, program_id) VALUES (?,?,?,2)');
