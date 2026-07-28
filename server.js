@@ -1034,6 +1034,7 @@ function canMessage(senderEmail, senderA, recip) {
   if (!recip || recip.status !== 'approved') return false;
   if (recip.email === senderEmail) return false;            // no messaging yourself
   if (/@guest\.local$/.test(recip.email)) return false;     // guest placeholders aren't accounts
+  if (blockedPair(senderEmail, recip.email)) return false;  // a blocked pair (either direction) can't DM (Phase 6)
   if (senderA && senderA.is_host) return true;              // host → anyone approved
   // Player-to-player DMs: any approved player may message any other approved player.
   return !!(senderA && (senderA.status === 'approved' || senderA.is_team));
@@ -2383,7 +2384,7 @@ app.get('/players/search', requireLogin, (req, res) => {
   const like = q.replace(/[\\%_]/g, c => '\\' + c);
   const rows = db.prepare(`
     SELECT id, full_name, email, avatar FROM applicants
-    WHERE full_name LIKE ? ESCAPE '\\'
+    WHERE full_name LIKE ? ESCAPE '\\' AND status = 'approved' AND email NOT LIKE '%@guest.local'
     ORDER BY (CASE WHEN full_name LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END), full_name COLLATE NOCASE
     LIMIT 8`).all('%' + like + '%', like + '%');
   res.json(rows.map(r => ({ id: r.id, name: r.full_name, avatar: avatarUrlFor(r.email) || '' })));
@@ -3697,9 +3698,9 @@ app.get('/admin/people', requireAdmin, (req, res) => {
   const q = (req.query.q || '').trim();
   let people;
   if (q) {
-    const like = `%${q}%`;
+    const like = `%${q.replace(/[\\%_]/g, c => '\\' + c)}%`; // escape wildcards (consistency w/ public searches)
     people = db.prepare(
-      `SELECT * FROM applicants WHERE full_name LIKE ? OR email LIKE ? OR phone LIKE ?
+      `SELECT * FROM applicants WHERE full_name LIKE ? ESCAPE '\\' OR email LIKE ? ESCAPE '\\' OR phone LIKE ? ESCAPE '\\'
        ORDER BY full_name COLLATE NOCASE`).all(like, like, like);
   } else {
     people = db.prepare('SELECT * FROM applicants ORDER BY full_name COLLATE NOCASE').all();

@@ -2445,7 +2445,8 @@ export function profilePage({ p, stats, isSelf = false, canContact = false, rel 
     : '';
   const prowBtns = [];
   // Message any approved player in-app (player-to-player DMs). Host keeps its own wording.
-  if (!isSelf && p.status === 'approved' && !/@guest\.local$/.test(p.email))
+  // Hidden across a block (either direction) — matches canMessage server-side (Phase 6).
+  if (!isSelf && p.status === 'approved' && !/@guest\.local$/.test(p.email) && rel !== 'blocked' && rel !== 'blocked_by')
     prowBtns.push(`<a class="btn primary" href="/messages/${p.id}">Message${p.is_host ? ' the host' : ' ' + esc((p.full_name || '').split(' ')[0])}</a>`);
   if (canContact) prowBtns.push(`<a class="btn ghost" href="tel:${esc(p.phone)}">Call</a>`);
   if (canContact && !p.is_host) prowBtns.push(`<a class="btn ghost" href="sms:${esc(p.phone)}">Text</a>`);
