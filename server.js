@@ -3426,38 +3426,46 @@ app.post('/admin/banner', requireApprover, (req, res) => {
     }
   });
 });
-// Pickleball banner change — same cropper as basketball, writes pk-banner.jpg.
-app.get('/pickleball/banner', requireAdmin, (req, res) => {
-  res.send(bannerPage({ err: req.query.err || '', bannerVer: pkBannerVersion(), action: '/pickleball/banner', imgSrc: pkBannerSrc(), back: '/pickleball', bodyClass: 'pk' }));
-});
-app.post('/pickleball/banner', requireAdmin, (req, res) => {
+// Run banner change (program-generic) — same cropper as basketball, but writes each run's OWN
+// banner file (config.bannerPath) + redirects to its own base path. Pickleball delegates here;
+// volleyball (+ any future run) gets it via mountRunProgram. Basketball keeps its own /admin/banner
+// (a different route on the shared gym.jpg), so it stays inline.
+function runBannerGet(programId, req, res) {
+  const b = P(programId).paths.run, cfg = P(programId).config;
+  res.send(bannerPage({ err: req.query.err || '', bannerVer: bannerVersionFor(programId), action: `${b}/banner`, imgSrc: bannerSrcFor(programId), back: b, bodyClass: cfg.theme }));
+}
+function runBannerPost(programId, req, res) {
+  const b = P(programId).paths.run, cfg = P(programId).config;
   uploadBanner(req, res, async (err) => {
-    if (err) return res.redirect('/pickleball/banner?err=' + (err.code === 'LIMIT_FILE_SIZE' ? 'big' : 'bad'));
+    if (err) return res.redirect(`${b}/banner?err=` + (err.code === 'LIMIT_FILE_SIZE' ? 'big' : 'bad'));
     const file = req.file;
-    if (!file || !file.buffer || !file.buffer.length) return res.redirect('/pickleball/banner?err=empty');
-    if (!sniffImage(file.buffer)) return res.redirect('/pickleball/banner?err=type');
+    if (!file || !file.buffer || !file.buffer.length) return res.redirect(`${b}/banner?err=empty`);
+    if (!sniffImage(file.buffer)) return res.redirect(`${b}/banner?err=type`);
     try {
       const m = await sharp(file.buffer).metadata();
       const oriented = (m.orientation || 1) >= 5;
       const W = oriented ? m.height : m.width, H = oriented ? m.width : m.height;
       let left = Math.round(Number(req.body.cx)), top = Math.round(Number(req.body.cy));
       let width = Math.round(Number(req.body.cw)), height = Math.round(Number(req.body.ch));
-      if (!(W > 0 && H > 0 && width > 0 && height > 0)) return res.redirect('/pickleball/banner?err=crop');
+      if (!(W > 0 && H > 0 && width > 0 && height > 0)) return res.redirect(`${b}/banner?err=crop`);
       left = Math.max(0, Math.min(left, W - 1)); top = Math.max(0, Math.min(top, H - 1));
       width = Math.max(1, Math.min(width, W - left)); height = Math.max(1, Math.min(height, H - top));
       const out = await sharp(file.buffer, { failOn: 'error' }).rotate()
         .extract({ left, top, width, height })
         .resize(2320, 1102, { fit: 'fill' })
         .jpeg({ quality: 84, mozjpeg: true }).toBuffer();
-      await fs.promises.writeFile(PK_BANNER_PATH, out);
-      audit(req.userEmail, req.actorRole, 'pk:banner:update', `${width}x${height}`);
-      return res.redirect('/pickleball');
+      await fs.promises.writeFile(cfg.bannerPath, out);
+      audit(req.userEmail, req.actorRole, `${cfg.logTag}:banner:update`, `${width}x${height}`);
+      return res.redirect(b);
     } catch (e) {
-      console.error(`[pk-banner] crop failed for ${req.userEmail}: ${e.message}`);
-      return res.redirect('/pickleball/banner?err=bad');
+      console.error(`[${cfg.logTag}-banner] crop failed for ${req.userEmail}: ${e.message}`);
+      return res.redirect(`${b}/banner?err=bad`);
     }
   });
-});
+}
+// Pickleball banner — delegates to the generic handler (writes pk-banner.jpg).
+app.get('/pickleball/banner', requireAdmin, (req, res) => runBannerGet(2, req, res));
+app.post('/pickleball/banner', requireAdmin, (req, res) => runBannerPost(2, req, res));
 
 // An approver casts (or changes) their vote. Unanimous approve → approved;
 // any reject → rejected. Recomputed live.
@@ -5287,6 +5295,8 @@ function mountRunProgram(app, program) {
   app.post(`${b}/guest`, requireLogin, (req, res) => runGuest(id, req, res));
   app.get(`${b}/season`, requireLogin, (req, res) => runGetSeason(id, req, res));
   app.post(`${b}/season`, requireLogin, (req, res) => runSeasonSet(id, req, res));
+  app.get(`${b}/banner`, requireAdmin, (req, res) => runBannerGet(id, req, res));
+  app.post(`${b}/banner`, requireAdmin, (req, res) => runBannerPost(id, req, res));
   app.post(`${b}/announce`, requireLogin, (req, res) => runAnnounce(id, req, res));
   app.post(`${b}/announce/retract`, requireLogin, (req, res) => runAnnounceRetract(id, req, res));
   app.post(`${b}/publish`, requireAdmin, (req, res) => runPublish(id, req, res));
