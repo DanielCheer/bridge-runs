@@ -3861,36 +3861,53 @@ function pkEmailRecipients() {
   return db.prepare(`SELECT pm.email FROM program_membership pm JOIN applicants a ON a.email = pm.email
     WHERE pm.program_id = 2 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local' AND COALESCE(a.email_optout,0) = 0`).all().map(r => r.email);
 }
-// Seat auto-renew members onto the floor for run `rd` (idempotent). Respects the total cap,
-// waiver, suspended. Shared by the scheduled auto-open AND the manual "Open check-in" so the
-// operator flow behaves like basketball's autoJoinTeam.
-function pkSeatRenewers(rd) {
+// ---------- UNIFIED SEATING ENGINE (Phase 3c) ----------
+// Seat a program's auto-renew members onto the floor for run `rd` (idempotent). ONE engine for
+// every run — it reads P(id).config for the caps + the auto-renew ELIGIBILITY MODEL, so a new run
+// is a config row, not cloned code. Two sources (config.autoRenew.from):
+//   'members' — any opt-in member with program_membership.auto_renew (pickleball/volleyball). The
+//               shared org team (applicants.is_team) is seated FIRST, then non-team members fill.
+//   'team'    — only the org team auto-renews (basketball); auto_renew lives on applicants; NO
+//               non-team fill. (Basketball wires here at its own cutover — pickleball switches first.)
+// Team float above the floor via negative sort_order; a hard cap+waitlist trim drops the lowest
+// (necessarily non-team) if team priority pushed anyone past. waiver_ok + not-suspended + this-week
+// opt-out gate EVERY seat path — the auto-seat waiver hole, closed once, must not reopen generically.
+function seatRenewers(programId, rd) {
   if (!rd) return 0;
-  // Eligible pickleball renewers = approved pk members with auto_renew, waiver, not suspended,
-  // not opted-out this week. TEAM members (applicants.is_team — the org team, shared with
-  // basketball) get TOP priority: seated first above the floor, bumping the newest non-team
-  // past the cap if needed — mirrors basketball's autoJoinTeam. No core tier (by design).
-  const renewers = db.prepare(`SELECT pm.email, a.full_name, COALESCE(a.is_team,0) AS is_team
-    FROM program_membership pm JOIN applicants a ON a.email = pm.email
-    WHERE pm.program_id = 2 AND pm.auto_renew = 1 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local'
-      AND COALESCE(a.suspended,0) = 0 AND COALESCE(a.waiver_ok,0) = 1
-      AND NOT EXISTS (SELECT 1 FROM regular_optout o WHERE o.run_date = ? AND o.email = pm.email AND o.program_id = 2)
-    ORDER BY a.id`).all(rd);
-  const insTeam = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, sort_order, program_id) VALUES (?,?,?,?,2)');
-  const insR = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, program_id) VALUES (?,?,?,2)');
+  const cfg = P(programId).config, total = cfg.cap + cfg.waitlist;
+  const insTeam = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, sort_order, program_id) VALUES (?,?,?,?,?)');
+  const insR = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, program_id) VALUES (?,?,?,?)');
+  let team = [], nonTeam = [];
+  if (cfg.autoRenew.from === 'members') {
+    const renewers = db.prepare(`SELECT pm.email, a.full_name, COALESCE(a.is_team,0) AS is_team
+      FROM program_membership pm JOIN applicants a ON a.email = pm.email
+      WHERE pm.program_id = ? AND pm.auto_renew = 1 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local'
+        AND COALESCE(a.suspended,0) = 0 AND COALESCE(a.waiver_ok,0) = 1
+        AND NOT EXISTS (SELECT 1 FROM regular_optout o WHERE o.run_date = ? AND o.email = pm.email AND o.program_id = ?)
+      ORDER BY a.id`).all(programId, rd, programId);
+    team = renewers.filter(r => r.is_team); nonTeam = renewers.filter(r => !r.is_team);
+  } else { // 'team' — only the org team auto-renews (basketball); opt-out checked per-row (matches autoJoinTeam)
+    const optedOut = db.prepare('SELECT 1 FROM regular_optout WHERE run_date = ? AND email = ? AND program_id = ?');
+    team = db.prepare(`SELECT email, full_name FROM applicants
+      WHERE is_team = 1 AND status = 'approved' AND auto_renew = 1 AND COALESCE(suspended,0) = 0 AND COALESCE(waiver_ok,0) = 1`)
+      .all().filter(t => !optedOut.get(rd, t.email, programId));
+  }
   let added = 0;
   // Team first, top priority — negative sort_order so they float above any first-come joiners.
-  let { m } = db.prepare('SELECT MIN(sort_order) m FROM checkins WHERE run_date = ? AND program_id = 2').get(rd);
+  let { m } = db.prepare('SELECT MIN(sort_order) m FROM checkins WHERE run_date = ? AND program_id = ?').get(rd, programId);
   let order = (m ?? 0);
-  for (const r of renewers.filter(r => r.is_team)) { order -= 1; if (insTeam.run(rd, r.email, r.full_name, order).changes > 0) added++; }
-  // Non-team renewers fill the remaining room up to cap + waitlist.
-  let room = (PK_CAP + PK_WAIT) - db.prepare('SELECT COUNT(*) n FROM checkins WHERE run_date = ? AND program_id = 2').get(rd).n;
-  for (const r of renewers.filter(r => !r.is_team)) { if (room <= 0) break; if (insR.run(rd, r.email, r.full_name).changes > 0) { room--; added++; } }
+  for (const r of team) { order -= 1; if (insTeam.run(rd, r.email, r.full_name, order, programId).changes > 0) added++; }
+  // Non-team renewers fill the remaining room up to cap + waitlist ('members' only; team-source leaves this empty).
+  let room = total - db.prepare('SELECT COUNT(*) n FROM checkins WHERE run_date = ? AND program_id = ?').get(rd, programId).n;
+  for (const r of nonTeam) { if (room <= 0) break; if (insR.run(rd, r.email, r.full_name, programId).changes > 0) { room--; added++; } }
   // Hard total cap: team priority may have pushed non-team past cap+wait — trim the lowest.
-  const rows = db.prepare('SELECT id FROM checkins WHERE run_date = ? AND program_id = 2 ORDER BY sort_order ASC, id ASC').all(rd);
-  if (rows.length > PK_CAP + PK_WAIT) { const del = db.prepare('DELETE FROM checkins WHERE id = ?'); for (const r of rows.slice(PK_CAP + PK_WAIT)) del.run(r.id); }
+  const rows = db.prepare('SELECT id FROM checkins WHERE run_date = ? AND program_id = ? ORDER BY sort_order ASC, id ASC').all(rd, programId);
+  if (rows.length > total) { const del = db.prepare('DELETE FROM checkins WHERE id = ?'); for (const r of rows.slice(total)) del.run(r.id); }
   return added;
 }
+// Shared by the scheduled auto-open AND the manual "Open check-in". Pickleball is on the unified
+// seating engine (Phase 3c); basketball's autoJoinTeam converges at its own cutover.
+function pkSeatRenewers(rd) { return seatRenewers(2, rd); }
 // When a FLOOR player leaves, the next waitlister silently crosses onto the floor (pkPartition
 // re-slices by order — pickleball has no offer/claim window, it's immediate first-come). Push
 // that person so they actually know a spot opened. CALL THIS BEFORE deleting the leaver, passing
@@ -4297,6 +4314,7 @@ const PROGRAM_DEFS = {
       openDaysBefore: OPEN_DAYS_BEFORE, openHour: OPEN_H, lockTime: '14:00',
       theme: 'default', access: 'apply', approval: 'council',
       tiers: ['team', 'core', 'host'], offerWindow: true,
+      autoRenew: { from: 'team' },   // only the org team (applicants.is_team) auto-renews; no non-team fill
       mentionTag: 'mention', chatSeqKey: 'chat_seq',   // push-dedup tag + app_settings key for this room
       features: { teams: false, groupQueue: false },
     },
@@ -4322,6 +4340,7 @@ const PROGRAM_DEFS = {
       pingHour: PK_PING_H, pingDowOffset: PK_PING_DOW_OFFSET, lockTime: PK_LOCK,
       theme: 'pk', access: 'opt-in', approval: 'invite',
       tiers: ['team', 'host'], offerWindow: false,
+      autoRenew: { from: 'members' },   // any opt-in member (program_membership.auto_renew) renews; team seated first, then non-team fill
       mentionTag: 'pkmention', chatSeqKey: 'pk_chat_seq',
       features: { teams: false, groupQueue: false },
     },
