@@ -1892,12 +1892,18 @@ app.get('/runs', requireLogin, (req, res) => {
   const status = a?.status || 'none';
   const canJoin = viewerIsAdmin || status === 'approved';
   const runs = [];
+  // Which people the viewer FOLLOWS are already checked in — keyed by program|run-date so each
+  // card can show "Alex, Sam +2 going" (Javelin-style social proof). Same visibility as the
+  // /friends "friends' games" list, computed once here.
+  const fgMap = new Map(friendsGamesFor(email).map(g => [g.programId + '|' + g.runDate, g.friends]));
   // Every registered run, in id order: live ones are always listed; a hidden run (not yet
   // published) shows to admins only, with a lock badge. Each card's dynamic fields come from
   // that program's own dispatch (basketball / pickleball engine today) — no hardcoded pushes.
   for (const p of PROGRAMS.values()) {
     if (!p.active() && !viewerIsAdmin) continue;
-    runs.push({ key: p.key, emoji: p.emoji, name: p.displayName, href: p.paths.run, ...p.hubCard(req) });
+    const card = { key: p.key, emoji: p.emoji, name: p.displayName, href: p.paths.run, ...p.hubCard(req) };
+    card.friendsGoing = fgMap.get(p.id + '|' + card.runDate) || [];
+    runs.push(card);
   }
 
   const chatProgram = chatProgramFor(req);

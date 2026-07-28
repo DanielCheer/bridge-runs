@@ -2701,11 +2701,24 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       : [day && r.dateLabel ? `${day}, ${esc(r.dateLabel)}` : (day || 'No date set'), r.timeLabel ? esc(r.timeLabel) : ''].filter(Boolean).join(' · ');
     return when;
   };
+  // Social proof: people the viewer follows who are already checked in (Javelin-style). Up to 3
+  // overlapping avatars + a first-name label. Empty → renders nothing (no row).
+  const frGoing = (r) => {
+    const fr = r.friendsGoing || [];
+    if (!fr.length) return '';
+    const avs = fr.slice(0, 3).map(f => `<span class="mav rhfr-av">${avatarInner(f.email, f.name)}</span>`).join('');
+    const names = fr.map(f => esc((f.name || '').trim().split(/\s+/)[0] || 'Someone'));
+    const label = names.length === 1 ? `${names[0]} is going`
+      : names.length === 2 ? `${names[0]} & ${names[1]} going`
+      : `${names[0]}, ${names[1]} +${names.length - 2} going`;
+    return `<span class="rhfr"><span class="rhfr-avs">${avs}</span><span class="rhfr-txt">${label}</span></span>`;
+  };
   const card = (r) => `<a class="rhcard" href="${canJoin ? r.href : applyHref}"${canJoin ? '' : ' data-full'}>
       <span class="rhemoji" aria-hidden="true">${r.emoji}</span>
       <span class="rhbody">
         <span class="rhname">${esc(r.name)}${r.hidden ? ' <span class="rhlock" title="Only admins can see this run">🔒</span>' : ''}</span>
         <span class="rhsub">${sub(r)}</span>
+        ${frGoing(r)}
       </span>
       <span class="rhmeta">
         ${pill(r)}
@@ -2742,6 +2755,11 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       .rhpill.amber{background:#f7eccf;color:#8a6a1b}
       .rhcount{font-weight:800;font-size:15px;font-variant-numeric:tabular-nums;color:var(--ink,#20211c)}
       .rhslash{font-weight:500;color:var(--muted)}
+      .rhfr{display:flex;align-items:center;gap:7px;margin-top:5px}
+      .rhfr-avs{display:inline-flex}
+      .rhfr-av.mav{width:20px;height:20px;font-size:9px;border:1.5px solid var(--card);box-shadow:0 0 0 .5px var(--line)}
+      .rhfr-avs .rhfr-av:not(:first-child){margin-left:-7px}
+      .rhfr-txt{color:var(--muted);font-size:12px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .rharrow{font-size:24px;color:var(--muted);flex:none;margin-left:-2px}
       .hubverse{max-width:36ch;margin:34px auto 6px;text-align:center;padding:0 14px}
       .hubverse-t{font-size:15px;line-height:1.55;color:var(--ink);font-style:italic;margin:0}
