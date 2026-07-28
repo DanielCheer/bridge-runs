@@ -3860,6 +3860,14 @@ function simplePartition(programId, rd) {
   return { floor: rows.slice(0, cap), wait: rows.slice(cap), rows };
 }
 function pkPartition(rd) { return partitionFor(2, rd); }
+// ---------- RUN TEAMS (Phase 5) — program-generic, config-driven (config.features.teams) ----------
+// Numbered teams (1..count) players join after the roster locks; count/size come from config so the
+// SAME code serves casual pickup, a tournament bracket, or a standing league later. Dark unless a
+// program sets config.features.teams. program_id + run_date scoped like every run table. These two
+// clears run beside EVERY roster delete (a player off the floor can't stay on a team); no-ops while
+// the table is empty. The join/assign routes + the teams panel land next.
+function clearTeamAssignment(programId, rd, email) { db.prepare('DELETE FROM team_assignments WHERE program_id = ? AND run_date = ? AND email = ?').run(programId, rd, email); }
+function clearRunTeams(programId, rd) { db.prepare('DELETE FROM team_assignments WHERE program_id = ? AND run_date = ?').run(programId, rd); }
 // Pickleball run start epoch — the run date at 6 PM local. Drives the countdown banner
 // AND the auto-lock time (check-in closes at start).
 function startEpochFor(programId, rd) { return rd ? new Date(rd + `T${String(P(programId).config.startHour).padStart(2, '0')}:00:00`).getTime() : 0; }
@@ -4063,6 +4071,7 @@ function ensureWeekFor(programId) {
     const floor = stmtRollFloorForArchive.all(rd, programId, cfg.cap);
     for (const p of floor) if (!/@guest\.local$/.test(p.email)) stmtRollArchiveIns.run(rd, p.email, p.name, programId);
     stmtRollDelCheckinsByDate.run(rd, programId); stmtRollDelStateByDate.run(rd, programId);
+    clearRunTeams(programId, rd);   // archived run → drop its team assignments
   }
   // Sweep stale run_state for past runs that had NO check-ins (a zero-join or cancelled week never
   // appears in pastDates above, so its is_open/cancelled row would leak forever).
@@ -4148,7 +4157,7 @@ function runCancel(programId, req, res) {
   const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
   const rd = programRunDate(programId), on = req.body.on !== '0';
   setRunStateFor(programId, rd, 'cancelled', on);
-  if (on) { setRunStateFor(programId, rd, 'is_open', 0); db.prepare('DELETE FROM checkins WHERE run_date = ? AND program_id = ?').run(rd, programId); }
+  if (on) { setRunStateFor(programId, rd, 'is_open', 0); db.prepare('DELETE FROM checkins WHERE run_date = ? AND program_id = ?').run(rd, programId); clearRunTeams(programId, rd); }
   res.redirect(base);
 }
 function runPublish(programId, req, res) {
@@ -4168,6 +4177,7 @@ function runLeave(programId, req, res) {
   if (!cfg.offerWindow) notifyPromotionFor(programId, rd, req.userEmail); // simple: notify next before the row goes
   db.prepare('INSERT OR IGNORE INTO regular_optout (run_date, email, program_id) VALUES (?, ?, ?)').run(rd, req.userEmail, programId);
   db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = ?').run(rd, req.userEmail, programId);
+  clearTeamAssignment(programId, rd, req.userEmail);   // off the floor → off any team
   if (offeree) createOffer(rd, offeree, req, programId);
   res.redirect(base);
 }
@@ -4180,6 +4190,7 @@ function runRemove(programId, req, res) {
   const offeree = cfg.offerWindow ? offereeForFloorLeave(rd, em, programId) : null;
   if (!cfg.offerWindow) notifyPromotionFor(programId, rd, em);
   db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = ?').run(rd, em, programId);
+  clearTeamAssignment(programId, rd, em);   // off the floor → off any team
   if (offeree) createOffer(rd, offeree, req, programId);
   res.redirect(base);
 }
@@ -4249,6 +4260,7 @@ function runSeasonSet(programId, req, res) {
     db.prepare('DELETE FROM checkins WHERE run_date > ? AND run_date < ? AND program_id = ?').run(today, raw, programId);
     db.prepare('DELETE FROM regular_optout WHERE run_date > ? AND run_date < ? AND program_id = ?').run(today, raw, programId);
     db.prepare('DELETE FROM run_state WHERE run_date > ? AND run_date < ? AND program_id = ?').run(today, raw, programId);
+    db.prepare('DELETE FROM team_assignments WHERE run_date > ? AND run_date < ? AND program_id = ?').run(today, raw, programId);
     const setRd = getSetting(cfg.keys.runDate); if (setRd && setRd < raw) delSetting(cfg.keys.runDate);
     const setBase = getSetting(cfg.keys.runBase); if (setBase && setBase < raw) delSetting(cfg.keys.runBase);
     db.exec('COMMIT');
