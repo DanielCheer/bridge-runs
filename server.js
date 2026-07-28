@@ -1638,14 +1638,14 @@ function topOfferee(part, exclude = null) {
 // Mark a waitlister's freed floor spot as OFFERED + HELD: stamp offered_at/claim_token
 // and email them a one-tap claim link. The `offered_at IS NULL` guard makes this
 // idempotent and race-safe (a second concurrent trigger can't double-offer/double-email).
-function createOffer(runDate, w, req) {
+function createOffer(runDate, w, req, programId = 1) {
   const token = crypto.randomBytes(24).toString('base64url');
   const info = db.prepare(
-    'UPDATE checkins SET offered_at = ?, claim_token = ? WHERE run_date = ? AND email = ? AND offered_at IS NULL')
-    .run(Date.now(), token, runDate, w.email);
+    'UPDATE checkins SET offered_at = ?, claim_token = ? WHERE run_date = ? AND email = ? AND program_id = ? AND offered_at IS NULL')
+    .run(Date.now(), token, runDate, w.email, programId);
   if (info.changes === 0) return; // already offered — don't email twice
   const base = process.env.PUBLIC_URL || (req ? `${req.protocol}://${req.get('host')}` : `http://localhost:${PORT}`);
-  const link = `${base}/checkin/claim/${token}`;
+  const link = `${base}${P(programId).paths.run}/claim/${token}`;
   audit('system', 'system', 'offer:send', w.email);
   // Don't block the response on the send (mirrors the magic-link / announce sends).
   // Spot offers are time-critical, so they always go by BOTH email (transactional —
@@ -1656,7 +1656,7 @@ function createOffer(runDate, w, req) {
     sendPush([w.email], {
       title: 'A floor spot opened up',
       body: `Claim your spot for ${runLabelFor(runDate)} — expires in ${OFFER_WINDOW_HOURS}h.`,
-      url: '/checkin', tag: 'offer',
+      url: P(programId).paths.run, tag: 'offer',
     });
   });
 }
@@ -1667,8 +1667,8 @@ function createOffer(runDate, w, req) {
 // sees the true waitlist order (otherwise the top waitlister would auto-promote into
 // the floor slice and we'd offer the wrong person). Returns the offeree (or null);
 // the caller deletes the leaver, then passes the offeree to createOffer.
-function offereeForFloorLeave(runDate, leavingEmail) {
-  const part = partitionRun(runDate);
+function offereeForFloorLeave(runDate, leavingEmail, programId = 1) {
+  const part = offerPartition(programId, runDate);
   if (!occupiesFloorSlot(part, leavingEmail)) return null;
   return topOfferee(part, leavingEmail);
 }
@@ -1678,18 +1678,18 @@ function offereeForFloorLeave(runDate, leavingEmail) {
 // eligible waitlister offered in their place. Idempotent; safe every request. Run
 // this BEFORE computing who to offer/display so a stale hold never blocks the floor.
 const stmtExpiredOffers = db.prepare(  // hoisted — runs on every /checkin + /runs GET and the 60s tick
-  'SELECT * FROM checkins WHERE run_date = ? AND program_id = 1 AND offered_at IS NOT NULL AND offered_at < ?');
-function expireAndReoffer(runDate, req) {
+  'SELECT * FROM checkins WHERE run_date = ? AND program_id = ? AND offered_at IS NOT NULL AND offered_at < ?');
+function expireAndReoffer(runDate, req, programId = 1) {
   const cutoff = Date.now() - OFFER_WINDOW_MS;
-  const expired = stmtExpiredOffers.all(runDate, cutoff);
+  const expired = stmtExpiredOffers.all(runDate, programId, cutoff);
   for (const ex of expired) {
     // Capture the next offeree BEFORE dropping the expired hold, so the freed slot
     // offers the true top waitlister rather than one auto-promoted by the drop.
-    const part = partitionRun(runDate);
+    const part = offerPartition(programId, runDate);
     const offeree = topOfferee(part, ex.email);
     db.prepare('DELETE FROM checkins WHERE id = ?').run(ex.id);
     audit('system', 'system', 'offer:expire', ex.email);
-    if (offeree) createOffer(runDate, offeree, req);
+    if (offeree) createOffer(runDate, offeree, req, programId);
   }
 }
 
