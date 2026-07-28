@@ -4246,6 +4246,78 @@ function runSeasonSet(programId, req, res) {
   audit(req.userEmail, 'admin', `${cfg.logTag}:season-set`, raw);
   res.redirect(base + '?pkset=season');
 }
+// Operator moves this week's run to another date, or clears back to the standing day. Migrates the
+// roster + state + once-per-cycle markers to the new date (else it's stranded → phantom attendance),
+// and records the consumed standing day as the base of the cycle being MOVED (see the comment below).
+function runDate(programId, req, res) {
+  const base = P(programId).paths.run, cfg = P(programId).config;
+  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const d = String(req.body.date || '').trim();
+  const oldRd = programRunDate(programId);
+  const markerKeys = [cfg.keys.autoopen, cfg.keys.autoping, cfg.keys.autolock];
+  if (!d) {   // clear → back to the weekly standing day
+    db.exec('BEGIN');
+    try {
+      db.prepare('DELETE FROM app_settings WHERE key IN (?, ?)').run(cfg.keys.runDate, cfg.keys.runBase);
+      const newRd = programDefaultDate(programId);   // the reverted standing day (settings now cleared)
+      if (newRd !== oldRd) {
+        db.prepare('UPDATE checkins SET run_date = ? WHERE run_date = ? AND program_id = ?').run(newRd, oldRd, programId);
+        db.prepare('UPDATE OR IGNORE regular_optout SET run_date = ? WHERE run_date = ? AND program_id = ?').run(newRd, oldRd, programId);
+        const st = db.prepare('SELECT is_open, cancelled FROM run_state WHERE run_date = ? AND program_id = ?').get(oldRd, programId);
+        if (st) {
+          db.prepare("INSERT INTO run_state (run_date, is_open, cancelled, program_id) VALUES (?,?,?,?) ON CONFLICT(run_date, program_id) DO UPDATE SET is_open = excluded.is_open, cancelled = excluded.cancelled").run(newRd, st.is_open, st.cancelled, programId);
+          db.prepare('DELETE FROM run_state WHERE run_date = ? AND program_id = ?').run(oldRd, programId);
+        }
+        for (const k of markerKeys) if (getSetting(k) === oldRd) setSetting(k, newRd);
+      }
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); console.error(`[${cfg.logTag}-date] clear FAILED: ${e.message}`); throw e; }
+    return res.redirect(base + '?pkset=date');
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || isNaN(new Date(d + 'T12:00:00'))) return res.redirect(base + '?pkerr=datebad');
+  const today = ymdLocal();
+  if (d < today || (d === today && new Date().getHours() >= cfg.endHour)) return res.redirect(base + '?pkerr=datepast'); // no past / already-ended today
+  const maxD = new Date(); maxD.setDate(maxD.getDate() + 60);
+  if (d > ymdLocal(maxD)) return res.redirect(base + '?pkerr=daterange');
+  if (d !== oldRd) {
+    db.exec('BEGIN');
+    try {
+      db.prepare('UPDATE checkins SET run_date = ? WHERE run_date = ? AND program_id = ?').run(d, oldRd, programId);
+      db.prepare('UPDATE OR IGNORE regular_optout SET run_date = ? WHERE run_date = ? AND program_id = ?').run(d, oldRd, programId);
+      const st = db.prepare('SELECT is_open, cancelled FROM run_state WHERE run_date = ? AND program_id = ?').get(oldRd, programId);
+      if (st) {
+        db.prepare("INSERT INTO run_state (run_date, is_open, cancelled, program_id) VALUES (?,?,?,?) ON CONFLICT(run_date, program_id) DO UPDATE SET is_open = excluded.is_open, cancelled = excluded.cancelled").run(d, st.is_open, st.cancelled, programId);
+        db.prepare('DELETE FROM run_state WHERE run_date = ? AND program_id = ?').run(oldRd, programId);
+      }
+      for (const k of markerKeys) if (getSetting(k) === oldRd) setSetting(k, d);
+      setSetting(cfg.keys.runDate, d);
+      // The consumed standing day is the base of the cycle being MOVED — never the day nearest the
+      // destination. Keying off `d` breaks when the run moves to a day AFTER its standing day (marks
+      // the NEXT week's run consumed → silently deleted). Once moved, the base is recorded — keep it.
+      setSetting(cfg.keys.runBase, getSetting(cfg.keys.runBase) || pkNearestDow(oldRd, cfg.dow));
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); console.error(`[${cfg.logTag}-date] move FAILED: ${e.message}`); throw e; }
+  }
+  res.redirect(base + '?pkset=date');
+}
+function runGuest(programId, req, res) {
+  const base = P(programId).paths.run, cfg = P(programId).config;
+  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const rd = programRunDate(programId); if (runCancelledFor(programId, rd)) return res.redirect(base);
+  const name = (req.body.name || '').trim().slice(0, 60);
+  if (name) {
+    // Double-tap guard: each guest gets a fresh random @guest.local email, so there's no UNIQUE to
+    // catch a re-post — two taps would silently eat two floor spots.
+    if (db.prepare("SELECT 1 FROM checkins WHERE run_date=? AND name=? AND program_id = ? AND created_at > datetime('now','-5 seconds')").get(rd, name + ' (guest)', programId))
+      return res.redirect(base);
+    const { rows } = partitionFor(programId, rd);
+    if (rows.length < cfg.cap + cfg.waitlist) {
+      const em = `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}@guest.local`;
+      db.prepare('INSERT INTO checkins (run_date, email, name, program_id) VALUES (?,?,?,?)').run(rd, em, name + ' (guest)', programId);
+    }
+  }
+  res.redirect(base);
+}
 
 app.get('/pickleball', requireLogin, (req, res) => {
   const g = pkGate(req, res); if (!g) return;
@@ -4314,81 +4386,8 @@ app.post('/pickleball/leave', requireLogin, (req, res) => runLeave(2, req, res))
 app.post('/pickleball/open', requireLogin, (req, res) => runOpen(2, req, res));
 app.post('/pickleball/close', requireLogin, (req, res) => runClose(2, req, res));
 app.post('/pickleball/cancel', requireLogin, (req, res) => runCancel(2, req, res));
-app.post('/pickleball/date', requireLogin, (req, res) => {
-  const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball');
-  const d = String(req.body.date || '').trim();
-  const oldRd = pkRunDate();
-  if (!d) {   // clear → back to the weekly standing Tuesday
-    // Clearing the explicit date must MIGRATE any seated roster back onto the reverted
-    // standing Tuesday, in ONE txn with the settings clear — exactly like basketball's
-    // /admin/rundate reset (server.js ~3305/3321). Without this the roster is stranded on
-    // the abandoned explicit date, and once that date passes pkEnsureWeek archives it into
-    // `attendance` as a run that never happened (permanent phantom season-board credit).
-    db.exec('BEGIN');
-    try {
-      db.prepare("DELETE FROM app_settings WHERE key IN ('pk_run_date','pk_run_base')").run();
-      const newRd = pkDefaultDate();   // the reverted standing Tuesday (settings now cleared)
-      if (newRd !== oldRd) {
-        db.prepare('UPDATE checkins SET run_date = ? WHERE run_date = ? AND program_id = 2').run(newRd, oldRd);
-        db.prepare('UPDATE OR IGNORE regular_optout SET run_date = ? WHERE run_date = ? AND program_id = 2').run(newRd, oldRd);
-        const st = db.prepare('SELECT is_open, cancelled FROM run_state WHERE run_date = ? AND program_id = 2').get(oldRd);
-        if (st) {
-          db.prepare("INSERT INTO run_state (run_date, is_open, cancelled, program_id) VALUES (?,?,?,2) ON CONFLICT(run_date, program_id) DO UPDATE SET is_open = excluded.is_open, cancelled = excluded.cancelled").run(newRd, st.is_open, st.cancelled);
-          db.prepare('DELETE FROM run_state WHERE run_date = ? AND program_id = 2').run(oldRd);
-        }
-        for (const k of ['pk_autoopen_done', 'pk_autoping_done', 'pk_autolock_done']) if (getSetting(k) === oldRd) setSetting(k, newRd);
-      }
-      db.exec('COMMIT');
-    } catch (e) { db.exec('ROLLBACK'); console.error(`[pk-date] clear FAILED: ${e.message}`); throw e; }
-    return res.redirect('/pickleball?pkset=date');
-  }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || isNaN(new Date(d + 'T12:00:00'))) return res.redirect('/pickleball?pkerr=datebad');
-  const today = ymdLocal();
-  if (d < today || (d === today && new Date().getHours() >= PK_END_H)) return res.redirect('/pickleball?pkerr=datepast'); // no past / already-ended today
-  const maxD = new Date(); maxD.setDate(maxD.getDate() + 60);
-  if (d > ymdLocal(maxD)) return res.redirect('/pickleball?pkerr=daterange');
-  if (d !== oldRd) {
-    // Migrate the roster + state + once-per-cycle markers old→new (like basketball's /admin/rundate),
-    // and record the standing Tuesday this move consumes so it isn't resurrected as a phantom run.
-    db.exec('BEGIN');
-    try {
-      db.prepare('UPDATE checkins SET run_date = ? WHERE run_date = ? AND program_id = 2').run(d, oldRd);
-      db.prepare('UPDATE OR IGNORE regular_optout SET run_date = ? WHERE run_date = ? AND program_id = 2').run(d, oldRd);
-      const st = db.prepare('SELECT is_open, cancelled FROM run_state WHERE run_date = ? AND program_id = 2').get(oldRd);
-      if (st) {
-        db.prepare("INSERT INTO run_state (run_date, is_open, cancelled, program_id) VALUES (?,?,?,2) ON CONFLICT(run_date, program_id) DO UPDATE SET is_open = excluded.is_open, cancelled = excluded.cancelled").run(d, st.is_open, st.cancelled);
-        db.prepare('DELETE FROM run_state WHERE run_date = ? AND program_id = 2').run(oldRd);
-      }
-      for (const k of ['pk_autoopen_done', 'pk_autoping_done', 'pk_autolock_done']) if (getSetting(k) === oldRd) setSetting(k, d);
-      setSetting('pk_run_date', d);
-      // The consumed standing Tuesday is the base of the cycle being MOVED — never the Tuesday
-      // nearest the destination. Keying off `d` breaks whenever the run moves to a day AFTER its
-      // Tuesday (e.g. Tue 09-08 → Sat 09-12 resolves to 09-15), which marks the NEXT week's run
-      // consumed and silently deletes it. Once moved, the base is already recorded — keep it.
-      setSetting('pk_run_base', getSetting('pk_run_base') || pkNearestDow(oldRd, PK_DOW));
-      db.exec('COMMIT');
-    } catch (e) { db.exec('ROLLBACK'); console.error(`[pk-date] move FAILED: ${e.message}`); throw e; }
-  }
-  res.redirect('/pickleball?pkset=date');
-});
-app.post('/pickleball/guest', requireLogin, (req, res) => {
-  const g = pkGate(req, res); if (!g || !g.canOperate) return res.redirect('/pickleball');
-  const rd = pkRunDate(); if (pkIsCancelled(rd)) return res.redirect('/pickleball');
-  const name = (req.body.name || '').trim().slice(0, 60);
-  if (name) {
-    // Double-tap guard, same as basketball's /checkin/guest: each guest gets a fresh random
-    // @guest.local email, so there's no UNIQUE to catch a re-post — two taps would silently
-    // eat two floor spots.
-    if (db.prepare("SELECT 1 FROM checkins WHERE run_date=? AND name=? AND program_id = 2 AND created_at > datetime('now','-5 seconds')").get(rd, name + ' (guest)'))
-      return res.redirect('/pickleball');
-    const { rows } = pkPartition(rd);
-    if (rows.length < PK_CAP + PK_WAIT) {
-      const em = `guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}@guest.local`;
-      db.prepare('INSERT INTO checkins (run_date, email, name, program_id) VALUES (?,?,?,2)').run(rd, em, name + ' (guest)');
-    }
-  }
-  res.redirect('/pickleball');
-});
+app.post('/pickleball/date', requireLogin, (req, res) => runDate(2, req, res));
+app.post('/pickleball/guest', requireLogin, (req, res) => runGuest(2, req, res));
 app.post('/pickleball/remove', requireLogin, (req, res) => runRemove(2, req, res));
 app.post('/pickleball/bump', requireLogin, (req, res) => runBump(2, req, res));
 app.post('/pickleball/publish', requireAdmin, (req, res) => runPublish(2, req, res));
