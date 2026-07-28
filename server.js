@@ -22,7 +22,7 @@ import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap, setProgramMeta,
   STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage, runPage, runsPage, pkChatPage, pkJoinPage, runJoinPage, waiverPage,
-  friendsPage,
+  friendsPage, friendsSearchFragment,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -2496,7 +2496,7 @@ function peopleByEmails(emails) {
 // "Friends' Games" — upcoming runs (ACTIVE programs only) where an accepted friend of `me` is on
 // the roster. Grouped per (program, run_date) with the friends going + a Join link to that run.
 function friendsGamesFor(me) {
-  const fr = [...new Set([...friendsOf(me), ...followingOf(me)])]; // people you're connected to (friends ∪ following)
+  const fr = followingOf(me); // people you follow (follow-only model)
   if (!fr.length) return [];
   const today = ymdLocal(new Date(schedNow()));
   const ph = fr.map(() => '?').join(',');
@@ -2519,49 +2519,53 @@ function friendsGamesFor(me) {
   }));
 }
 
-// Friends home — directory search + friends list + incoming/outgoing requests + blocked + games.
+// Directory search → renderable rows {id,name,email,following,blocked} (approved non-guest, not me).
+// Shared by the /friends page + the /friends/search typeahead fragment.
+function searchResultsFor(me, q) {
+  q = String(q || '').trim().slice(0, 60);
+  if (!q) return [];
+  const like = q.replace(/[\\%_]/g, c => '\\' + c);
+  const rows = db.prepare(`
+    SELECT id, full_name, email, status FROM applicants
+    WHERE (full_name LIKE ? ESCAPE '\\' OR email LIKE ? ESCAPE '\\') AND email <> ?
+    ORDER BY (CASE WHEN full_name LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END), full_name COLLATE NOCASE
+    LIMIT 25`).all('%' + like + '%', '%' + like + '%', lc(me), like + '%');
+  return rows.filter(r => r.status === 'approved' && !/@guest\.local$/.test(r.email))
+    .map(r => ({ id: r.id, name: r.full_name, email: r.email, following: isFollowing(me, r.email), blocked: blockedPair(me, r.email) }));
+}
+
+// Friends home — FOLLOW-only (mutual friend-requests dropped as redundant): live search +
+// following + followers (follow-back) + games (people you follow) + blocked.
 app.get('/friends', requireLogin, (req, res) => {
   const gate = requirePlayer(req, res);
   if (!gate) return;
   if (!gate.a) return res.redirect('/status');
   const me = req.userEmail;
-  // Directory search (server-rendered so it works without JS). Approved, non-guest, not me.
   const q = String(req.query.q || '').trim().slice(0, 60);
-  let results = [];
-  if (q) {
-    const like = q.replace(/[\\%_]/g, c => '\\' + c);
-    const rows = db.prepare(`
-      SELECT id, full_name, email, avatar, status FROM applicants
-      WHERE (full_name LIKE ? ESCAPE '\\' OR email LIKE ? ESCAPE '\\') AND email <> ?
-      ORDER BY (CASE WHEN full_name LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END), full_name COLLATE NOCASE
-      LIMIT 25`).all('%' + like + '%', '%' + like + '%', lc(me), like + '%');
-    results = rows.filter(r => r.status === 'approved' && !/@guest\.local$/.test(r.email))
-      .map(r => ({ id: r.id, name: r.full_name, email: r.email, rel: relationshipTo(me, r.email), following: isFollowing(me, r.email) }));
-  }
-  // Turn each edge list into renderable {id,name,email} rows via one bulk applicants lookup.
-  const inc = stmtReqIncoming.all(lc(me));
-  const out = stmtReqOutgoing.all(lc(me));
   const blk = stmtBlockedByMe.all(lc(me));
-  const fr  = friendsOf(me);
   const flwrs = followersOf(me);           // people who follow me
   const flwng = followingOf(me);           // people I follow
   const followingSet = new Set(flwng.map(lc));
-  const dir = peopleByEmails([...fr, ...inc.map(r => r.email), ...out.map(r => r.email), ...blk.map(r => r.email), ...flwrs, ...flwng]);
+  const dir = peopleByEmails([...blk.map(r => r.email), ...flwrs, ...flwng]);
   const shape = email => { const p = dir.get(lc(email)); return p ? { id: p.id, name: p.full_name, email: p.email } : null; };
-  const friends  = fr.map(shape).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
-  const incoming = inc.map(r => shape(r.email)).filter(Boolean);
-  const outgoing = out.map(r => shape(r.email)).filter(Boolean);
   const blocked  = blk.map(r => shape(r.email)).filter(Boolean);
-  // Followers carry a followsBack flag → "Follow back" vs "Following ✓"; hide any I've blocked.
   const followers = flwrs.map(e => { const p = shape(e); return p ? { ...p, followsBack: followingSet.has(lc(e)) } : null; })
-    .filter(p => p && !iBlocked(me, p.email));
-  const following = flwng.map(shape).filter(Boolean);
+    .filter(p => p && !iBlocked(me, p.email)); // "Follow back" vs "Following ✓"; hide any I've blocked
+  const following = flwng.map(shape).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
   const cc = chatCountsFor(runCookie(req), gate.a.email, gate.a.id);
   res.send(friendsPage({
-    q, results, friends, incoming, outgoing, blocked, followers, following, games: friendsGamesFor(me),
+    q, results: searchResultsFor(me, q), blocked, followers, following, games: friendsGamesFor(me),
     dmUnread: unreadCount(gate.a.email), groupUnread: cc.group, groupMention: cc.gm,
     chatProgram: runCookie(req), ann: annPanel(gate.a.email),
   }));
+});
+// Typeahead fragment for the live search box (returns just the result rows).
+app.get('/friends/search', requireLogin, (req, res) => {
+  const gate = requirePlayer(req, res);
+  if (!gate) return;
+  if (!gate.a) return res.status(403).send('');
+  if (rateLimited('friends-search', req.userEmail, 60, 60 * 1000)) return res.send('');
+  res.send(friendsSearchFragment(searchResultsFor(req.userEmail, req.query.q)));
 });
 
 // Friend/block mutations. Shared wrapper: gate → resolve target id→email → run handler → swap
@@ -5076,7 +5080,7 @@ function runPartyInvite(programId, req, res) {
   const t = db.prepare('SELECT email, status FROM applicants WHERE id=?').get(Number(req.body.id) || 0);
   if (!t || t.status !== 'approved' || /@guest\.local$/.test(t.email)) return res.redirect(base);
   const them = lc(t.email);
-  if (them === me || !areFriends(me, them) || blockedPair(me, them)) return res.redirect(base);
+  if (them === me || !isFollowing(me, them) || blockedPair(me, them)) return res.redirect(base); // invite people you follow
   let party = stmtPartyByLeader.get(programId, rd, me);
   if (!party) {
     const info = db.prepare('INSERT INTO signup_groups (program_id, run_date, leader_email) VALUES (?,?,?)').run(programId, rd, me);

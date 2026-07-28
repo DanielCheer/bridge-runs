@@ -2451,15 +2451,14 @@ export function profilePage({ p, stats, isSelf = false, canContact = false, rel 
   if (canContact && !p.is_host) prowBtns.push(`<a class="btn ghost" href="sms:${esc(p.phone)}">Text</a>`);
   if (isSelf) prowBtns.push(`<a class="btn ghost" href="/profile">Edit profile</a>`);
   const prow = prowBtns.length ? `<div class="prow">${prowBtns.join('')}</div>` : '';
-  // Friend / block controls (Phase 6) — only for another approved, non-guest member who hasn't
-  // blocked me. friendBtn renders the state-appropriate swapform(s) (Add / Accept / Friends+Remove /
-  // cancel / Unblock); a Block control sits alongside except when I've already blocked them.
+  // Follow / block controls (Phase 6, follow-only) — only for another approved, non-guest member
+  // who hasn't blocked me. If I've blocked them → Unblock; otherwise → Follow + Block.
   let frControls = '';
   if (!isSelf && p.status === 'approved' && !/@guest\.local$/.test(p.email) && rel !== 'blocked_by') {
-    const blockCtl = rel === 'blocked' ? ''
-      : `<form class="swapform frbtn" method="POST" action="/friends/block"><input type="hidden" name="id" value="${p.id}"><input type="hidden" name="back" value="/u/${p.id}"><button class="btn ghost sm" type="submit">Block</button></form>`;
-    const followCtl = rel === 'blocked' ? '' : followBtn(p.id, following, '/u/' + p.id);
-    frControls = `<div class="fract" style="margin-top:12px;gap:8px">${friendBtn(p.id, rel, '/u/' + p.id)}${followCtl}${blockCtl}</div>`;
+    const bform = (action, label) => `<form class="swapform frbtn" method="POST" action="/friends/${action}"><input type="hidden" name="id" value="${p.id}"><input type="hidden" name="back" value="/u/${p.id}"><button class="btn ghost sm" type="submit">${label}</button></form>`;
+    frControls = rel === 'blocked'
+      ? `<div class="fract" style="margin-top:12px;gap:8px">${bform('unblock', 'Unblock')}</div>`
+      : `<div class="fract" style="margin-top:12px;gap:8px">${followBtn(p.id, following, '/u/' + p.id)}${bform('block', 'Block')}</div>`;
   }
   return HEAD('Profile — The Bridge', 'has-tabs') + header('', wdayShort(runDate), ann, hours) + WELCOME_MODAL + `
     <div class="rule"></div>
@@ -2514,36 +2513,39 @@ function followBtn(id, following, back = '/friends', backLabel = false) {
 // pending sent, and a collapsed blocked list. All person-scoped (not run-scoped). Every row
 // links to /u/:id; every action is a swapform that swaps back into this page. Self-contained
 // styles (scoped .fr*) so it needs no new global CSS.
-export function friendsPage({ q = '', results = [], friends = [], incoming = [], outgoing = [], blocked = [], followers = [], following = [], games = [], dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null }) {
-  const BACK = '/friends';
-  const dateLabel = rd => esc(new Date(rd + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }));
-  // A person row: avatar + name (→ /u/:id) + a right-side action string (friend and/or follow control).
-  const personRow = (p, actions) => `<div class="mrow frrow">
+// One person row: avatar + name (→ /u/:id) + a right-side action string. Reused on the page + the
+// live-search fragment. FOLLOW-only model (mutual friend-requests were dropped as redundant).
+function frPersonRow(p, actions) {
+  return `<div class="mrow frrow">
       <a class="mav" href="/u/${p.id}" aria-label="${esc(p.name)}">${avatarInner(p.email, p.name)}</a>
       <a class="mtx" href="/u/${p.id}"><b class="mnm">${esc(p.name)}</b></a>
       <span class="fract">${actions}</span>
     </div>`;
+}
+// Live-search result rows, also served as a fragment to the typeahead (see GET /friends/search).
+// Each result carries {id,name,email,following,blocked}; a blocked person shows a chip, else Follow.
+export function friendsSearchFragment(results = []) {
+  if (!results.length) return `<div class="frempty">No players found.</div>`;
+  return `<div class="mlist">${results.map(r =>
+    frPersonRow(r, r.blocked ? '<span class="frchip">Blocked</span>' : followBtn(r.id, r.following, '/friends'))).join('')}</div>`;
+}
+export function friendsPage({ q = '', results = [], blocked = [], followers = [], following = [], games = [], dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null }) {
+  const BACK = '/friends';
+  const dateLabel = rd => esc(new Date(rd + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }));
   const section = (title, count, inner) => `<div class="subhead frsub">${esc(title)}${count ? ` <span class="frn">${count}</span>` : ''}</div>${inner}`;
+  const unblockBtn = (id) => `<form class="swapform frbtn" method="POST" action="/friends/unblock" style="margin:0"><input type="hidden" name="id" value="${id}"><input type="hidden" name="back" value="${BACK}"><button class="btn ghost sm" type="submit">Unblock</button></form>`;
 
+  // Live search — type to autofill matching players (debounced fetch → #frresults); no Search button.
   const searchBlock = `
-    <form class="frsearch" method="GET" action="/friends" role="search">
-      <input type="search" name="q" value="${esc(q)}" placeholder="Search players by name…" autocomplete="off" aria-label="Search players">
-      <button class="btn primary sm" type="submit">Search</button>
-    </form>
-    ${q ? (results.length
-      ? `<div class="mlist">${results.map(r => personRow(r, friendBtn(r.id, r.rel, BACK) + ((r.rel === 'blocked' || r.rel === 'blocked_by') ? '' : followBtn(r.id, r.following, BACK)))).join('')}</div>`
-      : `<div class="frempty">No players found for “${esc(q)}”.</div>`) : ''}`;
-
-  const incomingBlock = incoming.length
-    ? section('Friend requests', incoming.length, `<div class="mlist">${incoming.map(p => personRow(p, friendBtn(p.id, 'incoming', BACK))).join('')}</div>`)
-    : '';
+    <div class="frsearch"><input type="search" id="frq" value="${esc(q)}" placeholder="Search players by name…" autocomplete="off" autocapitalize="words" aria-label="Search players"></div>
+    <div id="frresults">${q ? friendsSearchFragment(results) : ''}</div>`;
 
   const followersBlock = followers.length
-    ? section('Followers', followers.length, `<div class="mlist">${followers.map(p => personRow(p, followBtn(p.id, p.followsBack, BACK, true))).join('')}</div>`)
+    ? section('Followers', followers.length, `<div class="mlist">${followers.map(p => frPersonRow(p, followBtn(p.id, p.followsBack, BACK, true))).join('')}</div>`)
     : '';
 
   const gamesBlock = games.length
-    ? section("Friends' games", 0, `<div class="frgames">${games.map(g => `
+    ? section('Games', 0, `<div class="frgames">${games.map(g => `
         <div class="frgame">
           <div class="frgh"><span class="frge">${g.emoji || '🏀'}</span><b>${esc(g.programName)}</b> · <span>${dateLabel(g.runDate)}</span></div>
           <div class="frgf">${g.friends.map(f => `<span class="frgp"><span class="mav sm">${avatarInner(f.email, f.name)}</span>${esc((f.name || '').split(' ')[0])}</span>`).join('')}</div>
@@ -2551,21 +2553,13 @@ export function friendsPage({ q = '', results = [], friends = [], incoming = [],
         </div>`).join('')}</div>`)
     : '';
 
-  const friendsBlock = section('Your friends', friends.length,
-    friends.length
-      ? `<div class="mlist">${friends.map(p => personRow(p, friendBtn(p.id, 'friends', BACK))).join('')}</div>`
-      : `<div class="frempty"><b>No friends yet</b><p>Search a player above and tap “Add friend”. Once they accept, you'll see each other's upcoming games here.</p></div>`);
-
-  const followingBlock = following.length
-    ? `<details class="frdetails"><summary>Following (${following.length})</summary><div class="mlist">${following.map(p => personRow(p, followBtn(p.id, true, BACK))).join('')}</div></details>`
-    : '';
-
-  const outgoingBlock = outgoing.length
-    ? `<details class="frdetails"><summary>Pending sent (${outgoing.length})</summary><div class="mlist">${outgoing.map(p => personRow(p, friendBtn(p.id, 'outgoing', BACK))).join('')}</div></details>`
-    : '';
+  const followingBlock = section('Following', following.length,
+    following.length
+      ? `<div class="mlist">${following.map(p => frPersonRow(p, followBtn(p.id, true, BACK))).join('')}</div>`
+      : `<div class="frempty"><b>Not following anyone yet</b><p>Search a player above and tap Follow — you'll see their upcoming games here.</p></div>`);
 
   const blockedBlock = blocked.length
-    ? `<details class="frdetails"><summary>Blocked (${blocked.length})</summary><div class="mlist">${blocked.map(p => personRow(p, friendBtn(p.id, 'blocked', BACK))).join('')}</div></details>`
+    ? `<details class="frdetails"><summary>Blocked (${blocked.length})</summary><div class="mlist">${blocked.map(p => frPersonRow(p, unblockBtn(p.id))).join('')}</div></details>`
     : '';
 
   return HEAD('Friends — The Bridge', 'has-tabs') + header('', '', ann, '') + `
@@ -2573,18 +2567,29 @@ export function friendsPage({ q = '', results = [], friends = [], incoming = [],
     <div class="frwrap">
       <div class="frtitle"><h1>Friends</h1></div>
       ${searchBlock}
-      ${incomingBlock}
       ${followersBlock}
       ${gamesBlock}
-      ${friendsBlock}
       ${followingBlock}
-      ${outgoingBlock}
       ${blockedBlock}
     </div>
+    <script>
+      (function(){
+        var inp=document.getElementById('frq'), box=document.getElementById('frresults'), t, last='';
+        if(!inp||!box||!window.fetch)return;
+        inp.addEventListener('input',function(){
+          clearTimeout(t); var q=inp.value.trim();
+          if(!q){box.innerHTML='';last='';return;}
+          t=setTimeout(function(){ if(q===last)return; last=q;
+            fetch('/friends/search?q='+encodeURIComponent(q),{headers:{'X-Requested-With':'fetch'},credentials:'same-origin'})
+              .then(function(r){return r.text();}).then(function(h){ if(inp.value.trim()===q) box.innerHTML=h; }).catch(function(){});
+          },200);
+        });
+      })();
+    </script>
     <style>
       .frwrap{padding:0 2px}
       .frtitle h1{font-size:22px;margin:14px 2px 10px}
-      .frsearch{display:flex;gap:8px;margin:0 0 14px}
+      .frsearch{display:flex;gap:8px;margin:0 0 12px}
       .frsearch input{flex:1;min-width:0;padding:11px 13px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);font-size:15px}
       .frsub{display:flex;align-items:center;gap:7px;margin-top:20px}
       .frn{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--accent,#22615A);color:#fff;font-size:12px;font-weight:700}
