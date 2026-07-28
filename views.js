@@ -4177,7 +4177,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
       <label style="margin-bottom:2px">Role</label>
       <div class="levels">
         <label class="lvl"><input type="radio" name="role" value="" checked> Approved only — can check in</label>
-        <label class="lvl"><input type="radio" name="role" value="regular"> ★ Pillar — early access to join before you open the run</label>
+        <label class="lvl"><input type="radio" name="role" value="regular"> ★ Pillar — a trusted regular who helps anchor the run</label>
         <label class="lvl"><input type="radio" name="role" value="team"> ◆ Team — helps run it, auto-seated each week</label>
       </div>
       <p class="tally-note" style="margin:8px 0 0">If the email already exists on file, this just approves that record (and sets the role) instead of duplicating it.</p>
