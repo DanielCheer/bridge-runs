@@ -4376,6 +4376,7 @@ const PROGRAM_DEFS = {
       openDaysBefore: OPEN_DAYS_BEFORE, openHour: OPEN_H, lockTime: '14:00',
       theme: 'default', access: 'apply', approval: 'council',
       tiers: ['team', 'core', 'host'], offerWindow: true,
+      mentionTag: 'mention', chatSeqKey: 'chat_seq',   // push-dedup tag + app_settings key for this room
       features: { teams: false, groupQueue: false },
     },
     unread: (email, aid) => ({ group: groupUnread(email), gm: groupMentionUnread(email, aid) }),
@@ -4400,6 +4401,7 @@ const PROGRAM_DEFS = {
       pingHour: PK_PING_H, pingDowOffset: PK_PING_DOW_OFFSET, lockTime: PK_LOCK,
       theme: 'pk', access: 'opt-in', approval: 'invite',
       tiers: ['team', 'host'], offerWindow: false,
+      mentionTag: 'pkmention', chatSeqKey: 'pk_chat_seq',
       features: { teams: false, groupQueue: false },
     },
     unread: (email, aid) => ({ group: pkGroupUnread(email), gm: pkGroupMentionUnread(email, aid) }),
