@@ -275,6 +275,39 @@ window.__pollStop=function(){window.__pollPage=null;window.__pollOnChange=null;}
   });
   window.addEventListener('popstate',function(){ go(location.pathname+location.search,false); });
 })();
+// Run-page action forms (I'm in / Sit out / Open / Close / guest / teams / who's-going sheet actions):
+// POST via fetch + swap .wrap in place so the page never navigates (scroll kept, instant feedback,
+// no full-screen flash). Bound ONCE at document level here in app.js — which loads on every page —
+// so it works for ANY run program (basketball / pickleball / volleyball / future) without each run
+// page re-binding it. Degrades gracefully: with JS off (or fetch/DOMParser missing) the plain form
+// still POSTs and the route 302-redirects as before.
+if(!window.__ckControlsBound){ window.__ckControlsBound=true;
+  document.addEventListener('submit',function(e){
+    var form=e.target.closest&&e.target.closest('.controls form, .arform, .hguest form, .wgsheet form, .teamspanel form');
+    if(!form)return;
+    if(!window.fetch||!window.DOMParser||!window.__swapWrap)return;
+    e.preventDefault();
+    var reopenWg=!!(form.closest&&form.closest('.wgsheet')); // remove/bump from the open sheet → re-open it after the swap
+    var btn=form.querySelector('button[type=submit],button:not([type])');
+    if(btn){btn.classList.add('is-busy');btn.setAttribute('aria-busy','true');}
+    var y=window.scrollY;
+    window.__ckBusy=true; // park poll-driven swaps so they can't clobber this optimistic action mid-flight
+    fetch(form.action,{method:'POST',body:new URLSearchParams(new FormData(form)),headers:{'X-Requested-With':'fetch'},credentials:'same-origin'})
+      .then(function(r){return r.text();})
+      .then(function(html){
+        document.documentElement.classList.add('noanim'); // a swap isn't a fresh nav → no entry-reveal replay
+        window.__ckBusy=false;
+        // A redirect shim (e.g. the waiver gate) has no .wrap → swap fails; follow its target so an
+        // unwaivered "I'm in" reaches /waiver instead of dead-ending.
+        if(!window.__swapWrap(html)){var m=html.match(/location\.replace\("([^"]+)"\)/);window.location.href=m?m[1]:window.location.pathname;return;}
+        window.scrollTo(0,y);
+        if(reopenWg&&window.wgOpen)window.wgOpen();
+        var n=document.querySelector('.count .n');
+        if(n){n.classList.remove('pulse-now');void n.offsetWidth;n.classList.add('pulse-now');}
+      })
+      .catch(function(){window.__ckBusy=false;window.location.href=window.location.pathname;}); // stay on the current run page
+  });
+}
 // Register the service worker (offline shell + Web Push + app-icon badge). Runs on
 // real document loads only; harmless where unsupported.
 if('serviceWorker' in navigator&&!window.__swBound){window.__swBound=1;
@@ -2193,45 +2226,8 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
       // (.wrap swap engine — window.__swapWrap — now lives once in ANIM_HEAD, shared
       // by these check-in action fetches and the client tab router.)
 
-      // Intercept the check-in action forms (I'm in / Sit out / Open / Close …)
-      // AND the hero-footer auto-renew toggle (.arform): POST via fetch, then swap
-      // .wrap in place so the page doesn't navigate and the scroll position is kept
-      // (auto-renew toggling in place — pill flips ON/OFF with no full-screen flash).
-      // Optimistic button state + a hero-count pulse give instant feedback. Bound
-      // once at document level so it survives swaps. Degrades gracefully: with JS off
-      // (or fetch/DOMParser missing) the plain form still POSTs and the route
-      // 302-redirects as before.
-      if(!window.__ckControlsBound){ window.__ckControlsBound=true;
-        document.addEventListener('submit',function(e){
-          var form=e.target.closest&&e.target.closest('.controls form, .arform, .hguest form, .wgsheet form');
-          if(!form)return;
-          if(!window.fetch||!window.DOMParser||!window.__swapWrap)return;
-          e.preventDefault();
-          var reopenWg=!!(form.closest&&form.closest('.wgsheet')); // remove/bump from the open sheet → re-open it after the swap
-          var btn=form.querySelector('button[type=submit],button:not([type])');
-          if(btn){btn.classList.add('is-busy');btn.setAttribute('aria-busy','true');}
-          var y=window.scrollY;
-          // Guard: while this user's own action fetch is in flight, a poll-driven swap
-          // must not race it and clobber the optimistic state (see __ckOnChange).
-          window.__ckBusy=true;
-          fetch(form.action,{method:'POST',body:new URLSearchParams(new FormData(form)),headers:{'X-Requested-With':'fetch'},credentials:'same-origin'})
-            .then(function(r){return r.text();})
-            .then(function(html){
-              // suppress entry-reveal replay for the in-place swap (a swap isn't a
-              // fresh nav); the count pulse below carries the visual feedback.
-              document.documentElement.classList.add('noanim');
-              window.__ckBusy=false;
-              // A redirect shim (e.g. the waiver gate) has no .wrap → swap fails; follow its
-              // target so an unwaivered "I'm in" reaches /waiver instead of dead-ending.
-              if(!window.__swapWrap(html)){var m=html.match(/location\.replace\("([^"]+)"\)/);window.location.href=m?m[1]:window.location.pathname;return;}
-              window.scrollTo(0,y);
-              if(reopenWg&&window.wgOpen)window.wgOpen(); // keep the who's-going sheet open after a remove/bump
-              var n=document.querySelector('.count .n');
-              if(n){n.classList.remove('pulse-now');void n.offsetWidth;n.classList.add('pulse-now');}
-            })
-            .catch(function(){window.__ckBusy=false;window.location.href=window.location.pathname;}); // stay on the current run page (this handler is shared by basketball + pickleball)
-        });
-      }
+      // (The run-action-form interceptor now lives in app.js so it binds on EVERY page for ANY run
+      // program — it was formerly here, which only bound it once /checkin had loaded in the session.)
 
       // Surgical poll-and-patch (P0-1) replaces the old 20s full-page reload. On a
       // fingerprint change we re-fetch /checkin and swap .wrap in place (scroll kept,
@@ -2690,7 +2686,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
     const unassigned = floorPlayers.filter(p => !assigned.has(p.email) && !/@guest\.local$/.test(p.email));
     const ops = canOperate ? `<form method="POST" action="${runBase}/team/fill" style="margin:10px 0 0"><button class="btn sm" type="submit">⚖ Auto-fill teams</button></form>${unassigned.length ? `<div class="subh" style="margin-top:10px">Unassigned · ${unassigned.length}</div>${unassigned.map(p => `<div style="display:flex;align-items:center;gap:6px;padding:3px 0"><span style="flex:1">${esc(p.name)}</span>${Array.from({ length: teamsCfg.count }, (_, i) => `<form method="POST" action="${runBase}/team/assign" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><input type="hidden" name="team" value="${i + 1}"><button class="btn ghost sm" type="submit">${i + 1}</button></form>`).join('')}</div>`).join('')}` : ''}` : '';
     const mine = myTeam ? `<form method="POST" action="${runBase}/team/leave" style="margin:10px 0 0"><button class="btn ghost sm" type="submit">Leave my team</button></form>` : '';
-    return `<div class="infosec" style="margin-top:20px"><div class="card"><div class="clab">Teams</div>${teamsOpen ? '' : '<p class="tally-note" style="color:var(--muted);margin:6px 0 10px">Teams open once the roster locks.</p>'}<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">${cols.join('')}</div>${mine}${ops}</div></div>`;
+    return `<div class="infosec teamspanel" style="margin-top:20px"><div class="card"><div class="clab">Teams</div>${teamsOpen ? '' : '<p class="tally-note" style="color:var(--muted);margin:6px 0 10px">Teams open once the roster locks.</p>'}<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">${cols.join('')}</div>${mine}${ops}</div></div>`;
   })();
   return HEAD(`${sport} — The Bridge`, `has-tabs ${theme}`) + header(`<b>${sport.toUpperCase()}</b>${esc(email)}`, wdayShort(runDate), ann, hours) + `
     ${backToRuns}
