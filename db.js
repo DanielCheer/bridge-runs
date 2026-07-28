@@ -437,8 +437,20 @@ db.exec(`
     joined_at  TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (program_id, email)
   );
+  -- Teams within a run (Phase 5): numbered teams (1..config.features.teams.count) players join after
+  -- the roster locks. Additive + feature-flagged (config.features.teams) — dark until a program turns
+  -- it on. PK makes double-assignment impossible; program_id + run_date scope it like every run table.
+  CREATE TABLE IF NOT EXISTS team_assignments (
+    program_id  INTEGER NOT NULL,
+    run_date    TEXT NOT NULL,
+    email       TEXT NOT NULL,
+    team_no     INTEGER NOT NULL,
+    assigned_by TEXT NOT NULL DEFAULT '',     -- '' = self-served; else the operator's email
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (program_id, run_date, email)
+  );
 `);
-// Seed the two programs (idempotent). 1 = the live Advanced Basketball run; 2 = Pickleball, HIDDEN.
+// Seed the programs (idempotent). 1 = the live Advanced Basketball run; 2 = Pickleball, 3 = Volleyball (both HIDDEN).
 db.prepare("INSERT OR IGNORE INTO program (id,name,sport,slug,active,approval) VALUES (1,'Advanced Basketball','basketball','adv',1,'council')").run();
 db.prepare("INSERT OR IGNORE INTO program (id,name,sport,slug,active,approval) VALUES (2,'Pickleball','pickleball','pickleball',0,'invite')").run();
 db.prepare("INSERT OR IGNORE INTO program (id,name,sport,slug,active,approval) VALUES (3,'Volleyball','volleyball','volleyball',0,'invite')").run();
@@ -505,7 +517,7 @@ function transact(fn) {
 // keeps their own: drop whatever the target address left behind, then carry. Internal constants
 // — never user input — so interpolating them into SQL is safe.
 const EMAIL_KEYED_TABLES = ['announcement_reads', 'announcement_dismissals', 'regular_optout',
-  'group_reads', 'program_membership'];
+  'group_reads', 'program_membership', 'team_assignments'];
 
 // Carry every per-user row from oldEmail to newEmail. Assumes the CALLER already opened a
 // transaction, so the `applicants` row update commits atomically with this cascade — a

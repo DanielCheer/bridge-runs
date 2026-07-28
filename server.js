@@ -3665,6 +3665,7 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
     // this address (see rekeyEmailTx). Any unused sign-in link is revoked too — a delete the
     // admin just performed shouldn't leave a working magic link in an inbox.
     db.prepare('DELETE FROM regular_optout WHERE email = ?').run(a.email);  // program-generic → clears every program's sit-outs
+    db.prepare('DELETE FROM team_assignments WHERE email = ?').run(a.email); // and any run-team assignments
     db.prepare('DELETE FROM announcement_reads WHERE email = ?').run(a.email);
     db.prepare('DELETE FROM announcement_dismissals WHERE email = ?').run(a.email);
     db.prepare('DELETE FROM login_tokens WHERE email = ?').run(a.email);
