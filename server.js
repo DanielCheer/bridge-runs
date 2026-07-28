@@ -3868,6 +3868,72 @@ function pkPartition(rd) { return partitionFor(2, rd); }
 // the table is empty. The join/assign routes + the teams panel land next.
 function clearTeamAssignment(programId, rd, email) { db.prepare('DELETE FROM team_assignments WHERE program_id = ? AND run_date = ? AND email = ?').run(programId, rd, email); }
 function clearRunTeams(programId, rd) { db.prepare('DELETE FROM team_assignments WHERE program_id = ? AND run_date = ?').run(programId, rd); }
+const stmtRunTeams = db.prepare('SELECT email, team_no, assigned_by FROM team_assignments WHERE program_id = ? AND run_date = ? ORDER BY team_no ASC, created_at ASC');
+function runTeamsFor(programId, rd) { return stmtRunTeams.all(programId, rd); }
+function teamsFeature(programId) { const f = P(programId).config.features; return (f && f.teams) || null; }  // {count,size,opensAt,selfServe} or null
+// Teams open once the roster LOCKS (config.features.teams.opensAt='lock' → lockTime), so teams form
+// off the FINAL roster. schedNow() honours the TEST_NOW seam.
+function teamsOpen(programId, rd) {
+  if (!teamsFeature(programId)) return false;
+  return schedNow() >= new Date(rd + 'T' + P(programId).config.lockTime + ':00').getTime();
+}
+// Assign/move `email` to team `n` (1..count) with a SIZE GUARD — the INSERT OR REPLACE only lands if
+// team n currently holds < size OTHER players. Race-safe: one synchronous statement, no read-then-write
+// gap. Returns true if seated. by='' = self-served, else the operator's email.
+function assignTeam(programId, rd, email, teamNo, by = '') {
+  const t = teamsFeature(programId); if (!t) return false;
+  const n = Number(teamNo); if (!(n >= 1 && n <= t.count)) return false;
+  return db.prepare(`INSERT OR REPLACE INTO team_assignments (program_id, run_date, email, team_no, assigned_by)
+    SELECT ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM team_assignments WHERE program_id = ? AND run_date = ? AND team_no = ? AND email <> ?) < ?`)
+    .run(programId, rd, email, n, by, programId, rd, n, email, t.size).changes > 0;
+}
+// The set of floor players eligible for a team (real emails, on the floor once locked).
+function teamFloor(programId, rd) {
+  const cfg = P(programId).config, part = partitionFor(programId, rd);
+  return (cfg.offerWindow ? part.floorReal : part.floor).filter(p => !/@guest\.local$/.test(p.email));
+}
+// A floor player self-joins / switches a team (only once teams are open + they're on the floor).
+function runTeamJoin(programId, req, res) {
+  const base = P(programId).paths.run;
+  const g = programGate(programId, req, res); if (!g) return;
+  const t = teamsFeature(programId); if (!t) return res.redirect(base);
+  const rd = programRunDate(programId);
+  if (!teamsOpen(programId, rd) || !t.selfServe) return res.redirect(base);
+  if (teamFloor(programId, rd).some(p => p.email === req.userEmail)) assignTeam(programId, rd, req.userEmail, req.body.team, '');
+  res.redirect(base);
+}
+function runTeamLeave(programId, req, res) {
+  const base = P(programId).paths.run;
+  const g = programGate(programId, req, res); if (!g) return;
+  clearTeamAssignment(programId, programRunDate(programId), req.userEmail);
+  res.redirect(base);
+}
+// Operator: assign/move any floor player, or unassign (team 0/blank).
+function runTeamAssign(programId, req, res) {
+  const base = P(programId).paths.run;
+  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  if (!teamsFeature(programId)) return res.redirect(base);
+  const rd = programRunDate(programId), em = String(req.body.email || '').toLowerCase(), n = String(req.body.team || '');
+  if (n === '0' || n === '') clearTeamAssignment(programId, rd, em);
+  else assignTeam(programId, rd, em, n, req.userEmail);
+  res.redirect(base);
+}
+// Operator: round-robin the UNASSIGNED floor players into the emptiest teams so a run never starts half-formed.
+function runTeamFill(programId, req, res) {
+  const base = P(programId).paths.run;
+  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const t = teamsFeature(programId); if (!t) return res.redirect(base);
+  const rd = programRunDate(programId);
+  const counts = {}; for (let i = 1; i <= t.count; i++) counts[i] = 0;
+  const assigned = new Set();
+  for (const r of runTeamsFor(programId, rd)) { counts[r.team_no] = (counts[r.team_no] || 0) + 1; assigned.add(r.email); }
+  for (const p of teamFloor(programId, rd)) {
+    if (assigned.has(p.email)) continue;
+    let bestN = 0; for (let i = 1; i <= t.count; i++) if (counts[i] < t.size && (bestN === 0 || counts[i] < counts[bestN])) bestN = i;
+    if (bestN && assignTeam(programId, rd, p.email, bestN, req.userEmail)) counts[bestN]++;
+  }
+  res.redirect(base);
+}
 // Pickleball run start epoch — the run date at 6 PM local. Drives the countdown banner
 // AND the auto-lock time (check-in closes at start).
 function startEpochFor(programId, rd) { return rd ? new Date(rd + `T${String(P(programId).config.startHour).padStart(2, '0')}:00:00`).getTime() : 0; }
@@ -4572,7 +4638,7 @@ const PROGRAM_DEFS = {
       tiers: ['team', 'host'], offerWindow: true,
       autoRenew: { from: 'members' },
       mentionTag: 'vbmention', chatSeqKey: 'vb_chat_seq',
-      features: { teams: false, groupQueue: false },
+      features: { teams: { count: 3, size: 7, opensAt: 'lock', selfServe: true }, groupQueue: false },  // 3×7 (config, not hardcoded)
     },
     unread: genericUnread(3),
     hubCard: genericHubCard(3),
@@ -4606,6 +4672,11 @@ function mountRunProgram(app, program) {
   app.post(`${b}/announce`, requireLogin, (req, res) => runAnnounce(id, req, res));
   app.post(`${b}/announce/retract`, requireLogin, (req, res) => runAnnounceRetract(id, req, res));
   app.post(`${b}/publish`, requireAdmin, (req, res) => runPublish(id, req, res));
+  // Teams-in-a-run (registered for every program; the handlers no-op unless config.features.teams).
+  app.post(`${b}/team/join`, requireLogin, (req, res) => runTeamJoin(id, req, res));
+  app.post(`${b}/team/leave`, requireLogin, (req, res) => runTeamLeave(id, req, res));
+  app.post(`${b}/team/assign`, requireLogin, (req, res) => runTeamAssign(id, req, res));
+  app.post(`${b}/team/fill`, requireLogin, (req, res) => runTeamFill(id, req, res));
 }
 function buildPrograms() {
   PROGRAMS.clear();
