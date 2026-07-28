@@ -4444,6 +4444,7 @@ function runGetPage(programId, req, res) {
     pkMsg: req.query.pkset ? String(req.query.pkset) : (req.query.pkerr || ''),
     dmUnread: unreadCount(req.userEmail), groupUnread: chatUnreadFor(programId, req.userEmail), groupMention: chatMentionUnreadFor(programId, req.userEmail, g.a ? g.a.id : 0), ann: null,
     runBase: base, programId, theme: cfg.theme, sport: prog.displayName, sportEmoji: prog.emoji, dayName: DAY_NAMES[cfg.dow], pollKey: prog.key,
+    teamsCfg: teamsFeature(programId), teamRows: teamsFeature(programId) ? runTeamsFor(programId, rd) : [], teamsOpen: teamsFeature(programId) ? teamsOpen(programId, rd) : false,
   }));
 }
 

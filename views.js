@@ -2588,7 +2588,8 @@ export function pkJoinPage(state) { return runJoinPage(state); }
 // with its own runBase / theme / sport / etc. NOTE: offer-window UI (offered "claiming" rows) is
 // NOT rendered yet — volleyball (offerWindow:true) needs a follow-up increment for that.
 export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM', startLabel = '6 PM', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], offeredPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, myConfirmed = false, iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null,
-  runBase = '/pickleball', programId = 2, theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒', dayName = 'Tuesday', pollKey = 'pickleball' }) {
+  runBase = '/pickleball', programId = 2, theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒', dayName = 'Tuesday', pollKey = 'pickleball',
+  teamsCfg = null, teamRows = [], teamsOpen = false }) {
   const full = going >= cap, totalFull = (going + waiting) >= (cap + waitlistCap);
   const rmForm = (p) => `<form method="POST" action="${runBase}/remove" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn leave sm" type="submit">Remove</button></form>`;
   // Tappable name → profile popup (reuses the shared pvOpen + /u/:id/card); guests (no
@@ -2672,6 +2673,25 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
       </div>
     </div>`;
 
+  // Teams panel (Phase 5) — renders only for a program with config.features.teams (teamsCfg). Empty
+  // string otherwise → byte-identical for programs without teams. Numbered teams + members + a
+  // self-join/switch button (floor players, once teams open) + operator auto-fill/assign controls.
+  const teamsPanel = !teamsCfg ? '' : (() => {
+    const assigned = new Set(teamRows.map(r => r.email));
+    const nameOf = (em) => { const p = floorPlayers.find(x => x.email === em); return esc(p ? p.name : em); };
+    const myTeam = (teamRows.find(r => r.email === email) || {}).team_no || 0;
+    const onFloor = floorPlayers.some(p => p.email === email);
+    const cols = [];
+    for (let n = 1; n <= teamsCfg.count; n++) {
+      const mem = teamRows.filter(r => r.team_no === n);
+      const canJoin = teamsOpen && onFloor && teamsCfg.selfServe && myTeam !== n && mem.length < teamsCfg.size;
+      cols.push(`<div style="flex:1;min-width:118px;border:1px solid var(--line);border-radius:12px;padding:10px;background:var(--card)"><div style="font-weight:800;margin-bottom:6px">Team ${n} <span style="color:var(--muted);font-weight:600">${mem.length}/${teamsCfg.size}</span></div>${mem.map(r => `<div style="display:flex;align-items:center;gap:6px;padding:3px 0"><span style="flex:1">${nameOf(r.email)}${r.email === email ? ' <span class="tag">You</span>' : ''}</span>${canOperate ? `<form method="POST" action="${runBase}/team/assign" style="margin:0"><input type="hidden" name="email" value="${esc(r.email)}"><input type="hidden" name="team" value="0"><button class="btn ghost sm" type="submit" title="Unassign">×</button></form>` : ''}</div>`).join('') || '<div style="color:var(--muted)">—</div>'}${canJoin ? `<form method="POST" action="${runBase}/team/join" style="margin:6px 0 0"><input type="hidden" name="team" value="${n}"><button class="btn sm" type="submit">${myTeam ? 'Switch here' : 'Join'}</button></form>` : ''}</div>`);
+    }
+    const unassigned = floorPlayers.filter(p => !assigned.has(p.email) && !/@guest\.local$/.test(p.email));
+    const ops = canOperate ? `<form method="POST" action="${runBase}/team/fill" style="margin:10px 0 0"><button class="btn sm" type="submit">⚖ Auto-fill teams</button></form>${unassigned.length ? `<div class="subh" style="margin-top:10px">Unassigned · ${unassigned.length}</div>${unassigned.map(p => `<div style="display:flex;align-items:center;gap:6px;padding:3px 0"><span style="flex:1">${esc(p.name)}</span>${Array.from({ length: teamsCfg.count }, (_, i) => `<form method="POST" action="${runBase}/team/assign" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><input type="hidden" name="team" value="${i + 1}"><button class="btn ghost sm" type="submit">${i + 1}</button></form>`).join('')}</div>`).join('')}` : ''}` : '';
+    const mine = myTeam ? `<form method="POST" action="${runBase}/team/leave" style="margin:10px 0 0"><button class="btn ghost sm" type="submit">Leave my team</button></form>` : '';
+    return `<div class="infosec" style="margin-top:20px"><div class="card"><div class="clab">Teams</div>${teamsOpen ? '' : '<p class="tally-note" style="color:var(--muted);margin:6px 0 10px">Teams open once the roster locks.</p>'}<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">${cols.join('')}</div>${mine}${ops}</div></div>`;
+  })();
   return HEAD(`${sport} — The Bridge`, `has-tabs ${theme}`) + header(`<b>${sport.toUpperCase()}</b>${esc(email)}`, wdayShort(runDate), ann, hours) + `
     ${backToRuns}
     <div class="rule"></div>
@@ -2694,7 +2714,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
     ${myState === 'in' && !cancelled ? (myConfirmed
       ? `<div class="notice good" style="margin-top:10px">✓ <b>You're confirmed</b> for this run — see you there!</div>`
       : `<form method="POST" action="${runBase}/confirm" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming</button></form>`) : ''}
-    ${myState === 'waitlist' && !cancelled ? `<div class="notice warn" style="margin-top:10px">You're <b>#${myWaitPos}</b> on the waitlist. If a spot opens you'll get a notification and move onto the floor — no need to re-check.</div>` : ''}
+    ${myState === 'waitlist' && !cancelled ? `<div class="notice warn" style="margin-top:10px">You're <b>#${myWaitPos}</b> on the waitlist. If a spot opens you'll get a notification and move onto the floor — no need to re-check.</div>` : ''}${teamsPanel}
     ${cancelled ? '' : `<div style="margin-top:12px"><a href="${runBase}/run.ics" style="font-size:13px;color:var(--muted)">📅 Add this run to your calendar</a></div>`}
     ${qrBlock}
     <div style="height:28px"></div>
