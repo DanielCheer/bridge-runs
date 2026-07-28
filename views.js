@@ -2629,11 +2629,11 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       : `<span class="rhpill amber">Apply to join</span>`;
     if (r.hidden) return `<span class="rhpill amber">Hidden</span>`;
     if (r.status === 'cancelled') return `<span class="rhpill red">Cancelled</span>`;
-    if (r.status === 'open') return `<span class="rhpill green">Check-in open</span>`;
-    return `<span class="rhpill grey">Check-in closed</span>`;
+    if (r.status === 'open') return `<span class="rhpill open">Check-in open</span>`;
+    return `<span class="rhpill closed">Check-in closed</span>`;
   };
   const sub = (r) => {
-    const day = wdayFull(r.runDate);
+    const day = wdayShort(r.runDate); // short weekday so the full date + time fits without truncation
     const when = r.status === 'cancelled'
       ? 'Off this week'
       : [day && r.dateLabel ? `${day}, ${esc(r.dateLabel)}` : (day || 'No date set'), r.timeLabel ? esc(r.timeLabel) : ''].filter(Boolean).join(' · ');
@@ -2669,9 +2669,11 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       .rhemoji{font-size:30px;line-height:1;width:46px;height:46px;display:flex;align-items:center;justify-content:center;border-radius:13px;background:var(--teal-tint,#e9efec);flex:none}
       .rhbody{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
       .rhname{font-weight:800;font-size:17px;letter-spacing:-.01em}
-      .rhsub{color:var(--muted);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .rhsub{color:var(--muted);font-size:13px;line-height:1.35}
       .rhmeta{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex:none}
       .rhpill{font-size:11px;font-weight:700;letter-spacing:.02em;padding:3px 9px;border-radius:999px;white-space:nowrap}
+      .rhpill.open{background:#2f9e54;color:#fff}
+      .rhpill.closed{background:#e0503f;color:#111}
       .rhpill.green{background:#dcf0e2;color:#1f6b3a}
       .rhpill.grey{background:#ececea;color:#6b6a63}
       .rhpill.red{background:#f6dcdc;color:#a12c2c}
