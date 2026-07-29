@@ -2714,7 +2714,7 @@ function dailyVerse() {
 // that run's check-in page. `runs` = [{ key, emoji, name, href, runDate, dateLabel,
 // timeLabel, going, cap, status:'open'|'closed'|'cancelled', hidden }]. Self-contained
 // styles (scoped .rh*) so it needs no new global CSS.
-export function runsPage({ email, runs = [], canJoin = true, status = 'approved', canOperate = false, isAdmin = false, needsWaiver = false, needsDob = false, firstName = 'there', pastRuns = [], venue = '', location = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null }) {
+export function runsPage({ email, runs = [], canJoin = true, status = 'approved', canOperate = false, isAdmin = false, needsWaiver = false, needsDob = false, firstName = 'there', gamesAttended = 0, gamesThisYear = 0, pastRuns = [], venue = '', location = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null }) {
   // Non-approved viewers can SEE the runs but can't join — a tap routes them to apply
   // (or to their status) instead of into a check-in they're not cleared for.
   const applyHref = status === 'none' ? '/' : '/status';
@@ -2788,9 +2788,12 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
   return HEAD('Runs — The Bridge', 'has-tabs') + WELCOME_MODAL + `
     ${canJoin ? `<script>window.__tourRole={op:${canOperate ? 1 : 0},adm:${isAdmin ? 1 : 0},waiver:${needsWaiver ? 1 : 0}};</script>` : ''}
     <style>
-      .whead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:6px 2px 13px}
+      .whead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin:6px 2px 14px}
       .whead h1{font-family:var(--head);font-weight:800;font-size:25px;color:var(--ink);margin:0;letter-spacing:-.01em}
-      .wheadr{display:flex;align-items:center;gap:14px}
+      .wheadl{min-width:0}
+      .wsub{margin:3px 0 0;font-size:12.5px;color:var(--muted)}
+      .wsub b{color:var(--orange,#e4611f);font-variant-numeric:tabular-nums}
+      .wheadr{display:flex;align-items:center;gap:14px;flex:none;padding-top:3px}
       .jtabs{display:flex;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:13px;background:var(--card)}
       .jtab{flex:1;border:none;background:none;padding:11px 0;font-family:var(--head);font-weight:700;font-size:13px;letter-spacing:.02em;color:var(--muted);cursor:pointer;-webkit-tap-highlight-color:transparent}
       .jtab.on{background:var(--ink,#22231d);color:#fff}
@@ -2841,7 +2844,7 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
         .jattend{background:#183a25;color:#8fe0ab}
       }
     </style>
-    <div class="whead"><h1>Welcome, ${esc(firstName)}</h1><div class="wheadr">${annBtn}</div></div>
+    <div class="whead"><div class="wheadl"><h1>Welcome, ${esc(firstName)}</h1>${canJoin ? `<p class="wsub"><b>${gamesAttended}</b> game${gamesAttended === 1 ? '' : 's'} attended${gamesThisYear ? ` · <b>${gamesThisYear}</b> this year` : ''}</p>` : ''}</div><div class="wheadr">${annBtn}</div></div>
     ${nudge}${applyBanner}
     <div class="jtabs"><button type="button" class="jtab on" data-jt="up">Upcoming</button><button type="button" class="jtab" data-jt="past">Past</button></div>
     <div class="jlist" data-jl="up">${runs.length ? runs.map(card).join('') : '<p class="jempty">No runs available yet.</p>'}</div>

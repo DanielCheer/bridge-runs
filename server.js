@@ -763,6 +763,7 @@ const stmtAttTotal = db.prepare('SELECT COUNT(*) n FROM attendance WHERE email =
 const stmtAttSeason = db.prepare("SELECT COUNT(*) n FROM attendance WHERE email = ? AND program_id = 1 AND run_date >= strftime('%Y-01-01','now')");
 const stmtAttDates = db.prepare('SELECT run_date FROM attendance WHERE email = ? AND program_id = 1 ORDER BY run_date ASC');
 const stmtHubPast = db.prepare('SELECT run_date, program_id FROM attendance WHERE email = ? ORDER BY run_date DESC LIMIT 12'); // runs-hub "Past games" list
+const stmtHubAttCount = db.prepare("SELECT COUNT(*) n, SUM(CASE WHEN run_date >= strftime('%Y-01-01','now') THEN 1 ELSE 0 END) s FROM attendance WHERE email = ?"); // hub games-attended total + this-year
 function attendanceStats(email) {
   const total = stmtAttTotal.get(email).n;
   const season = stmtAttSeason.get(email).n;
@@ -1984,6 +1985,8 @@ app.get('/runs', requireLogin, (req, res) => {
   // ---- Home-screen redesign: "Welcome, {name}", a current-week calendar strip with a dot on
   // each day that has a run, and a Past-games list (the member's recent attended runs). ----
   const firstName = ((a?.full_name || email).trim().split(/\s+/)[0]) || 'there';
+  const attC = a ? stmtHubAttCount.get(email) : null;
+  const gamesAttended = attC ? (attC.n || 0) : 0, gamesThisYear = attC ? (attC.s || 0) : 0;
   const pastRuns = a ? stmtHubPast.all(email)
     .filter(r => PROGRAMS.has(r.program_id))
     .map(r => ({ name: PROGRAMS.get(r.program_id).displayName, emoji: PROGRAMS.get(r.program_id).emoji, runDate: r.run_date })) : [];
@@ -1992,7 +1995,7 @@ app.get('/runs', requireLogin, (req, res) => {
   const cc = chatCountsFor(chatProgram || 1, email, a ? a.id : 0);
   res.send(runsPage({
     email, runs, canJoin, status,
-    firstName, pastRuns, venue: 'The Bridge Church', location: '5440 16th Ave, Markham',
+    firstName, gamesAttended, gamesThisYear, pastRuns, venue: 'The Bridge Church', location: '5440 16th Ave, Markham',
     isAdmin: viewerIsAdmin,
     canOperate: viewerIsAdmin || !!(a && a.is_team),
     needsWaiver: !!(a && !a.waiver_ok), // tour ends on a "sign your waiver" step for players who haven't
