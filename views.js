@@ -2720,65 +2720,70 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
   // Non-approved viewers can SEE the runs but can't join — a tap routes them to apply
   // (or to their status) instead of into a check-in they're not cleared for.
   const applyHref = status === 'none' ? '/' : '/status';
-  const pill = (r) => {
-    if (!canJoin) return status === 'pending'
-      ? `<span class="rhpill grey">Applied</span>`
-      : status === 'rejected'
-      ? `<span class="rhpill grey">Not this season</span>`
-      : `<span class="rhpill amber">Apply to join</span>`;
-    if (r.hidden) return `<span class="rhpill amber">Hidden</span>`;
-    if (r.status === 'cancelled') return `<span class="rhpill red">Cancelled</span>`;
-    if (r.status === 'open') return `<span class="rhpill open">Check-in open</span>`;
-    return `<span class="rhpill closed">Check-in closed</span>`;
+  const DOW3 = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+  const MON3 = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+  // Per-sport identity ball watermarks (inline SVG, stroke=currentColor=the rail colour).
+  const BBALL = '<svg width="116" height="116" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 2v20"/><path d="M2 12h20"/><path d="M7.8 3c-3 3.6-3 14.4 0 18"/><path d="M16.2 3c3 3.6 3 14.4 0 18"/></svg>';
+  const PADDLE = '<svg width="110" height="110" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><g transform="rotate(-45 12 12)"><rect x="8" y="2.6" width="8" height="11.4" rx="4"/><path d="M12 14v5.4"/></g><circle cx="5.4" cy="18.6" r="2.1"/></svg>';
+  const VBALL = '<svg width="116" height="116" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M11.1 7.1a16.55 16.55 0 0 1 10.9 4"/><path d="M12 12a12.6 12.6 0 0 1-8.7 5"/><path d="M16.8 13.6a16.55 16.55 0 0 1-9 7.5"/><path d="M20.7 17a12.8 12.8 0 0 0-8.7-5 13.3 13.3 0 0 1 0-10"/><path d="M6.3 3.8a16.55 16.55 0 0 0 1.9 11.5"/></svg>';
+  const LOCK_OPEN = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7a4 4 0 0 1 7.7-1.5"/></svg>';
+  const LOCK_SHUT = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/></svg>';
+  // key → [rail colour, ball, watermark rotation, left%, top%]. Unknown (e.g. demo) → neutral purple.
+  const SPORT = { basketball: ['#e4611f', BBALL, '-10deg', '40%', '44%'], pickleball: ['#1f6f66', PADDLE, '13deg', '55%', '63%'], volleyball: ['#2f5d9e', VBALL, '5deg', '47%', '38%'] };
+  const sportOf = (r) => SPORT[r.key] || ['#6d5bd0', BBALL, '-6deg', '45%', '45%'];
+  // Viewer's own status → a small pill (takes priority over the generic hidden tag).
+  const mineBadge = (r) => {
+    const m = r.mine; if (!m) return '';
+    if (m.state === 'in') return `<span class="jc-pill you">✓ You're in</span>`;
+    if (m.state === 'offered') return `<span class="jc-pill claim">⏳ Claim your spot</span>`;
+    if (m.state === 'waitlist') return `<span class="jc-pill wait">Waitlisted · #${m.pos} of ${m.total}</span>`;
+    return '';
   };
-  // Social proof: people the viewer follows who are already checked in (Javelin-style). Up to 3
-  // overlapping avatars + a first-name label. Empty → renders nothing (no row).
+  // Social proof: mutual-follows already checked in — up to 3 avatars + a name label.
   const frGoing = (r) => {
     const fr = r.friendsGoing || [];
     if (!fr.length) return '';
-    const avs = fr.slice(0, 3).map(f => `<span class="mav rhfr-av">${avatarInner(f.email, f.name)}</span>`).join('');
+    const avs = fr.slice(0, 3).map(f => `<span class="mav jc-fav">${avatarInner(f.email, f.name)}</span>`).join('');
     const names = fr.map(f => esc((f.name || '').trim().split(/\s+/)[0] || 'Someone'));
     const label = names.length === 1 ? `${names[0]} is going`
       : names.length === 2 ? `${names[0]} & ${names[1]} going`
       : `${names[0]}, ${names[1]} +${names.length - 2} going`;
-    return `<span class="rhfr"><span class="rhfr-avs">${avs}</span><span class="rhfr-txt">${label}</span></span>`;
+    return `<span class="jc-fr"><span class="jc-favs">${avs}</span><span class="jc-frtxt">${label}</span></span>`;
   };
-  // The viewer's OWN status for this run (Javelin-style) — takes visual priority over the generic
-  // open/closed pill, so "Waitlisted · #3 of 8" / "You're in" is the first thing they see on the card.
-  const mineBadge = (r) => {
-    const m = r.mine; if (!m) return '';
-    if (m.state === 'in') return `<span class="rhmine in">✓ You're in</span>`;
-    if (m.state === 'offered') return `<span class="rhmine offer">⏳ Claim your spot</span>`;
-    if (m.state === 'waitlist') return `<span class="rhmine wait">Waitlisted · #${m.pos} of ${m.total}</span>`;
-    return '';
-  };
-  // Icons (inline SVG; orange via currentColor on the parent).
-  const IBOOK = '<svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v18l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>';
-  const IPIN = '<svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>';
-  const ICLK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
-  const dateLine = (r) => [wdayShort(r.runDate), r.dateLabel].filter(Boolean).join(' · ') || 'No date set';
-  // Javelin-style card: orange accent bar + bookmark + title/venue row, then location/time + date +
-  // the viewer's own status. Whole card links into that run's check-in (or apply, for non-members).
-  const card = (r) => `<a class="jcard${r.status === 'cancelled' ? ' cancelled' : ''}" href="${canJoin ? r.href : applyHref}"${canJoin ? '' : ' data-full'}>
-      <span class="jbar" aria-hidden="true"></span>
-      <span class="jbody">
-        <span class="jr1"><span class="jname"><span class="jbook">${IBOOK}</span>${esc(r.name)}${r.hidden ? ' <span class="rhlock" title="Only admins can see this run">🔒</span>' : ''}</span><span class="jvenue">${esc(venue)}</span></span>
-        <span class="jrule"></span>
-        <span class="jr2">
-          <span class="jwhere"><span class="jloc">${IPIN}${esc(location)}</span>${r.status === 'cancelled' ? '' : `<span class="jtime">${ICLK}${r.timeLabel ? esc(r.timeLabel) : '—'}</span>`}</span>
-          <span class="jright"><span class="jdate">${esc(dateLine(r))}</span>${r.status === 'cancelled' ? pill(r) : (mineBadge(r) || pill(r))}${canJoin && r.status !== 'cancelled' ? `<span class="jcount">${r.going}/${r.cap} in</span>` : ''}</span>
-        </span>
+  // Scoreboard card: sport-coloured date-rail (weekday/day/month + open|closed padlock) and a body
+  // with a faint off-centre ball watermark, the run name, the count, the time, and the viewer's badge.
+  // Open → vivid sport colour + unlocked; anything else (closed/cancelled/hidden) → greyed + locked.
+  // A locked card still opens its run page (B) — it just reads as unavailable.
+  const card = (r) => {
+    const [color, ball, rot, wl, wt] = sportOf(r);
+    const d = r.runDate ? new Date(r.runDate + 'T12:00:00') : null;
+    const open = r.status === 'open' && !r.hidden;
+    const badge = mineBadge(r) || (r.hidden ? `<span class="jc-pill hid">Hidden</span>` : (r.status === 'cancelled' ? `<span class="jc-pill hid">Cancelled</span>` : ''));
+    return `<a class="jc ${open ? 'open' : 'locked'}" style="--sport:${open ? color : '#a29c8f'};--wl:${wl};--wt:${wt};--rot:${rot}" href="${canJoin ? r.href : applyHref}"${canJoin ? '' : ' data-full'}>
+      <span class="jc-date">
+        <span class="jc-dow">${d ? DOW3[d.getDay()] : '—'}</span><span class="jc-num">${d ? d.getDate() : ''}</span><span class="jc-mon">${d ? MON3[d.getMonth()] : ''}</span>
+        <span class="jc-lock" aria-label="${open ? 'Check-in open' : 'Check-in closed'}">${open ? LOCK_OPEN : LOCK_SHUT}</span>
+      </span>
+      <span class="jc-body">
+        <span class="jc-wm" aria-hidden="true">${ball}</span>
+        <span class="jc-r1"><span class="jc-name">${esc(r.name)}</span>${canJoin && r.status !== 'cancelled' ? `<span class="jc-count"><b>${r.going}</b>/${r.cap}</span>` : ''}</span>
+        <span class="jc-time">${r.status === 'cancelled' ? 'Cancelled this week' : (r.timeLabel ? esc(r.timeLabel) : '')}</span>
+        ${badge ? `<span class="jc-pills">${badge}</span>` : ''}
         ${frGoing(r)}
       </span>
     </a>`;
-  const pastCard = (r) => `<div class="jcard past">
-      <span class="jbar" aria-hidden="true"></span>
-      <span class="jbody">
-        <span class="jr1"><span class="jname"><span class="jbook">${IBOOK}</span>${esc(r.name)}</span><span class="jvenue">${esc(venue)}</span></span>
-        <span class="jrule"></span>
-        <span class="jr2"><span class="jwhere"><span class="jloc">${IPIN}${esc(location)}</span></span><span class="jright"><span class="jdate">${esc(dateLine(r))}</span><span class="jattend">Attended ✓</span></span></span>
-      </span>
-    </div>`;
+  };
+  const pastCard = (r) => {
+    const [, ball] = sportOf(r);
+    const d = r.runDate ? new Date(r.runDate + 'T12:00:00') : null;
+    return `<div class="jc locked" style="--sport:#a29c8f;--wl:47%;--wt:45%;--rot:-6deg">
+      <span class="jc-date"><span class="jc-dow">${d ? DOW3[d.getDay()] : '—'}</span><span class="jc-num">${d ? d.getDate() : ''}</span><span class="jc-mon">${d ? MON3[d.getMonth()] : ''}</span></span>
+      <span class="jc-body"><span class="jc-wm" aria-hidden="true">${ball}</span>
+        <span class="jc-r1"><span class="jc-name">${esc(r.name)}</span></span>
+        <span class="jc-time">${d ? `${DOW3[d.getDay()]} · ${MON3[d.getMonth()]} ${d.getDate()}` : ''}</span>
+        <span class="jc-pills"><span class="jc-pill you">Attended ✓</span></span>
+      </span></div>`;
+  };
   const applyBanner = canJoin ? '' : `<div class="notice" style="margin:12px 0 0">${status === 'pending'
       ? `⏳ <b>Application in review</b> — you’ll be able to check in here once the organizers approve you.`
       : status === 'rejected'
@@ -2790,72 +2795,95 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
   return HEAD('Runs — The Bridge', 'has-tabs') + WELCOME_MODAL + `
     ${canJoin ? `<script>window.__tourRole={op:${canOperate ? 1 : 0},adm:${isAdmin ? 1 : 0},waiver:${needsWaiver ? 1 : 0}};</script>` : ''}
     <style>
-      .whead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin:4px 2px 9px}
-      .whead h1{font-family:var(--head);font-weight:800;font-size:23px;color:var(--ink);margin:0;letter-spacing:-.01em}
-      .wheadl{min-width:0}
-      .wsub{margin:2px 0 0;font-size:12px;color:var(--muted)}
-      .wsub b{color:var(--orange,#e4611f);font-variant-numeric:tabular-nums}
-      .wheadr{display:flex;align-items:center;gap:14px;flex:none;padding-top:3px}
-      .jtabs{display:flex;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:13px;background:var(--card)}
-      .jtab{flex:1;border:none;background:none;padding:9px 0;font-family:var(--head);font-weight:700;font-size:13px;letter-spacing:.02em;color:var(--muted);cursor:pointer;-webkit-tap-highlight-color:transparent}
-      .jtab.on{background:var(--ink,#22231d);color:#fff}
-      .jlist{display:flex;flex-direction:column;gap:8px}
+      .jhead{position:relative;overflow:hidden;margin:2px 0 0;padding:2px 2px 2px}
+      .jh-court{position:absolute;border:1.5px solid rgba(228,97,31,.13);border-radius:50%;pointer-events:none}
+      .jh-court.c1{width:300px;height:300px;right:-120px;top:-150px}
+      .jh-court.c2{width:180px;height:180px;right:-58px;top:-84px;border-color:rgba(34,35,29,.06)}
+      .jh-court.c3{width:150px;height:150px;left:-92px;bottom:-34px;border-color:rgba(228,97,31,.09)}
+      .jbrand{display:flex;align-items:center;gap:9px;position:relative;z-index:1}
+      .jmark{width:34px;height:34px;border-radius:8px;object-fit:contain;flex:none}
+      .jbn{display:flex;flex-direction:column;gap:2px}
+      .jbn b{font-family:var(--head);font-weight:800;font-size:11px;letter-spacing:.2em;color:var(--ink)}
+      .jbn em{font-family:var(--head);font-weight:800;font-style:normal;font-size:8px;letter-spacing:.3em;color:var(--orange)}
+      .jbell{margin-left:auto;display:flex}
+      .jgreet{margin-top:15px;position:relative;z-index:1}
+      .je-eye{display:block;font-family:var(--head);font-weight:800;font-size:12px;letter-spacing:.32em;color:var(--orange);text-transform:uppercase}
+      .jgreet h1{margin:4px 0 0;font-family:var(--head);font-weight:800;font-size:38px;line-height:.95;letter-spacing:-.5px;text-transform:uppercase;color:var(--ink)}
+      .je-dot{color:var(--orange)}
+      .jstats{display:flex;align-items:center;gap:14px;margin-top:12px;position:relative;z-index:1}
+      .jstat{display:flex;align-items:baseline;gap:7px}
+      .jstat b{font-family:var(--head);font-weight:800;font-size:19px;color:var(--orange)}
+      .jstat span{font-family:var(--head);font-weight:800;font-size:9px;line-height:1.15;letter-spacing:.14em;color:var(--muted);text-transform:uppercase}
+      .jsdiv{width:1px;height:15px;background:rgba(34,35,29,.2);transform:skewX(-15deg)}
+      .jedge{height:3px;margin:11px 0 8px;background:var(--orange);border-radius:2px}
+      .jseg{display:flex;gap:4px;margin:6px 0 13px;padding:4px;border-radius:12px;background:var(--card);border:1px solid var(--line)}
+      .jseg-b{flex:1;padding:9px 0;border:0;border-radius:8px;background:transparent;cursor:pointer;font-family:var(--head);font-weight:800;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);-webkit-tap-highlight-color:transparent}
+      .jseg-b.on{background:var(--ink);color:var(--bg,#f6f1e8);box-shadow:inset 0 -2px 0 0 var(--orange)}
+      .jsec{display:flex;align-items:center;gap:8px;margin:4px 0 10px}
+      .jsec-tick{width:8px;height:14px;background:var(--orange);transform:skewX(-14deg);border-radius:1px}
+      .jsec h3{font-family:var(--head);font-weight:800;font-size:14px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink);margin:0}
+      .jsec-meta{margin-left:auto;font-family:var(--head);font-weight:800;font-size:9.5px;letter-spacing:.16em;color:var(--muted);text-transform:uppercase}
+      .jlist{display:flex;flex-direction:column;gap:9px}
       .jlist[hidden]{display:none}
-      .jcard{position:relative;display:flex;background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;text-decoration:none;color:inherit;box-shadow:0 1px 2px rgba(0,0,0,.04);transition:transform .06s ease}
-      .jcard:active{transform:scale(.99)}
-      .jbar{width:5px;flex:none;align-self:stretch;background:var(--orange,#e4611f)}
-      .jcard.cancelled .jbar{background:var(--muted)}
-      .jbody{flex:1;min-width:0;padding:9px 13px}
-      .jr1{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
-      .jname{display:flex;align-items:center;gap:7px;font-family:var(--head);font-weight:800;font-size:15.5px;color:var(--ink);min-width:0}
-      .jbook{color:var(--orange,#e4611f);display:flex;flex:none}
-      .jvenue{font-size:11.5px;color:var(--muted);flex:none;white-space:nowrap;max-width:46%;overflow:hidden;text-overflow:ellipsis}
-      .jrule{height:1px;background:var(--line);margin:6px 0}
-      .jr2{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
-      .jwhere{display:flex;flex-direction:column;gap:3px;min-width:0}
-      .jloc,.jtime{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink)}
-      .jloc svg,.jtime svg{color:var(--orange,#e4611f);flex:none}
-      .jright{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex:none;text-align:right}
-      .jdate{font-size:12.5px;color:var(--muted);white-space:nowrap}
-      .jcount{font-size:11.5px;font-weight:700;color:var(--muted);font-variant-numeric:tabular-nums}
-      .jattend{font-size:11px;font-weight:800;color:#1f6b3a;background:#dcf0e2;border-radius:999px;padding:3px 9px}
-      .jcard.past{opacity:.9}
-      .jempty{color:var(--muted);text-align:center;font-size:14px;padding:22px 0}
-      .rhpill{font-size:11px;font-weight:700;letter-spacing:.02em;padding:3px 9px;border-radius:999px;white-space:nowrap}
-      .rhpill.open{background:#2f9e54;color:#fff}
-      .rhpill.closed{background:#e0503f;color:#fff}
-      .rhpill.grey{background:#ececea;color:#6b6a63}
-      .rhpill.red{background:#f6dcdc;color:#a12c2c}
-      .rhpill.amber{background:#f7eccf;color:#8a6a1b}
-      .rhmine{font-size:11px;font-weight:800;letter-spacing:.02em;padding:3px 9px;border-radius:999px;white-space:nowrap}
-      .rhmine.in{background:#2f9e54;color:#fff}
-      .rhmine.wait{background:#f7eccf;color:#8a6a1b}
-      .rhmine.offer{background:#e0503f;color:#fff}
-      .rhfr{display:flex;align-items:center;gap:7px;margin-top:8px}
-      .rhfr-avs{display:inline-flex}
-      .rhfr-av.mav{width:20px;height:20px;font-size:9px;border:1.5px solid var(--card);box-shadow:0 0 0 .5px var(--line)}
-      .rhfr-avs .rhfr-av:not(:first-child){margin-left:-7px}
-      .rhfr-txt{color:var(--muted);font-size:12px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-      .hubverse{max-width:36ch;margin:11px auto 4px;text-align:center;padding:0 14px}
+      .jc{--sport:var(--ink);position:relative;display:flex;background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;text-decoration:none;color:inherit;box-shadow:0 1px 2px rgba(0,0,0,.04),0 10px 22px -16px rgba(34,35,29,.2);transition:transform .06s ease}
+      .jc:active{transform:scale(.99)}
+      .jc.locked{background:#f4f1ea}
+      .jc-date{flex:none;width:58px;background-color:var(--sport);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:12px 0;background-image:repeating-linear-gradient(115deg,rgba(255,255,255,.05) 0 2px,transparent 2px 11px)}
+      .jc.locked .jc-date{background-image:none}
+      .jc-dow{font-family:var(--head);font-weight:800;font-size:10px;letter-spacing:.16em;color:rgba(255,255,255,.85)}
+      .jc-num{font-family:var(--head);font-weight:800;font-size:26px;line-height:1;letter-spacing:-.5px;color:#fff}
+      .jc-mon{font-family:var(--head);font-weight:800;font-size:8.5px;letter-spacing:.24em;color:rgba(255,255,255,.62)}
+      .jc-lock{margin-top:8px;opacity:.95;display:flex}
+      .jc-body{position:relative;flex:1;min-width:0;padding:12px 13px;display:flex;flex-direction:column;justify-content:center;gap:5px;overflow:hidden}
+      .jc-wm{position:absolute;left:var(--wl,50%);top:var(--wt,50%);transform:translate(-50%,-50%) rotate(var(--rot,0deg));color:var(--sport);opacity:.09;pointer-events:none}
+      .jc.locked .jc-wm{opacity:.07}
+      .jc-wm svg{display:block}
+      .jc-r1,.jc-time,.jc-pills,.jc-fr{position:relative;z-index:1}
+      .jc-r1{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+      .jc-name{flex:1;font-family:var(--head);font-weight:800;font-size:17px;letter-spacing:.2px;text-transform:uppercase;color:var(--ink);min-width:0}
+      .jc.locked .jc-name{color:#958f80}
+      .jc-count{flex:none;font-family:var(--head);font-weight:800;font-size:17px;color:#a49b87}
+      .jc-count b{color:var(--sport);font-weight:800}
+      .jc.locked .jc-count,.jc.locked .jc-count b{color:#b7b0a0}
+      .jc-time{font-size:12.5px;font-weight:600;color:var(--muted)}
+      .jc.locked .jc-time{color:#a49d8d}
+      .jc-pills{display:flex;gap:6px;flex-wrap:wrap;margin-top:1px}
+      .jc-pill{display:inline-flex;align-items:center;gap:5px;padding:4px 8px;border-radius:6px;font-family:var(--head);font-weight:800;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
+      .jc-pill.you{color:#fff;background:#1f6f66}
+      .jc-pill.claim{color:#fff;background:var(--orange)}
+      .jc-pill.wait{color:#8a6a1b;background:#f7eccf}
+      .jc-pill.hid{color:#8a6a1b;background:#f0e6cf}
+      .jc-fr{display:flex;align-items:center;gap:7px;margin-top:2px}
+      .jc-favs{display:inline-flex}
+      .jc-fav.mav{width:19px;height:19px;font-size:9px;border:1.5px solid var(--card);box-shadow:0 0 0 .5px var(--line)}
+      .jc-favs .jc-fav:not(:first-child){margin-left:-6px}
+      .jc-frtxt{color:var(--muted);font-size:11.5px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .jempty{color:var(--muted);text-align:center;font-size:14px;padding:20px 0}
+      .hubverse{max-width:36ch;margin:12px auto 4px;text-align:center;padding:0 14px}
       .hubverse-t{font-size:13.5px;line-height:1.5;color:var(--ink);font-style:italic;margin:0}
       .hubverse-r{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:6px 0 0;font-weight:700}
       @media (prefers-color-scheme:dark){
-        .rhpill.grey{background:#2a2a28;color:#b7b6ae}
-        .rhpill.red{background:#3d1e1e;color:#f0a3a3}
-        .rhpill.amber{background:#3a3016;color:#e7c766}
-        .rhmine.wait{background:#3a3016;color:#e7c766}
-        .jattend{background:#183a25;color:#8fe0ab}
+        .jc.locked{background:#26251f}
+        .jc-pill.wait{background:#3a3016;color:#e7c766}
+        .jc-pill.hid{background:#3a3016;color:#e7c766}
       }
     </style>
-    <div class="whead"><div class="wheadl"><h1>Welcome, ${esc(firstName)}</h1>${canJoin ? `<p class="wsub"><b>${gamesAttended}</b> game${gamesAttended === 1 ? '' : 's'} attended${gamesThisYear ? ` · <b>${gamesThisYear}</b> this year` : ''}</p>` : ''}</div><div class="wheadr">${annBtn}</div></div>
+    <header class="jhead">
+      <span class="jh-court c1"></span><span class="jh-court c2"></span><span class="jh-court c3"></span>
+      <div class="jbrand"><img class="jmark" alt="The Bridge" src="/icon-192.png?v=2"><div class="jbn"><b>THE BRIDGE</b><em>YA SPORTS</em></div><span class="jbell">${annBtn}</span></div>
+      <div class="jgreet"><span class="je-eye">Welcome,</span><h1>${esc(firstName)}<span class="je-dot">.</span></h1></div>
+      ${canJoin ? `<div class="jstats"><div class="jstat"><b>${gamesAttended}</b><span>Game${gamesAttended === 1 ? '' : 's'}<br>attended</span></div><div class="jsdiv"></div><div class="jstat"><b>${gamesThisYear}</b><span>This<br>year</span></div></div>` : ''}
+    </header>
+    <div class="jedge" aria-hidden="true"></div>
     ${nudge}${applyBanner}
-    <div class="jtabs"><button type="button" class="jtab on" data-jt="up">Upcoming</button><button type="button" class="jtab" data-jt="past">Past</button></div>
+    <div class="jseg"><button type="button" class="jseg-b on" data-jt="up">Upcoming</button><button type="button" class="jseg-b" data-jt="past">Past</button></div>
+    <div class="jsec"><span class="jsec-tick"></span><h3>This Week</h3><span class="jsec-meta">${runs.length} run${runs.length === 1 ? '' : 's'}</span></div>
     <div class="jlist" data-jl="up">${runs.length ? runs.map(card).join('') : '<p class="jempty">No runs available yet.</p>'}</div>
     <div class="jlist" data-jl="past" hidden>${pastRuns.length ? pastRuns.map(pastCard).join('') : '<p class="jempty">No past games yet — your attended runs will show here.</p>'}</div>
     ${verse}
     ${annSheet}
     ${canJoin ? firstRunTour : ''}
-    <script>(function(){if(window.__jtabBound)return;window.__jtabBound=1;document.addEventListener('click',function(e){var b=e.target&&e.target.closest&&e.target.closest('.jtab[data-jt]');if(!b)return;var sel=b.getAttribute('data-jt');var ts=document.querySelectorAll('.jtab[data-jt]');for(var i=0;i<ts.length;i++)ts[i].classList.toggle('on',ts[i]===b);var ls=document.querySelectorAll('.jlist[data-jl]');for(var j=0;j<ls.length;j++)ls[j].hidden=(ls[j].getAttribute('data-jl')!==sel);});})();</script>
+    <script>(function(){if(window.__jtabBound)return;window.__jtabBound=1;document.addEventListener('click',function(e){var b=e.target&&e.target.closest&&e.target.closest('.jseg-b[data-jt]');if(!b)return;var sel=b.getAttribute('data-jt');var ts=document.querySelectorAll('.jseg-b[data-jt]');for(var i=0;i<ts.length;i++)ts[i].classList.toggle('on',ts[i]===b);var ls=document.querySelectorAll('.jlist[data-jl]');for(var j=0;j<ls.length;j++)ls[j].hidden=(ls[j].getAttribute('data-jl')!==sel);});})();</script>
   ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: chatProgram }));
 }
 
