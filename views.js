@@ -286,6 +286,10 @@ if(!window.__ckControlsBound){ window.__ckControlsBound=true;
   document.addEventListener('submit',function(e){
     var form=e.target.closest&&e.target.closest('.controls form, .arform, .hguest form, .wgsheet form, .teamspanel form, .swapform');
     if(!form)return;
+    // An inline onsubmit="return confirm(...)" that the user CANCELLED sets defaultPrevented in the
+    // target phase; this document-level listener still fires. Bail so "Cancel" truly cancels (and the
+    // fetch doesn't run the action anyway). Load-bearing now that confirm-guarded forms carry swapform.
+    if(e.defaultPrevented)return;
     if(!window.fetch||!window.DOMParser||!window.__swapWrap)return;
     e.preventDefault();
     var reopenWg=!!(form.closest&&form.closest('.wgsheet')); // remove/bump from the open sheet → re-open it after the swap
@@ -1885,7 +1889,7 @@ function runDayControls({ runDay, rdMsg = '' }) {
   // the upcoming run is weeks out (beyond the 30-day picker), so hide them and show a note.
   const weekSection = runDay.preseason
     ? `<p class="tally-note" style="color:var(--muted);margin:8px 0 0">Weekly run-day &amp; cancel controls appear once the season starts (${esc(runDay.seasonWeekday)}, ${esc(runDay.seasonLabel)}).</p>`
-    : `<form method="POST" action="/admin/rundate" style="margin:0">
+    : `<form method="POST" action="/admin/rundate" class="swapform" style="margin:0">
       <div class="field"><label>Run date</label><input type="date" name="date" value="${esc(runDay.runDate)}" min="${esc(runDay.today)}" max="${esc(runDay.maxDate)}" required style="${ti}"></div>
       <div style="display:flex;gap:10px;margin-top:8px">
         <div class="field" style="flex:1;margin:0"><label>Start</label><input type="time" name="start" value="${esc(runDay.start)}" required style="${ti}"></div>
@@ -1894,11 +1898,11 @@ function runDayControls({ runDay, rdMsg = '' }) {
       <label class="lvl" style="margin:10px 0 8px;display:block"><input type="checkbox" name="email_everyone" checked> Also email everyone</label>
       <button class="btn sm" type="submit">Set run day &amp; time</button>
     </form>
-    ${runDay.isOverride ? `<form method="POST" action="/admin/rundate" style="margin-top:8px"><input type="hidden" name="date" value="${esc(runDay.defaultDate)}"><input type="hidden" name="email_everyone" value="1"><button class="btn ghost sm" type="submit">Reset to the usual day &amp; time (${esc(runDay.defaultLabel)})</button></form>` : ''}
+    ${runDay.isOverride ? `<form method="POST" action="/admin/rundate" class="swapform" style="margin-top:8px"><input type="hidden" name="date" value="${esc(runDay.defaultDate)}"><input type="hidden" name="email_everyone" value="1"><button class="btn ghost sm" type="submit">Reset to the usual day &amp; time (${esc(runDay.defaultLabel)})</button></form>` : ''}
     <div class="rule" style="margin:14px 0 12px"></div>
     ${runDay.cancelled
-      ? `<div class="notice bad" style="margin:0 0 10px"><b>🚫 This run is cancelled.</b> Players were notified. Restore it to run check-in again.</div><form method="POST" action="/admin/run/cancel" style="margin:0"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Restore this run</button></form>`
-      : `<p class="tally-note" style="margin:0 0 8px">Something come up? Cancel this week's run — players get a "run cancelled" notification and check-in is blocked. (Only this week.)</p><form method="POST" action="/admin/run/cancel" style="margin:0" onsubmit="return confirm('Cancel this week\\'s run? Everyone will be notified it\\'s off.');"><input type="hidden" name="on" value="1"><button class="btn leave sm" type="submit">🚫 Cancel this week's run</button></form>`}`;
+      ? `<div class="notice bad" style="margin:0 0 10px"><b>🚫 This run is cancelled.</b> Players were notified. Restore it to run check-in again.</div><form method="POST" action="/admin/run/cancel" class="swapform" style="margin:0"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Restore this run</button></form>`
+      : `<p class="tally-note" style="margin:0 0 8px">Something come up? Cancel this week's run — players get a "run cancelled" notification and check-in is blocked. (Only this week.)</p><form method="POST" action="/admin/run/cancel" class="swapform" style="margin:0" onsubmit="return confirm('Cancel this week\\'s run? Everyone will be notified it\\'s off.');"><input type="hidden" name="on" value="1"><button class="btn leave sm" type="submit">🚫 Cancel this week's run</button></form>`}`;
 
   // Season-start gate control — pause the weekly schedule until the season opens (or clear it).
   const seasonSection = `<div class="rule" style="margin:14px 0 12px"></div>
@@ -1906,11 +1910,11 @@ function runDayControls({ runDay, rdMsg = '' }) {
     <p class="tally-note" style="margin:6px 0 10px">${runDay.season
       ? `Season starts <b>${esc(runDay.seasonWeekday)}, ${esc(runDay.seasonLabel)}</b> — no runs and no auto check-in until ~2 days before.`
       : `Runs every week. Set a season start to pause the schedule until the season opens.`}</p>
-    <form method="POST" action="/admin/season" style="margin:0">
+    <form method="POST" action="/admin/season" class="swapform" style="margin:0">
       <div class="field"><label>Season start</label><input type="date" name="season" value="${esc(runDay.season)}" min="${esc(runDay.today)}" max="${esc(runDay.seasonMax)}" style="${ti}"></div>
       <button class="btn sm" type="submit" style="margin-top:8px">Set season start</button>
     </form>
-    ${runDay.season ? `<form method="POST" action="/admin/season" style="margin-top:8px" onsubmit="return confirm('Clear the season start? Runs resume every week right away.');"><input type="hidden" name="season" value=""><button class="btn ghost sm" type="submit">Clear — run every week</button></form>` : ''}`;
+    ${runDay.season ? `<form method="POST" action="/admin/season" class="swapform" style="margin-top:8px" onsubmit="return confirm('Clear the season start? Runs resume every week right away.');"><input type="hidden" name="season" value=""><button class="btn ghost sm" type="submit">Clear — run every week</button></form>` : ''}`;
 
   return `<div class="infosec" data-tour="rundate" style="margin-top:20px"><div class="card"><div class="clab">Operator tools</div>
     ${rdBanner}
@@ -2056,7 +2060,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
   // ----- announcement compose (operators only; folded into the teal hero) -----
   const annCompose = canOperate
     ? `<details class="announce-compose"><summary>Send announcement</summary>
-        <form method="POST" action="/announce" style="margin-top:10px" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Posting…';">
+        <form method="POST" action="/announce" class="swapform" style="margin-top:10px" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Posting…';">
           <textarea name="body" required maxlength="500" placeholder="e.g. No run this week — gym's booked. Back next week."></textarea>
           <div style="height:8px"></div>
           <label class="lvl" style="margin:0 0 8px"><input type="checkbox" name="email_everyone"> Also email everyone</label>
@@ -2844,7 +2848,7 @@ export function runJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, 
       <span class="eyebrow">Join the run</span>
       <h3 style="margin:4px 0 8px">Want in on ${sport.toLowerCase()}?</h3>
       <p class="lead" style="margin:0 0 14px">Join to check in each week and chat with the ${sport.toLowerCase()} crew — it's its own run, with its own check-in and chat.${runLabel ? ` Next run: <b>${esc(wdayFull(runDate))}, ${esc(runLabel)}</b>.` : ''}</p>
-      <form method="POST" action="${runBase}/join-run"><button class="btn primary" type="submit">${sportEmoji} Join ${sport.toLowerCase()}</button></form>
+      <form method="POST" action="${runBase}/join-run" class="swapform"><button class="btn primary" type="submit">${sportEmoji} Join ${sport.toLowerCase()}</button></form>
     </div>
   ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: chatProgram }));
 }
@@ -2914,7 +2918,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
   // ----- hero footer (INSIDE the card, like basketball): Post announcement (operators,
   //       LEFT) + Auto-renew pill (members, RIGHT) -----
   const annCompose = canOperate
-    ? `<details class="announce-compose"><summary>📣 Post announcement</summary><form method="POST" action="${runBase}/announce" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Posting…';"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all ${sport.toLowerCase()} members (pushes to their phones)"></textarea><div style="height:8px"></div><label class="lvl" style="margin:0 0 8px"><input type="checkbox" name="email_everyone"> Also email everyone</label><button class="btn sm" type="submit">Post &amp; notify</button></form></details>`
+    ? `<details class="announce-compose"><summary>📣 Post announcement</summary><form method="POST" action="${runBase}/announce" class="swapform" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Posting…';"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all ${sport.toLowerCase()} members (pushes to their phones)"></textarea><div style="height:8px"></div><label class="lvl" style="margin:0 0 8px"><input type="checkbox" name="email_everyone"> Also email everyone</label><button class="btn sm" type="submit">Post &amp; notify</button></form></details>`
     : '';
   const autoRenewPill = cancelled ? '' : `<form method="POST" action="${runBase}/autorenew" class="arform" style="margin:0"><input type="hidden" name="on" value="${iAutoRenew ? '0' : '1'}"><button class="arpill${iAutoRenew ? ' on' : ''}" type="submit" title="Auto-join the ${sport.toLowerCase()} run each week">🔁 Auto-renew${iAutoRenew ? ' · ON' : ' · OFF'}</button></form>`;
   const heroFooter = (annCompose || autoRenewPill)
@@ -3003,7 +3007,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
   return HEAD(`${sport} — The Bridge`, `has-tabs ${theme}`) + header(`<b>${sport.toUpperCase()}</b>${esc(email)}`, wdayShort(runDate), ann, hours) + `
     ${backToRuns}
     <div class="rule"></div>
-    ${hidden ? `<div class="notice" style="margin-top:10px">🔒 <b>Hidden run</b> — only admins can see this. Flip it live when it's ready.${isAdmin ? ` <form method="POST" action="${runBase}/publish" style="display:inline"><button class="btn sm" type="submit" style="margin-left:6px">Make it live</button></form>` : ''}</div>` : (isAdmin ? `<div class="notice good" style="margin-top:10px">✅ <b>Live</b> — members can join. <form method="POST" action="${runBase}/publish" style="display:inline"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit" style="margin-left:6px">Hide again</button></form></div>` : '')}
+    ${hidden ? `<div class="notice" style="margin-top:10px">🔒 <b>Hidden run</b> — only admins can see this. Flip it live when it's ready.${isAdmin ? ` <form method="POST" action="${runBase}/publish" class="swapform" style="display:inline"><button class="btn sm" type="submit" style="margin-left:6px">Make it live</button></form>` : ''}</div>` : (isAdmin ? `<div class="notice good" style="margin-top:10px">✅ <b>Live</b> — members can join. <form method="POST" action="${runBase}/publish" class="swapform" style="display:inline"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit" style="margin-left:6px">Hide again</button></form></div>` : '')}
     <div class="phead"><h1>${sport} ${sportEmoji}</h1></div>
     <p class="psub" style="margin:-4px 0 8px;color:var(--muted)">${cancelled ? 'Cancelled this week' : (runLabel ? `Next: ${esc(wdayFull(runDate))}, ${esc(runLabel)}` : 'No date set')} · ${going}/${cap} in${waiting ? ` · ${waiting} waiting` : ''}</p>
     <div class="gymbanner">
@@ -3016,8 +3020,8 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
       </div>
       ${canOperate ? `<a class="bannedit" href="${runBase}/banner" aria-label="Change banner photo">🖼 Change</a>` : ''}
     </div>
-    ${announcement ? `<div class="notice" style="margin-top:10px;display:flex;align-items:flex-start;gap:8px;justify-content:space-between"><span>📣 <b>Announcement</b> · ${esc(announcement.body)}${announcement.author ? `<span style="color:var(--muted)"> — ${esc(announcement.author)}</span>` : ''}</span>${canOperate ? `<form method="POST" action="${runBase}/announce/retract" style="margin:0;flex-shrink:0"><button class="btn ghost sm" type="submit" title="Retract this announcement">Retract</button></form>` : ''}</div>` : ''}
-    ${hero}${demoMode && canOperate ? `<div class="notice" style="margin-top:10px;background:#fff4e5;border-color:#e0b070">🎬 <b>Demo mode.</b> Seed a full floor + waitlist, then pull a floor player (Remove in "Who's going") to fire a real auto-offer — the top waitlister moves to <b>⏳ Claiming</b>; tap <b>✓ Claim</b> to slide them onto the floor. Nothing here touches live data.<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><form method="POST" action="/admin/demo/seed" style="margin:0"><button class="btn primary sm" type="submit">${going + waiting ? '↻ Reset' : '▶ Seed'} full run</button></form><form method="POST" action="/admin/demo/clear" style="margin:0" onsubmit="return confirm('Clear the demo run?')"><button class="btn ghost sm" type="submit">Clear</button></form></div></div>` : ''}
+    ${announcement ? `<div class="notice" style="margin-top:10px;display:flex;align-items:flex-start;gap:8px;justify-content:space-between"><span>📣 <b>Announcement</b> · ${esc(announcement.body)}${announcement.author ? `<span style="color:var(--muted)"> — ${esc(announcement.author)}</span>` : ''}</span>${canOperate ? `<form method="POST" action="${runBase}/announce/retract" class="swapform" style="margin:0;flex-shrink:0"><button class="btn ghost sm" type="submit" title="Retract this announcement">Retract</button></form>` : ''}</div>` : ''}
+    ${hero}${demoMode && canOperate ? `<div class="notice" style="margin-top:10px;background:#fff4e5;border-color:#e0b070">🎬 <b>Demo mode.</b> Seed a full floor + waitlist, then pull a floor player (Remove in "Who's going") to fire a real auto-offer — the top waitlister moves to <b>⏳ Claiming</b>; tap <b>✓ Claim</b> to slide them onto the floor. Nothing here touches live data.<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><form method="POST" action="/admin/demo/seed" class="swapform" style="margin:0"><button class="btn primary sm" type="submit">${going + waiting ? '↻ Reset' : '▶ Seed'} full run</button></form><form method="POST" action="/admin/demo/clear" class="swapform" style="margin:0" onsubmit="return confirm('Clear the demo run?')"><button class="btn ghost sm" type="submit">Clear</button></form></div></div>` : ''}
     ${(action || runToggle) ? `<div class="controls">${action}${runToggle}</div>` : ''}
     ${myState === 'in' && !cancelled ? (myConfirmed
       ? `<div class="notice good" style="margin-top:10px">✓ <b>You're confirmed</b> for this run — see you there!</div>`
@@ -3039,20 +3043,20 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
         : (pkMsg === 'datebad') ? '<div class="notice bad">That run date did not look right — try again.</div>' : ''}
       ${preseason
         ? `<p class="tally-note" style="color:var(--muted);margin:8px 0 0">Runs ${dayName}s. Weekly run-date &amp; cancel controls appear once the season starts (${esc(seasonWeekday)}, ${esc(seasonLabel)}).</p>`
-        : `<form method="POST" action="${runBase}/date" style="display:flex;gap:8px;align-items:center;margin:8px 0 0"><input type="date" name="date" value="${esc(runDate)}" style="font-size:16px"><button class="btn ghost sm" type="submit">Set run date</button></form>
+        : `<form method="POST" action="${runBase}/date" class="swapform" style="display:flex;gap:8px;align-items:center;margin:8px 0 0"><input type="date" name="date" value="${esc(runDate)}" style="font-size:16px"><button class="btn ghost sm" type="submit">Set run date</button></form>
       ${cancelled
-        ? `<form method="POST" action="${runBase}/cancel" style="margin-top:10px"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Restore this run</button></form>`
-        : `<form method="POST" action="${runBase}/cancel" style="margin-top:10px" onsubmit="return confirm('Cancel this week\\'s ${sport.toLowerCase()}?')"><button class="btn ghost sm" type="submit">🚫 Cancel this week</button></form>`}`}
+        ? `<form method="POST" action="${runBase}/cancel" class="swapform" style="margin-top:10px"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Restore this run</button></form>`
+        : `<form method="POST" action="${runBase}/cancel" class="swapform" style="margin-top:10px" onsubmit="return confirm('Cancel this week\\'s ${sport.toLowerCase()}?')"><button class="btn ghost sm" type="submit">🚫 Cancel this week</button></form>`}`}
       <div class="rule" style="margin:14px 0 12px"></div>
       <div class="clab" style="margin-bottom:2px">Season</div>
       <p class="tally-note" style="margin:6px 0 10px">${season
         ? `Season starts <b>${esc(seasonWeekday)}, ${esc(seasonLabel)}</b> — no runs and no auto check-in until then.`
         : `Runs every ${dayName}. Set a season start to pause the schedule until the season opens.`}</p>
-      <form method="POST" action="${runBase}/season" style="margin:0">
+      <form method="POST" action="${runBase}/season" class="swapform" style="margin:0">
         <div class="field"><label>Season start</label><input type="date" name="season" value="${esc(season)}" min="${esc(today)}" max="${esc(seasonMax)}" style="font-size:16px;min-height:44px;padding:11px 13px;width:100%;box-sizing:border-box;max-width:100%"></div>
         <button class="btn sm" type="submit" style="margin-top:8px">Set season start</button>
       </form>
-      ${season ? `<form method="POST" action="${runBase}/season" style="margin-top:8px" onsubmit="return confirm('Clear the season start? Runs resume every week right away.');"><input type="hidden" name="season" value=""><button class="btn ghost sm" type="submit">Clear — run every week</button></form>` : ''}
+      ${season ? `<form method="POST" action="${runBase}/season" class="swapform" style="margin-top:8px" onsubmit="return confirm('Clear the season start? Runs resume every week right away.');"><input type="hidden" name="season" value=""><button class="btn ghost sm" type="submit">Clear — run every week</button></form>` : ''}
     </div></div>` : ''}
     ${wgSheet}
     <div id="pvwrap" class="wgwrap pvwrap"><div class="wgscrim" onclick="pvClose()"></div>
@@ -3198,7 +3202,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
     <form id="photoform" method="POST" action="/profile/photo" enctype="multipart/form-data" style="display:none">
       <input id="photoinput" type="file" accept="image/*" name="photo" onchange="if(this.files&&this.files[0]){this.form.submit()}">
     </form>
-    <form id="photoremove" method="POST" action="/profile/photo/remove" style="display:none"></form>
+    <form id="photoremove" method="POST" action="/profile/photo/remove" class="swapform" style="display:none"></form>
     <form method="POST" action="/profile" class="pedit">
       <div class="bar"><a class="bk" href="/checkin">‹ Back</a><span class="ti">Profile</span><span class="baracts">${annBtn}<button class="dn" type="submit">Save</button></span></div>
       ${saved ? '<div class="notice good">Saved ✓</div>' : ''}
@@ -3908,14 +3912,14 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–
   const nameByEmail = new Map(teamMembers.map(m => [m.email.toLowerCase(), m.full_name]));
   const voterName = (e) => esc(nameByEmail.get(String(e).toLowerCase()) || e);
   const voteBtn = (id, vote, label, cls, active) =>
-    `<form method="POST" action="/admin/vote"><input type="hidden" name="id" value="${id}"><input type="hidden" name="vote" value="${vote}"><button class="btn ${cls} sm${active ? ' voted' : ''}" type="submit">${active ? '✓ ' : ''}${label}</button></form>`;
+    `<form method="POST" action="/admin/vote" class="swapform"><input type="hidden" name="id" value="${id}"><input type="hidden" name="vote" value="${vote}"><button class="btn ${cls} sm${active ? ' voted' : ''}" type="submit">${active ? '✓ ' : ''}${label}</button></form>`;
 
   const rows = applicants.map((a, __i) => {
     const isSelf = a.email === viewerEmail;
     // Role toggles — ADMIN ONLY. Making team auto-approves; regular needs approved.
     const roleBtn = (role, flag, onLabel, offLabel, show) => (!viewerIsAdmin || !show) ? '' : (flag
-      ? `<form method="POST" action="/admin/role"><input type="hidden" name="id" value="${a.id}"><input type="hidden" name="role" value="${role}"><input type="hidden" name="on" value="0"><button class="btn sm regstar" type="submit">${onLabel}</button></form>`
-      : `<form method="POST" action="/admin/role"><input type="hidden" name="id" value="${a.id}"><input type="hidden" name="role" value="${role}"><input type="hidden" name="on" value="1"><button class="btn ghost sm" type="submit">${offLabel}</button></form>`);
+      ? `<form method="POST" action="/admin/role" class="swapform"><input type="hidden" name="id" value="${a.id}"><input type="hidden" name="role" value="${role}"><input type="hidden" name="on" value="0"><button class="btn sm regstar" type="submit">${onLabel}</button></form>`
+      : `<form method="POST" action="/admin/role" class="swapform"><input type="hidden" name="id" value="${a.id}"><input type="hidden" name="role" value="${role}"><input type="hidden" name="on" value="1"><button class="btn ghost sm" type="submit">${offLabel}</button></form>`);
     const teamBtn = roleBtn('team', a.is_team, '◆ Team — remove', 'Make team', true);
     // Make Pillar auto-approves (like team), so it's offered for pending applicants too, not just approved.
     const regBtn  = roleBtn('regular', a.is_regular, '★ Pillar — remove', 'Make Pillar', true);
@@ -3950,7 +3954,7 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–
           : `${voteBtn(a.id, 'approve', 'Approve', 'approve', v.myVote === 'approve')}
              ${voteBtn(a.id, 'reject', 'Reject', 'leave', v.myVote === 'reject')}`);
       const resetBtn = viewerIsAdmin
-        ? `<form method="POST" action="/admin/reset"><input type="hidden" name="id" value="${a.id}"><button class="btn ghost sm" type="submit">Reset votes</button></form>` : '';
+        ? `<form method="POST" action="/admin/reset" class="swapform"><input type="hidden" name="id" value="${a.id}"><button class="btn ghost sm" type="submit">Reset votes</button></form>` : '';
       decisionBlock = `${tally}${whoVoted}${waiting}
         <div class="acts"${__i === 0 ? ' data-tour="council"' : ''}>${voteButtons}${resetBtn}${teamBtn}${regBtn}${hostBtn}</div>`;
     }
@@ -4005,7 +4009,7 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–
     <div class="notice">This ${wdayFull(runDate)} (${esc(runLabel)}): <b>${checkedInCount}/${cap}</b> checked in.</div>
     ${msg ? `<div class="notice good">${esc(msg)}</div>` : ''}
     ${viewerIsAdmin ? `<details class="announce-compose" style="margin-top:12px"><summary>⚙️ Run settings — capacity</summary>
-      <form method="POST" action="/admin/settings" class="editrow" style="margin-top:10px">
+      <form method="POST" action="/admin/settings" class="editrow swapform" style="margin-top:10px">
         <label>Floor cap <span style="text-transform:none;font-weight:400;color:var(--muted)">(players in the run)</span><input name="run_cap" type="number" min="1" max="100" inputmode="numeric" value="${cap}"></label>
         <label>Waitlist cap<input name="waitlist_cap" type="number" min="0" max="100" inputmode="numeric" value="${waitlistCap}"></label>
         <label>Pre-register cap <span style="text-transform:none;font-weight:400;color:var(--muted)">(team + core spots held while closed)</span><input name="prereg_cap" type="number" min="0" max="100" inputmode="numeric" value="${preregCap}"></label>
@@ -4231,7 +4235,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
   const pill = (s) => `<span class="pill ${s}">${s}</span>`;
   const rows = people.map(a => `<details class="arow"${q ? ' open' : ''}>
     <summary><span class="an">${esc(a.full_name)}${a.is_team ? ' <span class="tag team">◆</span>' : ''}${a.is_regular ? ' <span class="tag reg">★</span>' : ''}${a.suspended ? ' <span class="tag susp">⊘ Suspended</span>' : ''}</span> ${pill(a.status)}</summary>
-    <form method="POST" action="/admin/people/edit" class="editrow" style="margin-top:12px">
+    <form method="POST" action="/admin/people/edit" class="editrow swapform" style="margin-top:12px">
       <input type="hidden" name="id" value="${a.id}">
       <label>Name<input name="full_name" value="${esc(a.full_name)}"></label>
       <label>Phone<input name="phone" value="${esc(a.phone)}" inputmode="tel"></label>
@@ -4242,12 +4246,12 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
       </div>
     </form>
     ${a.suspended
-      ? `<form method="POST" action="/admin/people/suspend" style="margin:6px 0 0">
+      ? `<form method="POST" action="/admin/people/suspend" class="swapform" style="margin:6px 0 0">
            <input type="hidden" name="id" value="${a.id}"><input type="hidden" name="on" value="0">
            ${a.suspend_reason ? `<p class="tally-note" style="margin:0 0 6px">Reason: ${esc(a.suspend_reason)}</p>` : ''}
            <button class="btn ghost sm" type="submit">Unsuspend — restore check-in &amp; chat</button>
          </form>`
-      : `<form method="POST" action="/admin/people/suspend" class="editrow" style="margin:6px 0 0">
+      : `<form method="POST" action="/admin/people/suspend" class="editrow swapform" style="margin:6px 0 0">
            <input type="hidden" name="id" value="${a.id}"><input type="hidden" name="on" value="1">
            <label>Suspend reason <span style="text-transform:none;font-weight:400;color:var(--muted)">(optional — shown to them)</span><input name="reason" placeholder="e.g. no-show 3 weeks running"></label>
            <div class="editacts"><button class="btn ghost sm" type="submit">Suspend — block check-in &amp; chat</button></div>
@@ -4278,7 +4282,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
     </div>
 
     <div class="subhead">Add a player</div>
-    <form method="POST" action="/admin/people/invite" class="card rail">
+    <form method="POST" action="/admin/people/invite" class="card rail swapform">
       <p class="tally-note" style="margin:0 0 10px">Fill in whatever you know — all three fields are optional. Give <b>all three</b> and they're approved instantly, no link needed. Give less (or nothing) and you'll get a one-time link to send them — they fill in the rest, confirm the waiver, and land signed in.</p>
       <label>Full name <span style="text-transform:none;font-weight:400;color:var(--muted)">(optional)</span><input name="full_name" placeholder="Leave blank to let them fill it in"></label>
       <label>Phone <span style="text-transform:none;font-weight:400;color:var(--muted)">(optional)</span><input name="phone" inputmode="tel" placeholder="Leave blank to let them fill it in"></label>
@@ -4310,7 +4314,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
             <div style="height:6px"></div>
             <div style="display:flex;gap:8px;flex-wrap:wrap">
               <button class="btn ghost sm" type="button" onclick="var i=this.closest('li').querySelector('input[readonly]');if(i){i.select();try{navigator.clipboard.writeText(i.value);}catch(e){}}this.textContent='Copied ✓';setTimeout(()=>this.textContent='Copy link',1500)">Copy link</button>
-              <form method="POST" action="/admin/people/invite/revoke" onsubmit="return confirm('Revoke this invite link? It will stop working.');" style="margin:0">
+              <form method="POST" action="/admin/people/invite/revoke" class="swapform" onsubmit="return confirm('Revoke this invite link? It will stop working.');" style="margin:0">
                 <input type="hidden" name="token" value="${esc(iv.token)}">
                 <button class="btn leave sm" type="submit">Revoke</button>
               </form>
