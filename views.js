@@ -1692,7 +1692,7 @@ export function intakePage({ submitted = false, error = '', alreadyApproved = fa
 
       <label for="dob">Date of birth</label>
       <input id="dob" name="dob" type="date" required autocomplete="bday">
-      <p class="tally-note" style="margin:4px 0 0">Used to confirm age — under-18 members can't use private 1-on-1 messages (a safeguarding rule). Group chat is unaffected.</p>
+      <p class="tally-note" style="margin:4px 0 0">Used to confirm your age (a safeguarding requirement).</p>
 
       <label>What level of basketball have you played? <span style="text-transform:none;font-weight:400;color:var(--muted)">(pick all that apply)</span></label>
       <div class="levels">
@@ -1833,7 +1833,7 @@ export function invitePage({ invalid = false, used = false, checkEmail = false, 
 
       <label for="dob">Date of birth</label>
       <input id="dob" name="dob" type="date" required autocomplete="bday" value="${esc(dob)}">
-      <p class="tally-note" style="margin:6px 0 0">Confirms age — under-18 members can't use private 1-on-1 messages (a safeguarding rule).</p>
+      <p class="tally-note" style="margin:6px 0 0">Confirms your age (a safeguarding requirement).</p>
 
       <div class="check">
         <input id="waiver_ok" name="waiver_ok" type="checkbox" value="1" required>
@@ -2790,7 +2790,7 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       ? `<b>Not on the Adv list this season.</b> The open Monday recreational run is always available.`
       : `👋 <b>Not a member yet?</b> Apply to join — fill out the form and you’ll get in once you’re approved. <a class="btn sm" href="/" data-full style="margin-left:6px;width:auto">Apply to join →</a>`}</div>`;
   const { btn: annBtn, sheet: annSheet } = annBell(ann);
-  const nudge = needsDob ? `<div class="notice warn" style="margin:0 0 12px">📅 <b>Add your date of birth</b> — we now use it for age-based safety rules (under-18 members can't use private 1-on-1 messages; group chat is unaffected). <a class="btn sm" href="/profile" style="margin-left:6px;width:auto">Add it →</a></div>` : '';
+  const nudge = needsDob ? `<div class="notice warn" style="margin:0 0 12px">📅 <b>Add your date of birth</b> — we use it for age-based safety rules. <a class="btn sm" href="/profile" style="margin-left:6px;width:auto">Add it →</a></div>` : '';
   const verse = (() => { const v = dailyVerse(); return `<div class="hubverse"><p class="hubverse-t">“${esc(v.text)}”</p><p class="hubverse-r">— ${esc(v.ref)} · KJV</p></div>`; })();
   return HEAD('Runs — The Bridge', 'has-tabs') + WELCOME_MODAL + `
     ${canJoin ? `<script>window.__tourRole={op:${canOperate ? 1 : 0},adm:${isAdmin ? 1 : 0},waiver:${needsWaiver ? 1 : 0}};</script>` : ''}
@@ -3281,7 +3281,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
             ${a.dob
               ? `<p class="tally-note" style="margin:2px 0 0"><b>${esc(a.dob)}</b> · contact an organizer to change it.</p>`
               : `<input name="dob" type="date" autocomplete="bday">
-            <p class="tally-note" style="margin:6px 0 0">Optional but recommended. Under-18 members can't use private 1-on-1 messages (a safeguarding rule); group chat is unaffected. Once set, only an organizer can change it.</p>`}
+            <p class="tally-note" style="margin:6px 0 0">Optional but recommended (a safeguarding requirement). Once set, only an organizer can change it.</p>`}
           </div>
         </div>
       </details>

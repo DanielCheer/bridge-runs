@@ -1099,7 +1099,9 @@ function canMessage(senderEmail, senderA, recip) {
   if (recip.email === senderEmail) return false;            // no messaging yourself
   if (/@guest\.local$/.test(recip.email)) return false;     // guest placeholders aren't accounts
   if (blockedPair(senderEmail, recip.email)) return false;  // a blocked pair (either direction) can't DM (Phase 6)
-  if (isMinor(senderA) || isMinor(recip)) return false;     // no unmonitored 1:1 DMs for a known minor (safeguarding)
+  if (isAdmin(senderEmail)) return true;                    // admin → any approved member, incl. a minor (safeguarding oversight; works even for a row-less admin)
+  if (isMinor(senderA)) return false;                       // a known minor can't use 1:1 DMs at all (safeguarding)
+  if (isMinor(recip)) return false;                         // and NO non-admin may DM a known minor (adults 18+ included)
   if (senderA && senderA.is_host) return true;              // host → anyone approved
   // Player-to-player DMs: any approved player may message any other approved player.
   return !!(senderA && (senderA.status === 'approved' || senderA.is_team));
