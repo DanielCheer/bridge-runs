@@ -2714,7 +2714,7 @@ function dailyVerse() {
 // that run's check-in page. `runs` = [{ key, emoji, name, href, runDate, dateLabel,
 // timeLabel, going, cap, status:'open'|'closed'|'cancelled', hidden }]. Self-contained
 // styles (scoped .rh*) so it needs no new global CSS.
-export function runsPage({ email, runs = [], canJoin = true, status = 'approved', canOperate = false, isAdmin = false, needsWaiver = false, needsDob = false, dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null }) {
+export function runsPage({ email, runs = [], canJoin = true, status = 'approved', canOperate = false, isAdmin = false, needsWaiver = false, needsDob = false, firstName = 'there', weekDays = [], monthLabel = '', pastRuns = [], venue = '', location = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null }) {
   // Non-approved viewers can SEE the runs but can't join — a tap routes them to apply
   // (or to their status) instead of into a check-in they're not cleared for.
   const applyHref = status === 'none' ? '/' : '/status';
@@ -2728,13 +2728,6 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
     if (r.status === 'cancelled') return `<span class="rhpill red">Cancelled</span>`;
     if (r.status === 'open') return `<span class="rhpill open">Check-in open</span>`;
     return `<span class="rhpill closed">Check-in closed</span>`;
-  };
-  const sub = (r) => {
-    const day = wdayShort(r.runDate); // short weekday so the full date + time fits without truncation
-    const when = r.status === 'cancelled'
-      ? 'Off this week'
-      : [day && r.dateLabel ? `${day}, ${esc(r.dateLabel)}` : (day || 'No date set'), r.timeLabel ? esc(r.timeLabel) : ''].filter(Boolean).join(' · ');
-    return when;
   };
   // Social proof: people the viewer follows who are already checked in (Javelin-style). Up to 3
   // overlapping avatars + a first-name label. Empty → renders nothing (no row).
@@ -2757,79 +2750,119 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
     if (m.state === 'waitlist') return `<span class="rhmine wait">Waitlisted · #${m.pos} of ${m.total}</span>`;
     return '';
   };
-  const card = (r) => `<a class="rhcard" href="${canJoin ? r.href : applyHref}"${canJoin ? '' : ' data-full'}>
-      <span class="rhemoji" aria-hidden="true">${r.emoji}</span>
-      <span class="rhbody">
-        <span class="rhname">${esc(r.name)}${r.hidden ? ' <span class="rhlock" title="Only admins can see this run">🔒</span>' : ''}</span>
-        <span class="rhsub">${sub(r)}</span>
+  // Icons (inline SVG; orange via currentColor on the parent).
+  const IBOOK = '<svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v18l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>';
+  const IPIN = '<svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>';
+  const ICLK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
+  const ICAL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16.5" rx="2.5"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/></svg>';
+  const dateLine = (r) => [wdayShort(r.runDate), r.dateLabel].filter(Boolean).join(' · ') || 'No date set';
+  // Javelin-style card: orange accent bar + bookmark + title/venue row, then location/time + date +
+  // the viewer's own status. Whole card links into that run's check-in (or apply, for non-members).
+  const card = (r) => `<a class="jcard${r.status === 'cancelled' ? ' cancelled' : ''}" href="${canJoin ? r.href : applyHref}"${canJoin ? '' : ' data-full'}>
+      <span class="jbar" aria-hidden="true"></span>
+      <span class="jbody">
+        <span class="jr1"><span class="jname"><span class="jbook">${IBOOK}</span>${esc(r.name)}${r.hidden ? ' <span class="rhlock" title="Only admins can see this run">🔒</span>' : ''}</span><span class="jvenue">${esc(venue)}</span></span>
+        <span class="jrule"></span>
+        <span class="jr2">
+          <span class="jwhere"><span class="jloc">${IPIN}${esc(location)}</span>${r.status === 'cancelled' ? '' : `<span class="jtime">${ICLK}${r.timeLabel ? esc(r.timeLabel) : '—'}</span>`}</span>
+          <span class="jright"><span class="jdate">${esc(dateLine(r))}</span>${r.status === 'cancelled' ? pill(r) : (mineBadge(r) || pill(r))}${canJoin && r.status !== 'cancelled' ? `<span class="jcount">${r.going}/${r.cap} in</span>` : ''}</span>
+        </span>
         ${frGoing(r)}
       </span>
-      <span class="rhmeta">
-        ${r.status === 'cancelled' ? pill(r) : (mineBadge(r) || pill(r))}
-        ${canJoin ? `<span class="rhcount">${r.going}<span class="rhslash">/${r.cap}</span></span>` : ''}
-      </span>
-      <span class="rharrow" aria-hidden="true">›</span>
     </a>`;
+  const pastCard = (r) => `<div class="jcard past">
+      <span class="jbar" aria-hidden="true"></span>
+      <span class="jbody">
+        <span class="jr1"><span class="jname"><span class="jbook">${IBOOK}</span>${esc(r.name)}</span><span class="jvenue">${esc(venue)}</span></span>
+        <span class="jrule"></span>
+        <span class="jr2"><span class="jwhere"><span class="jloc">${IPIN}${esc(location)}</span></span><span class="jright"><span class="jdate">${esc(dateLine(r))}</span><span class="jattend">Attended ✓</span></span></span>
+      </span>
+    </div>`;
   const applyBanner = canJoin ? '' : `<div class="notice" style="margin:12px 0 0">${status === 'pending'
       ? `⏳ <b>Application in review</b> — you’ll be able to check in here once the organizers approve you.`
       : status === 'rejected'
       ? `<b>Not on the Adv list this season.</b> The open Monday recreational run is always available.`
       : `👋 <b>Not a member yet?</b> Apply to join — fill out the form and you’ll get in once you’re approved. <a class="btn sm" href="/" data-full style="margin-left:6px;width:auto">Apply to join →</a>`}</div>`;
-  return HEAD('Runs — The Bridge', 'has-tabs') + header(`<b>RUNS</b>${esc(email)}`, '', ann) + WELCOME_MODAL + `
+  const { btn: annBtn, sheet: annSheet } = annBell(ann);
+  const nudge = needsDob ? `<div class="notice warn" style="margin:0 0 12px">📅 <b>Add your date of birth</b> — we now use it for age-based safety rules (under-18 members can't use private 1-on-1 messages; group chat is unaffected). <a class="btn sm" href="/profile" style="margin-left:6px;width:auto">Add it →</a></div>` : '';
+  const verse = (() => { const v = dailyVerse(); return `<div class="hubverse"><p class="hubverse-t">“${esc(v.text)}”</p><p class="hubverse-r">— ${esc(v.ref)} · KJV</p></div>`; })();
+  return HEAD('Runs — The Bridge', 'has-tabs') + WELCOME_MODAL + `
     ${canJoin ? `<script>window.__tourRole={op:${canOperate ? 1 : 0},adm:${isAdmin ? 1 : 0},waiver:${needsWaiver ? 1 : 0}};</script>` : ''}
     <style>
-      .rhead{margin:8px 2px 2px}
-      .rhead h1{font-size:22px;margin:0}
-      .rhead p{color:var(--muted);margin:2px 0 0;font-size:13px}
-      .rhlist{display:flex;flex-direction:column;gap:9px;margin-top:11px}
-      .rhcard{display:flex;align-items:center;gap:14px;padding:13px 14px;border:1px solid var(--line);border-radius:16px;background:var(--card);text-decoration:none;color:inherit;transition:transform .06s ease,border-color .12s ease}
-      .rhcard:active{transform:scale(.985)}
-      .rhcard:hover{border-color:var(--muted)}
-      .rhemoji{font-size:30px;line-height:1;width:46px;height:46px;display:flex;align-items:center;justify-content:center;border-radius:13px;background:var(--teal-tint,#e9efec);flex:none}
-      .rhbody{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
-      .rhname{font-weight:800;font-size:17px;letter-spacing:-.01em}
-      .rhsub{color:var(--muted);font-size:13px;line-height:1.35}
-      .rhmeta{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex:none}
+      .whead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:6px 2px 13px}
+      .whead h1{font-family:var(--head);font-weight:800;font-size:25px;color:var(--ink);margin:0;letter-spacing:-.01em}
+      .wheadr{display:flex;align-items:center;gap:14px}
+      .wheadr .wcal{display:flex;color:var(--muted)}
+      .calwrap{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px 6px 11px;margin-bottom:14px}
+      .calmonth{text-align:center;font-family:var(--head);font-weight:700;font-size:15px;color:var(--ink);margin-bottom:9px}
+      .calrow{display:flex}
+      .calday{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;padding:4px 0 3px;border-radius:11px}
+      .cdow{font-family:var(--head);font-weight:700;font-size:9.5px;letter-spacing:.05em;color:var(--muted)}
+      .cdate{font-size:15px;font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums;line-height:1}
+      .calday.today{background:rgba(228,97,31,.09)}
+      .calday.today .cdate{color:var(--orange,#e4611f);font-weight:800}
+      .cdot{width:5px;height:5px;border-radius:50%;background:var(--orange,#e4611f)}
+      .cdotx{width:5px;height:5px}
+      .jtabs{display:flex;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:13px;background:var(--card)}
+      .jtab{flex:1;border:none;background:none;padding:11px 0;font-family:var(--head);font-weight:700;font-size:13px;letter-spacing:.02em;color:var(--muted);cursor:pointer;-webkit-tap-highlight-color:transparent}
+      .jtab.on{background:var(--ink,#22231d);color:#fff}
+      .jlist{display:flex;flex-direction:column;gap:11px}
+      .jcard{position:relative;display:flex;background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;text-decoration:none;color:inherit;box-shadow:0 1px 2px rgba(0,0,0,.04);transition:transform .06s ease}
+      .jcard:active{transform:scale(.99)}
+      .jbar{width:5px;flex:none;align-self:stretch;background:var(--orange,#e4611f)}
+      .jcard.cancelled .jbar{background:var(--muted)}
+      .jbody{flex:1;min-width:0;padding:12px 14px}
+      .jr1{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+      .jname{display:flex;align-items:center;gap:7px;font-family:var(--head);font-weight:800;font-size:17px;color:var(--ink);min-width:0}
+      .jbook{color:var(--orange,#e4611f);display:flex;flex:none}
+      .jvenue{font-size:12px;color:var(--muted);flex:none;white-space:nowrap;max-width:46%;overflow:hidden;text-overflow:ellipsis}
+      .jrule{height:1px;background:var(--line);margin:9px 0}
+      .jr2{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+      .jwhere{display:flex;flex-direction:column;gap:4px;min-width:0}
+      .jloc,.jtime{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink)}
+      .jloc svg,.jtime svg{color:var(--orange,#e4611f);flex:none}
+      .jright{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex:none;text-align:right}
+      .jdate{font-size:13px;color:var(--muted);white-space:nowrap}
+      .jcount{font-size:11.5px;font-weight:700;color:var(--muted);font-variant-numeric:tabular-nums}
+      .jattend{font-size:11px;font-weight:800;color:#1f6b3a;background:#dcf0e2;border-radius:999px;padding:3px 9px}
+      .jcard.past{opacity:.9}
+      .jempty{color:var(--muted);text-align:center;font-size:14px;padding:22px 0}
       .rhpill{font-size:11px;font-weight:700;letter-spacing:.02em;padding:3px 9px;border-radius:999px;white-space:nowrap}
       .rhpill.open{background:#2f9e54;color:#fff}
-      .rhpill.closed{background:#e0503f;color:#111}
-      .rhpill.green{background:#dcf0e2;color:#1f6b3a}
+      .rhpill.closed{background:#e0503f;color:#fff}
       .rhpill.grey{background:#ececea;color:#6b6a63}
       .rhpill.red{background:#f6dcdc;color:#a12c2c}
       .rhpill.amber{background:#f7eccf;color:#8a6a1b}
-      .rhcount{font-weight:800;font-size:15px;font-variant-numeric:tabular-nums;color:var(--ink,#20211c)}
-      .rhslash{font-weight:500;color:var(--muted)}
       .rhmine{font-size:11px;font-weight:800;letter-spacing:.02em;padding:3px 9px;border-radius:999px;white-space:nowrap}
       .rhmine.in{background:#2f9e54;color:#fff}
       .rhmine.wait{background:#f7eccf;color:#8a6a1b}
       .rhmine.offer{background:#e0503f;color:#fff}
-      .rhfr{display:flex;align-items:center;gap:7px;margin-top:5px}
+      .rhfr{display:flex;align-items:center;gap:7px;margin-top:8px}
       .rhfr-avs{display:inline-flex}
       .rhfr-av.mav{width:20px;height:20px;font-size:9px;border:1.5px solid var(--card);box-shadow:0 0 0 .5px var(--line)}
       .rhfr-avs .rhfr-av:not(:first-child){margin-left:-7px}
       .rhfr-txt{color:var(--muted);font-size:12px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-      .rharrow{font-size:24px;color:var(--muted);flex:none;margin-left:-2px}
       .hubverse{max-width:36ch;margin:18px auto 6px;text-align:center;padding:0 14px}
       .hubverse-t{font-size:15px;line-height:1.55;color:var(--ink);font-style:italic;margin:0}
       .hubverse-r{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:9px 0 0;font-weight:700}
       @media (prefers-color-scheme:dark){
-        .rhpill.green{background:#183a25;color:#8fe0ab}
         .rhpill.grey{background:#2a2a28;color:#b7b6ae}
         .rhpill.red{background:#3d1e1e;color:#f0a3a3}
         .rhpill.amber{background:#3a3016;color:#e7c766}
         .rhmine.wait{background:#3a3016;color:#e7c766}
+        .jattend{background:#183a25;color:#8fe0ab}
       }
     </style>
-    <div class="rhead">
-      <h1>Runs</h1>
-      <p>${canJoin ? 'Pick a run to check in.' : 'The runs at The Bridge. Apply to join and check in.'}</p>
-    </div>
-    ${applyBanner}${needsDob ? `<div class="notice warn" style="margin:12px 0 0">📅 <b>Add your date of birth</b> — we now use it for age-based safety rules (under-18 members can't use private 1-on-1 messages; group chat is unaffected). Takes a second. <a class="btn sm" href="/profile" style="margin-left:6px;width:auto">Add it →</a></div>` : ''}
-    <div class="rhlist">
-      ${runs.map(card).join('')}
-    </div>
-    ${(() => { const v = dailyVerse(); return `<div class="hubverse"><p class="hubverse-t">“${esc(v.text)}”</p><p class="hubverse-r">— ${esc(v.ref)} · KJV</p></div>`; })()}
+    <div class="whead"><h1>Welcome, ${esc(firstName)}</h1><div class="wheadr"><span class="wcal">${ICAL}</span>${annBtn}</div></div>
+    <div class="calwrap"><div class="calmonth">${esc(monthLabel)}</div><div class="calrow">${weekDays.map(d => `<div class="calday${d.today ? ' today' : ''}"><span class="cdow">${esc(d.dow)}</span><span class="cdate">${d.date}</span><span class="${d.dot ? 'cdot' : 'cdotx'}"></span></div>`).join('')}</div></div>
+    ${nudge}${applyBanner}
+    <div class="jtabs"><button type="button" class="jtab on" data-jt="up">Upcoming</button><button type="button" class="jtab" data-jt="past">Past</button></div>
+    <div class="jlist" data-jl="up">${runs.length ? runs.map(card).join('') : '<p class="jempty">No runs available yet.</p>'}</div>
+    <div class="jlist" data-jl="past" hidden>${pastRuns.length ? pastRuns.map(pastCard).join('') : '<p class="jempty">No past games yet — your attended runs will show here.</p>'}</div>
+    ${verse}
+    ${annSheet}
     ${canJoin ? firstRunTour : ''}
+    <script>(function(){if(window.__jtabBound)return;window.__jtabBound=1;document.addEventListener('click',function(e){var b=e.target&&e.target.closest&&e.target.closest('.jtab[data-jt]');if(!b)return;var sel=b.getAttribute('data-jt');var ts=document.querySelectorAll('.jtab[data-jt]');for(var i=0;i<ts.length;i++)ts[i].classList.toggle('on',ts[i]===b);var ls=document.querySelectorAll('.jlist[data-jl]');for(var j=0;j<ls.length;j++)ls[j].hidden=(ls[j].getAttribute('data-jl')!==sel);});})();</script>
   ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: chatProgram }));
 }
 
