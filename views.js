@@ -258,12 +258,12 @@ window.__pollStop=function(){window.__pollPage=null;window.__pollOnChange=null;}
   }
   window.__go=go; // exposed so the team tour can drive a smooth router swap between pages
   document.addEventListener('pointerdown',function(e){
-    var a=e.target&&e.target.closest&&e.target.closest('.tabs a[href],.opsnav a[href],.rhcard[href],.backruns[href]');
+    var a=e.target&&e.target.closest&&e.target.closest('.tabs a[href],.opsnav a[href],.rhcard[href],.backruns[href],.hchat[href],.ftab[href],.mrow[href],.bk[href],.pbback[href],.pback[href]');
     if(a)warm(a.getAttribute('href'));
   },{passive:true,capture:true});
   document.addEventListener('click',function(e){
     if(e.defaultPrevented||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;
-    var a=e.target&&e.target.closest&&e.target.closest('.tabs a[href],.opsnav a[href],.rhcard[href],.backruns[href]');
+    var a=e.target&&e.target.closest&&e.target.closest('.tabs a[href],.opsnav a[href],.rhcard[href],.backruns[href],.hchat[href],.ftab[href],.mrow[href],.bk[href],.pbback[href],.pback[href]');
     if(!a)return;
     if(a.hasAttribute('data-full'))return;   // opt out of the SPA swap → normal full navigation (e.g. apply form)
     if(a.target&&a.target!==''&&a.target!=='_self')return;
