@@ -681,6 +681,15 @@ function bannerVersionFor(programId) { const cfg = P(programId).config; try { re
 function pkBannerHasOwn() { return bannerHasOwnFor(2); }
 function pkBannerSrc() { return bannerSrcFor(2); }
 function pkBannerVersion() { return bannerVersionFor(2); }
+// Write a file ATOMICALLY: full write to a temp path, then rename over the target. rename is atomic
+// on one filesystem, so a concurrent reader (a poll/prewarm hitting the banner mid-upload) always
+// sees the OLD or the NEW file in full — never a half-written image that could get served + cached.
+async function writeFileAtomic(dest, buf) {
+  const tmp = `${dest}.tmp-${process.pid}`;
+  await fs.promises.writeFile(tmp, buf);
+  try { await fs.promises.rename(tmp, dest); }
+  catch (e) { try { await fs.promises.unlink(tmp); } catch {} throw e; }
+}
 
 // Delete a stored chat photo by its public path. Only /chat-media/<safe-name> paths are
 // touched — stickers (/stickers/*) and anything with a separator/`..` are refused, so a
@@ -3481,7 +3490,7 @@ app.post('/admin/banner', requireApprover, (req, res) => {
         .extract({ left, top, width, height })
         .resize(2320, 1102, { fit: 'fill' }) // 40:19 banner — matches .gymbanner/.cropframe CSS
         .jpeg({ quality: 84, mozjpeg: true }).toBuffer();
-      await fs.promises.writeFile(BANNER_PATH, out); // async write off the event loop
+      await writeFileAtomic(BANNER_PATH, out); // atomic (temp+rename) so a read mid-upload never gets a partial
       audit(req.userEmail, req.actorRole, 'banner:update', `${width}x${height}`);
       return res.redirect('/checkin');
     } catch (e) {
@@ -3518,7 +3527,7 @@ function runBannerPost(programId, req, res) {
         .extract({ left, top, width, height })
         .resize(2320, 1102, { fit: 'fill' })
         .jpeg({ quality: 84, mozjpeg: true }).toBuffer();
-      await fs.promises.writeFile(cfg.bannerPath, out);
+      await writeFileAtomic(cfg.bannerPath, out); // atomic (temp+rename) so a read mid-upload never gets a partial
       audit(req.userEmail, req.actorRole, `${cfg.logTag}:banner:update`, `${width}x${height}`);
       return res.redirect(b);
     } catch (e) {
