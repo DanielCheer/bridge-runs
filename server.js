@@ -1958,6 +1958,7 @@ app.get('/runs', requireLogin, (req, res) => {
     isAdmin: viewerIsAdmin,
     canOperate: viewerIsAdmin || !!(a && a.is_team),
     needsWaiver: !!(a && !a.waiver_ok), // tour ends on a "sign your waiver" step for players who haven't
+    needsDob: !!(a && !a.dob), // legacy members (pre-DOB signup) — nudge them to add it so the age gate applies
     dmUnread: unreadCount(email),
     groupUnread: cc.group,
     groupMention: cc.gm,
@@ -4067,8 +4068,10 @@ app.post('/admin/people/edit', requireAdmin, (req, res) => {
   const full_name = (req.body.full_name || '').trim();
   const email = (req.body.email || '').trim().toLowerCase();
   const phone = (req.body.phone || '').trim();
+  const dob = String(req.body.dob || '').trim();   // admin may set/correct/clear (blank = clear)
   const cur = db.prepare('SELECT email FROM applicants WHERE id = ?').get(id);
   if (!cur) return res.redirect('/admin/people');
+  if (dob) { const age = ageFromDob(dob); if (age == null || age < 5 || age > 110) return res.redirect('/admin/people?msg=' + encodeURIComponent('That date of birth doesn’t look right.')); }
   // Validate before writing — a blank name/phone or an invalid email would otherwise be
   // saved AND (if email changed) rekey every per-user row onto '' via rekeyEmailTx. Mirrors
   // the self-service /profile validation.
@@ -4086,8 +4089,8 @@ app.post('/admin/people/edit', requireAdmin, (req, res) => {
   // /profile. A partial commit strands the player's history on the old address.
   try {
     transact(() => {
-      db.prepare('UPDATE applicants SET full_name=?, email=?, phone=? WHERE id=?')
-        .run(full_name, email, phone, id);
+      db.prepare('UPDATE applicants SET full_name=?, email=?, phone=?, dob=? WHERE id=?')
+        .run(full_name, email, phone, dob || null, id);
       // Carry EVERY per-user row to the new address (single source of truth: rekeyEmailTx in db.js).
       if (email !== cur.email) rekeyEmailTx(cur.email, email);
       // keep the denormalised check-in name in sync across every program (name can change without email)

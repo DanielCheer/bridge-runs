@@ -2710,7 +2710,7 @@ function dailyVerse() {
 // that run's check-in page. `runs` = [{ key, emoji, name, href, runDate, dateLabel,
 // timeLabel, going, cap, status:'open'|'closed'|'cancelled', hidden }]. Self-contained
 // styles (scoped .rh*) so it needs no new global CSS.
-export function runsPage({ email, runs = [], canJoin = true, status = 'approved', canOperate = false, isAdmin = false, needsWaiver = false, dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null }) {
+export function runsPage({ email, runs = [], canJoin = true, status = 'approved', canOperate = false, isAdmin = false, needsWaiver = false, needsDob = false, dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null }) {
   // Non-approved viewers can SEE the runs but can't join — a tap routes them to apply
   // (or to their status) instead of into a check-in they're not cleared for.
   const applyHref = status === 'none' ? '/' : '/status';
@@ -2806,7 +2806,7 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       <h1>Runs</h1>
       <p>${canJoin ? 'Pick a run to check in.' : 'The runs at The Bridge. Apply to join and check in.'}</p>
     </div>
-    ${applyBanner}
+    ${applyBanner}${needsDob ? `<div class="notice warn" style="margin:12px 0 0">📅 <b>Add your date of birth</b> — we now use it for age-based safety rules (under-18 members can't use private 1-on-1 messages; group chat is unaffected). Takes a second. <a class="btn sm" href="/profile" style="margin-left:6px;width:auto">Add it →</a></div>` : ''}
     <div class="rhlist">
       ${runs.map(card).join('')}
     </div>
@@ -4222,6 +4222,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
       <label>Name<input name="full_name" value="${esc(a.full_name)}"></label>
       <label>Phone<input name="phone" value="${esc(a.phone)}" inputmode="tel"></label>
       <label>Email<input name="email" type="email" value="${esc(a.email)}"></label>
+      <label>Date of birth <span style="text-transform:none;font-weight:400;color:var(--muted)">(drives the under-18 DM rule; blank to clear)</span><input name="dob" type="date" value="${esc(a.dob || '')}"></label>
       <div class="editacts">
         <button class="btn sm" type="submit">Save</button>
       </div>
