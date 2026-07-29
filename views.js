@@ -58,6 +58,7 @@ html.splashed #splash{display:none}
 #splash .tt b{font-family:'Anton',Impact,sans-serif;font-size:46px;letter-spacing:.01em;color:#20211c;line-height:.92;display:block}
 #splash .tt .sb{display:block;margin-top:12px;font-family:'Archivo',system-ui,sans-serif;font-weight:800;font-size:12.5px;letter-spacing:.24em;text-transform:uppercase;color:#22615A}
 #splash .tt .rl{width:64px;height:3px;margin:16px auto 0;border-radius:3px;background:linear-gradient(90deg,#C24512,#FBB360,#E4611F)}
+#splash .tt .ck{display:block;margin-top:15px;font-family:'Archivo',system-ui,sans-serif;font-weight:800;font-size:12.5px;letter-spacing:.2em;text-transform:uppercase;color:#22615A}
 #splash .sp{width:38px;height:38px;position:relative}
 #splash .sp i{position:absolute;left:47.5%;top:6%;width:5%;height:26%;border-radius:3px;background:#22615A;transform-origin:center 172%;animation:splspin 1s linear infinite}
 #splash .sp i:nth-child(1){transform:rotate(0deg);animation-delay:-.917s}
@@ -80,7 +81,7 @@ html.splashed #splash{display:none}
 const SPLASH_BODY = `<div id="splash" aria-hidden="true">
   <div class="bw">
     <svg class="lg" viewBox="0 0 40 40" fill="none" aria-hidden="true"><circle cx="20" cy="20" r="18" fill="#22615A"/><path d="M20 2v36M2 20h36M7 7c7 5 7 21 0 26M33 7c-7 5-7 21 0 26" stroke="#F8F5EF" stroke-width="1.4" opacity=".9"/></svg>
-    <div class="tt"><b>THE BRIDGE</b><span class="sb">YA Sports</span><div class="rl"></div></div>
+    <div class="tt"><b>THE BRIDGE</b><span class="sb">YA Sports</span><div class="rl"></div><span class="ck">Christ is King</span></div>
   </div>
   <div class="sp"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
   <div class="ft">5440 16th Ave · Markham</div>
@@ -1425,10 +1426,10 @@ const firstRunTour = `
       {path:'/checkin',sel:'.tabs a[href="/profile"]',ttl:"Your profile & friends",txt:"Your stats, photo and settings live here — plus Friends, where you follow players and see their games."},
       {path:'/checkin',sel:'.bellbtn',ttl:"Announcements",txt:"Updates from the host show up here."},
       // ---- operators: team + admin (op) ----
-      {path:'/checkin',sel:'[data-tour="ops-run"]',op:1,ttl:"Run the check-in",txt:"Open or close check-in by hand (it auto-opens Monday and locks at 2 PM on run day). Tap the scoreboard’s “Who’s going” to remove or bump players."},
+      {path:'/checkin',sel:'[data-tour="ops-run"]',op:1,ttl:"Run the check-in",txt:"Open or close check-in by hand — it also auto-opens ahead of each run and locks shortly before it starts. Tap the scoreboard’s “Who’s going” to remove or bump players."},
       {path:'/checkin',sel:'[data-tour="rundate"]',op:1,ttl:"Run day, cancel & season",txt:"Operator tools: move this week’s run to another date or time, cancel a week, or set when the season starts. Players get an announcement automatically."},
       {path:'/checkin',sel:'.bannedit',op:1,ttl:"Change the banner",txt:"Swap the run’s banner photo and crop it right here in the app."},
-      {path:'/checkin',sel:'.hguest summary',op:1,ttl:"Add a guest",txt:"Drop in a last-minute walk-on by name — works even after the 2 PM lock."},
+      {path:'/checkin',sel:'.hguest summary',op:1,ttl:"Add a guest",txt:"Drop in a last-minute walk-on by name — works even after check-in locks."},
       {path:'/checkin',sel:'.announce-compose summary',op:1,ttl:"Announce to everyone",txt:"Post an update that pushes to the whole run’s phones (and emails those who opted in)."},
       {path:'/checkin',sel:'.arpill',op:1,ttl:"Your guaranteed spot",txt:"As team you’re auto-added each week. Toggle this to sit out a week — it never affects your standing."},
       {path:'/checkin',ttl:"Turn on notifications",txt:"Get a ping for spot offers, announcements and @mentions — never miss out.",notif:1},
@@ -1437,7 +1438,7 @@ const firstRunTour = `
       {path:'/admin/people',adm:1,sel:'[data-tour="people"]',ttl:"Manage people",txt:"Search anyone to suspend, remove, or change their role (Team / Pillar / Host). Up top, Share the sign-up QR to invite new players."},
       {path:'/admin/people',adm:1,sel:'[data-tour="export"]',ttl:"Export & backup",txt:"Export attendance to a spreadsheet — open it in Google Sheets or import into Planning Center — or download a full backup of the whole database. Every download is logged."}
     ];
-    var STEPS=[], i=0, running=0, hole=document.getElementById('tourhole'), tip=document.getElementById('tourtip'),
+    var STEPS=[], i=0, running=0, snapNext=true, hole=document.getElementById('tourhole'), tip=document.getElementById('tourtip'),
         ttl=document.getElementById('tourttl'), txt=document.getElementById('tourtxt'),
         next=document.getElementById('tournext'), dots=document.getElementById('tourdots');
     function killBridge(){ var b=document.getElementById('tourbridge'); if(b&&b.parentNode)b.parentNode.removeChild(b); }
@@ -1445,8 +1446,14 @@ const firstRunTour = `
     function place(){
       var s=STEPS[i], el=s.sel?document.querySelector(s.sel):null;
       document.getElementById('tourcatch').style.background = el ? 'transparent' : 'rgba(18,20,14,.72)';
+      // Snap (kill the .25s glide) when the spotlight first appears on this page, or reappears after
+      // a no-target step — otherwise it animates in from a stale/corner position (the flicker on
+      // cross-page + post-notif steps, since each page starts with a fresh #tour at 0,0). Same-page
+      // target→target moves keep the smooth glide. Restore the transition on the next frame.
+      var snap = snapNext || hole.style.display!=='block';
       if(el){ try{el.scrollIntoView({block:'center'});}catch(e){}
         var r=el.getBoundingClientRect(), pad=8;
+        if(snap){ hole.style.transition='none'; tip.style.transition='none'; }
         hole.style.display='block';
         hole.style.left=(r.left-pad)+'px'; hole.style.top=(r.top-pad)+'px';
         hole.style.width=(r.width+pad*2)+'px'; hole.style.height=(r.height+pad*2)+'px';
@@ -1455,10 +1462,14 @@ const firstRunTour = `
         tip.style.top=top+'px';
         tip.style.left=Math.max(12, Math.min(window.innerWidth-tip.offsetWidth-12, r.left+r.width/2-tip.offsetWidth/2))+'px';
       } else {
+        tip.style.transition='none'; // centered tip snaps in (never glides from the last target)
         hole.style.display='none';
         tip.style.top=Math.max(12,(window.innerHeight-(tip.offsetHeight||160))/2)+'px';
         tip.style.left=Math.max(12,(window.innerWidth-tip.offsetWidth)/2)+'px';
+        snap=true;
       }
+      if(snap){ void hole.offsetHeight; requestAnimationFrame(function(){ hole.style.transition=''; tip.style.transition=''; }); }
+      snapNext=false;
     }
     function render(){
       var s=STEPS[i]; ttl.textContent=s.ttl; txt.textContent=s.txt;
