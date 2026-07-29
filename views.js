@@ -486,9 +486,11 @@ ${VSTEPS_CSS}
   var ios=/iPhone|iPad|iPod/.test(ua)||(/Macintosh/.test(ua)&&navigator.maxTouchPoints>1);
   var android=/Android/.test(ua);
   var coarse=!(window.matchMedia)||window.matchMedia('(pointer:coarse)').matches;
-  // INSTALL WALL TEMPORARILY DISABLED (2026-07-23) — the app is used purely via the link, no forced
-  // Add-to-Home-Screen. To re-enable, restore the walling line below:
-  // if(!standalone&&coarse&&(ios||android)){document.documentElement.className+=' walled';}
+  // Install hard-lock (re-enabled 2026-07-29): a mobile browser that ISN'T the installed app gets
+  // the Add-to-Home-Screen wall — keeps everyone on the uniform PWA (notifications, offline shell,
+  // consistent UX). Only mobile (coarse pointer + iOS/Android) is walled; DESKTOP + the standalone
+  // app are NEVER walled, so the demo laptop + installed phones are unaffected.
+  if(!standalone&&coarse&&(ios||android)){document.documentElement.className+=' walled';}
   window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__bip=e;});
 }catch(e){}})();</script>`;
 
@@ -1436,7 +1438,10 @@ const firstRunTour = `
       // ---- admin-only (adm): council + people + data ----
       {path:'/admin',op:1,sel:'[data-tour="council"]',ttl:"Vote players in",txt:"New applicants show up here — tap Approve or Reject on each. 3 approvals lets someone in; 3 rejects turns them away."},
       {path:'/admin/people',adm:1,sel:'[data-tour="people"]',ttl:"Manage people",txt:"Search anyone to suspend, remove, or change their role (Team / Pillar / Host). Up top, Share the sign-up QR to invite new players."},
-      {path:'/admin/people',adm:1,sel:'[data-tour="export"]',ttl:"Export & backup",txt:"Export attendance to a spreadsheet — open it in Google Sheets or import into Planning Center — or download a full backup of the whole database. Every download is logged."}
+      {path:'/admin/people',adm:1,sel:'[data-tour="export"]',ttl:"Export & backup",txt:"Export attendance to a spreadsheet — open it in Google Sheets or import into Planning Center — or download a full backup of the whole database. Every download is logged."},
+      // Last (shown only to players who haven't signed yet, via role.waiver): the "Sign now" button
+      // takes them to the waiver — so they're cleared BEFORE they ever open a run's check-in.
+      {path:'/checkin',waiver:1,ttl:"Last thing — your waiver",txt:"Sign the waiver once and you're cleared to join any run. It takes about 20 seconds — let's do it now so you're ready when a run opens."}
     ];
     var STEPS=[], i=0, running=0, snapNext=true, hole=document.getElementById('tourhole'), tip=document.getElementById('tourtip'),
         ttl=document.getElementById('tourttl'), txt=document.getElementById('tourtxt'),
@@ -1474,7 +1479,7 @@ const firstRunTour = `
     function render(){
       var s=STEPS[i]; ttl.textContent=s.ttl; txt.textContent=s.txt;
       var d=''; for(var k=0;k<STEPS.length;k++) d+='<i class="'+(k===i?'on':'')+'"></i>'; dots.innerHTML=d;
-      next.textContent=s.notif?'Enable':(i===STEPS.length-1?'Done':'Next'); next.disabled=false; place();
+      next.textContent=s.notif?'Enable':(s.waiver?'Sign now':(i===STEPS.length-1?'Done':'Next')); next.disabled=false; place();
     }
     function goToStep(idx){
       if(idx>=STEPS.length){ done(); return; }
@@ -1498,11 +1503,12 @@ const firstRunTour = `
     function advance(){
       var s=STEPS[i];
       if(s.notif){ next.disabled=true; var nx=function(){goToStep(i+1);}; (window.__pushEnable?window.__pushEnable():Promise.resolve()).then(nx,nx); return; }
+      if(s.waiver){ try{localStorage.setItem(KEY,'1');sessionStorage.removeItem('__tourResume');}catch(e){} var u='/waiver'; if(window.__go)window.__go(u,true); else window.location.href=u; return; } // end the tour AT the waiver
       goToStep(i+1);
     }
     next.addEventListener('click',advance);
     document.getElementById('tourskip').addEventListener('click',done);
-    document.getElementById('tourcatch').addEventListener('click',function(){ if(!STEPS[i].notif) advance(); });
+    document.getElementById('tourcatch').addEventListener('click',function(){ if(!STEPS[i].notif&&!STEPS[i].waiver) advance(); }); // notif + waiver need their explicit button
     window.addEventListener('resize',function(){ if(!tour.hidden) place(); });
     // Swipe RIGHT → back a step, swipe LEFT → forward (goToStep handles the cross-page hops).
     // Forward-swipe skips the notif step's push prompt (only the Enable button grants it).
@@ -1530,9 +1536,10 @@ const firstRunTour = `
       var role=window.__tourRole||null;
       var isOp=role?!!role.op:!!document.querySelector('.opsnav a[href="/admin"]'),
           isAdm=role?!!role.adm:!!document.querySelector('.opsnav a[href="/admin/people"]'),
+          waiverNeeded=role?!!role.waiver:false,   // only unsigned players get the waiver step
           sup=supported();
       setTimeout(function(){
-        STEPS=STEPS_ALL.filter(function(s){ if(s.op&&!isOp)return false; if(s.adm&&!isAdm)return false; if(s.notif&&!sup)return false; return true; });
+        STEPS=STEPS_ALL.filter(function(s){ if(s.op&&!isOp)return false; if(s.adm&&!isAdm)return false; if(s.notif&&!sup)return false; if(s.waiver&&!waiverNeeded)return false; return true; });
         if(!STEPS.length){ done(); killBridge(); return; }
         i = resume>=0 ? Math.max(0,Math.min(resume,STEPS.length-1)) : 0;
         tour.hidden=false; document.body.style.overflow='hidden'; render();
@@ -2693,7 +2700,7 @@ function dailyVerse() {
 // that run's check-in page. `runs` = [{ key, emoji, name, href, runDate, dateLabel,
 // timeLabel, going, cap, status:'open'|'closed'|'cancelled', hidden }]. Self-contained
 // styles (scoped .rh*) so it needs no new global CSS.
-export function runsPage({ email, runs = [], canJoin = true, status = 'approved', canOperate = false, isAdmin = false, dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null }) {
+export function runsPage({ email, runs = [], canJoin = true, status = 'approved', canOperate = false, isAdmin = false, needsWaiver = false, dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null }) {
   // Non-approved viewers can SEE the runs but can't join — a tap routes them to apply
   // (or to their status) instead of into a check-in they're not cleared for.
   const applyHref = status === 'none' ? '/' : '/status';
@@ -2746,7 +2753,7 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       ? `<b>Not on the Adv list this season.</b> The open Monday recreational run is always available.`
       : `👋 <b>Not a member yet?</b> Apply to join — fill out the form and you’ll get in once you’re approved. <a class="btn sm" href="/" data-full style="margin-left:6px;width:auto">Apply to join →</a>`}</div>`;
   return HEAD('Runs — The Bridge', 'has-tabs') + header(`<b>RUNS</b>${esc(email)}`, '', ann) + WELCOME_MODAL + `
-    ${canJoin ? `<script>window.__tourRole={op:${canOperate ? 1 : 0},adm:${isAdmin ? 1 : 0}};</script>` : ''}
+    ${canJoin ? `<script>window.__tourRole={op:${canOperate ? 1 : 0},adm:${isAdmin ? 1 : 0},waiver:${needsWaiver ? 1 : 0}};</script>` : ''}
     <style>
       .rhead{margin:14px 2px 4px}
       .rhead h1{font-size:26px;margin:0}

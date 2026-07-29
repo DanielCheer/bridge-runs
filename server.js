@@ -1924,6 +1924,7 @@ app.get('/runs', requireLogin, (req, res) => {
     email, runs, canJoin, status,
     isAdmin: viewerIsAdmin,
     canOperate: viewerIsAdmin || !!(a && a.is_team),
+    needsWaiver: !!(a && !a.waiver_ok), // tour ends on a "sign your waiver" step for players who haven't
     dmUnread: unreadCount(email),
     groupUnread: cc.group,
     groupMention: cc.gm,
