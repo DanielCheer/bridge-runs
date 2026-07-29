@@ -2798,6 +2798,7 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       .jtab{flex:1;border:none;background:none;padding:11px 0;font-family:var(--head);font-weight:700;font-size:13px;letter-spacing:.02em;color:var(--muted);cursor:pointer;-webkit-tap-highlight-color:transparent}
       .jtab.on{background:var(--ink,#22231d);color:#fff}
       .jlist{display:flex;flex-direction:column;gap:11px}
+      .jlist[hidden]{display:none}
       .jcard{position:relative;display:flex;background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;text-decoration:none;color:inherit;box-shadow:0 1px 2px rgba(0,0,0,.04);transition:transform .06s ease}
       .jcard:active{transform:scale(.99)}
       .jbar{width:5px;flex:none;align-self:stretch;background:var(--orange,#e4611f)}
