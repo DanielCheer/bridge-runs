@@ -3210,21 +3210,27 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
       ${photoNotice}
       <div class="idrow">
         <label class="pic" for="photoinput" title="Change photo" aria-label="Change profile photo">${avatarInner(a.email, a.full_name)}<span class="cam">✎</span></label>
-        <div class="field idfield">
-          <label>Display name${a.is_host ? '<span class="hostpill">★ Host</span>' : ''}<span class="phactions">${hasAvatar ? '<button type="submit" form="photoremove" class="phbtn">Remove photo</button>' : '<span class="phsoon">Tap photo</span>'}</span></label>
-          <input name="full_name" value="${esc(a.full_name)}" required autocomplete="name">
+        <div class="idfield">
+          <div class="idname">${esc(a.full_name)}${a.is_host ? '<span class="hostpill">★ Host</span>' : ''}</div>
+          <div class="phactions">${hasAvatar ? '<button type="submit" form="photoremove" class="phbtn">Remove photo</button>' : '<span class="phsoon">Tap photo to change</span>'}</div>
         </div>
       </div>
-      <div class="two">
-        <div class="field"><label>Phone</label><input name="phone" value="${esc(a.phone)}" inputmode="tel" required autocomplete="tel"></div>
-        <div class="field"><label>Email</label><input name="email" type="email" value="${esc(a.email)}" required autocomplete="email"></div>
-      </div>
-      <div class="sec"><div class="lb"><b>Date of birth</b></div>
-        ${a.dob
-          ? `<p class="tally-note" style="margin:0"><b>${esc(a.dob)}</b> · contact an organizer to correct this.</p>`
-          : `<input name="dob" type="date" autocomplete="bday">
-        <p class="tally-note" style="margin:6px 0 0">Optional but recommended. Under-18 members can't use private 1-on-1 messages (a safeguarding rule); group chat is unaffected. Once set, only an organizer can change it.</p>`}
-      </div>
+      <details class="acct">
+        <summary>Account info<span class="acct-hint">name · phone · email · DOB</span></summary>
+        <div class="acct-body">
+          <div class="field"><label>Name</label><input name="full_name" value="${esc(a.full_name)}" required autocomplete="name"></div>
+          <div class="two">
+            <div class="field"><label>Phone</label><input name="phone" value="${esc(a.phone)}" inputmode="tel" required autocomplete="tel"></div>
+            <div class="field"><label>Email</label><input name="email" type="email" value="${esc(a.email)}" required autocomplete="email"></div>
+          </div>
+          <div class="field"><label>Date of birth</label>
+            ${a.dob
+              ? `<p class="tally-note" style="margin:2px 0 0"><b>${esc(a.dob)}</b> · contact an organizer to change it.</p>`
+              : `<input name="dob" type="date" autocomplete="bday">
+            <p class="tally-note" style="margin:6px 0 0">Optional but recommended. Under-18 members can't use private 1-on-1 messages (a safeguarding rule); group chat is unaffected. Once set, only an organizer can change it.</p>`}
+          </div>
+        </div>
+      </details>
       <div class="sec"><div class="lb"><b>Position</b><span>Tap to toggle</span></div><div class="chips">${chips}</div></div>
       <div class="sec"><div class="lb"><b>Email</b></div>
         <label class="lvl" style="display:block"><input type="checkbox" name="email_announce" value="1"${a.email_optout ? '' : ' checked'}> Email me announcements &amp; run-day changes</label>

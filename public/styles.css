@@ -347,6 +347,18 @@ a.score{cursor:pointer}
   border:2px solid var(--bg);display:grid;place-items:center;color:#fff;font-size:10px}
 .idrow .field{flex:1;min-width:0;margin:0}
 .idrow .field > label{display:flex;align-items:center;gap:8px}
+.idrow .idfield{flex:1;min-width:0}
+.idname{font-family:var(--head);font-weight:800;font-size:19px;color:var(--ink);display:flex;align-items:center;gap:8px;line-height:1.15;word-break:break-word}
+/* Account info — collapsible so the profile stays short (name/phone/email/DOB tucked away) */
+.acct{margin:8px 0 6px;border:1px solid var(--line);border-radius:14px;background:var(--card);overflow:hidden}
+.acct > summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px;padding:13px 15px;-webkit-tap-highlight-color:transparent;
+  font-family:var(--head);font-weight:700;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink)}
+.acct > summary::-webkit-details-marker{display:none}
+.acct > summary::after{content:'▸';margin-left:auto;font-size:13px;color:var(--muted);transition:transform .15s}
+.acct[open] > summary::after{transform:rotate(90deg)}
+.acct-hint{font-weight:600;letter-spacing:0;text-transform:none;font-size:12px;color:var(--muted)}
+.acct[open] .acct-hint{display:none}
+.acct-body{padding:2px 15px 14px}
 .hostpill{font-family:var(--head);font-weight:800;font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--burn);
   background:var(--foil);border-radius:5px;padding:2px 7px}
 .phsoon{margin-left:auto;font-family:var(--head);font-weight:700;font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
