@@ -1416,19 +1416,26 @@ const firstRunTour = `
     // adm = admin only — filtered by whether the matching ops-nav link exists (deterministic
     // per user, so the step list + indices are identical on every page so resume aligns).
     var STEPS_ALL=[
+      // ---- everyone ----
       {path:'/runs',ttl:"Welcome 👋",txt:"Here’s a quick tour of the app."},
-      {path:'/runs',sel:'.rhcard',ttl:"Pick your run",txt:"These are your runs. Tap one to open its check-in — start with Basketball to grab a spot."},
-      {path:'/checkin',sel:'[data-tour="join"]',ttl:"Grab your spot",txt:"Tap “I’m in” each week to claim a spot. Spots are limited — first come, first served."},
-      {path:'/checkin',sel:'.tabs a[href="/chat"]',ttl:"Run chat",txt:"Chat with the whole run — photos, plans and @mentions. On the team? Press & hold a message to Pin it."},
-      {path:'/checkin',sel:'.tabs a[href="/profile"]',ttl:"Your profile",txt:"Your stats, photo and settings live here."},
+      {path:'/runs',sel:'.rhcard',ttl:"Pick your run",txt:"These are the runs — basketball, pickleball and more. Each has its own check-in, chat and season board. Tap one to open it."},
+      {path:'/runs',ttl:"Play with friends 🤝",txt:"Follow other players and you’ll see who’s going right on each run’s card. Some runs even let you check in together as a group."},
+      {path:'/checkin',sel:'[data-tour="join"]',ttl:"Grab your spot",txt:"Tap “I’m in” each week to claim a spot. Spots are limited — first come, first served. If it’s full you join the waitlist and move up automatically when a spot opens."},
+      {path:'/checkin',sel:'.tabs a[href="/chat"]',ttl:"Run chat",txt:"Every run has its own chat — photos, voice notes, @mentions. It unlocks once you’ve joined that run. On the team? Press & hold a message to Pin it."},
+      {path:'/checkin',sel:'.tabs a[href="/profile"]',ttl:"Your profile & friends",txt:"Your stats, photo and settings live here — plus Friends, where you follow players and see their games."},
       {path:'/checkin',sel:'.bellbtn',ttl:"Announcements",txt:"Updates from the host show up here."},
+      // ---- operators: team + admin (op) ----
       {path:'/checkin',sel:'[data-tour="ops-run"]',op:1,ttl:"Run the check-in",txt:"Open or close check-in by hand (it auto-opens Monday and locks at 2 PM on run day). Tap the scoreboard’s “Who’s going” to remove or bump players."},
+      {path:'/checkin',sel:'[data-tour="rundate"]',op:1,ttl:"Run day, cancel & season",txt:"Operator tools: move this week’s run to another date or time, cancel a week, or set when the season starts. Players get an announcement automatically."},
+      {path:'/checkin',sel:'.bannedit',op:1,ttl:"Change the banner",txt:"Swap the run’s banner photo and crop it right here in the app."},
       {path:'/checkin',sel:'.hguest summary',op:1,ttl:"Add a guest",txt:"Drop in a last-minute walk-on by name — works even after the 2 PM lock."},
-      {path:'/checkin',sel:'.announce-compose summary',op:1,ttl:"Announce to everyone",txt:"Post an update that pushes to the whole run’s phones."},
+      {path:'/checkin',sel:'.announce-compose summary',op:1,ttl:"Announce to everyone",txt:"Post an update that pushes to the whole run’s phones (and emails those who opted in)."},
       {path:'/checkin',sel:'.arpill',op:1,ttl:"Your guaranteed spot",txt:"As team you’re auto-added each week. Toggle this to sit out a week — it never affects your standing."},
       {path:'/checkin',ttl:"Turn on notifications",txt:"Get a ping for spot offers, announcements and @mentions — never miss out.",notif:1},
+      // ---- admin-only (adm): council + people + data ----
       {path:'/admin',op:1,sel:'[data-tour="council"]',ttl:"Vote players in",txt:"New applicants show up here — tap Approve or Reject on each. 3 approvals lets someone in; 3 rejects turns them away."},
-      {path:'/admin/people',adm:1,sel:'[data-tour="people"]',ttl:"Manage people",txt:"Two quick links up top: Share the sign-up QR to invite players, and Export everyone to a CSV. Below, search anyone to suspend, remove, or change their role."}
+      {path:'/admin/people',adm:1,sel:'[data-tour="people"]',ttl:"Manage people",txt:"Search anyone to suspend, remove, or change their role (Team / Pillar / Host). Up top, Share the sign-up QR to invite new players."},
+      {path:'/admin/people',adm:1,sel:'[data-tour="export"]',ttl:"Export & backup",txt:"Export attendance to a spreadsheet — open it in Google Sheets or import into Planning Center — or download a full backup of the whole database. Every download is logged."}
     ];
     var STEPS=[], i=0, running=0, hole=document.getElementById('tourhole'), tip=document.getElementById('tourtip'),
         ttl=document.getElementById('tourttl'), txt=document.getElementById('tourtxt'),
@@ -1877,7 +1884,7 @@ function runDayControls({ runDay, rdMsg = '' }) {
     </form>
     ${runDay.season ? `<form method="POST" action="/admin/season" style="margin-top:8px" onsubmit="return confirm('Clear the season start? Runs resume every week right away.');"><input type="hidden" name="season" value=""><button class="btn ghost sm" type="submit">Clear — run every week</button></form>` : ''}`;
 
-  return `<div class="infosec" style="margin-top:20px"><div class="card"><div class="clab">Operator tools</div>
+  return `<div class="infosec" data-tour="rundate" style="margin-top:20px"><div class="card"><div class="clab">Operator tools</div>
     ${rdBanner}
     ${nextLine}
     ${weekSection}
@@ -4216,7 +4223,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
     <div data-tour="people" style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 0">
       <a class="btn ghost" href="/admin/share" style="margin:0">📱 Share sign-up QR &amp; links</a>
       <a class="btn ghost" href="/admin/people/export.csv" style="margin:0" download>⬇︎ Export people (CSV)</a>
-      <a class="btn ghost" href="/admin/export" style="margin:0">⬇︎ Export &amp; backup</a>
+      <a class="btn ghost" href="/admin/export" style="margin:0" data-tour="export">⬇︎ Export &amp; backup</a>
     </div>
 
     <div class="subhead">Add a player</div>
