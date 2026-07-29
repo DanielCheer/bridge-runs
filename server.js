@@ -1928,6 +1928,25 @@ function mutedOut(gate, res, { json = false, back = '/chat' } = {}) {
 // that run's own check-in page. Basketball is always listed; Pickleball appears for
 // admins always and for members only once it's published (active) — preserving the
 // hidden-until-live behaviour. Read-only aside from the no-op week rolls.
+// The viewer's own status for a run, for the hub card's personal badge (Javelin-style):
+// 'in' (on the floor), 'offered' (holding a pending offer), or 'waitlist' (with position #pos of total).
+// Returns null when they're not signed up — the card then shows no personal badge. Reuses the same
+// partition the run page uses, so the badge and the run page never disagree.
+function myRunStatusFor(programId, rd, email) {
+  if (!email || !rd) return null;
+  const cfg = P(programId).config;
+  const part = partitionFor(programId, rd);
+  const me = String(email).toLowerCase();
+  const floor = cfg.offerWindow ? part.floorReal : part.floor;
+  const wait = cfg.offerWindow ? part.waitPlayers : part.wait;
+  const offered = cfg.offerWindow ? part.offered : [];
+  if (floor.some(x => String(x.email).toLowerCase() === me)) return { state: 'in' };
+  if (offered.some(x => String(x.email).toLowerCase() === me)) return { state: 'offered' };
+  const i = wait.findIndex(x => String(x.email).toLowerCase() === me);
+  if (i >= 0) return { state: 'waitlist', pos: i + 1, total: wait.length };
+  return null;
+}
+
 app.get('/runs', requireLogin, (req, res) => {
   const email = req.userEmail;
   // Any signed-in member can SEE the hub — non-approved viewers get an apply prompt on
@@ -1948,6 +1967,7 @@ app.get('/runs', requireLogin, (req, res) => {
     if (!p.active() && !viewerIsAdmin) continue;
     const card = { key: p.key, emoji: p.emoji, name: p.displayName, href: p.paths.run, ...p.hubCard(req) };
     card.friendsGoing = fgMap.get(p.id + '|' + card.runDate) || [];
+    card.mine = a ? myRunStatusFor(p.id, card.runDate, email) : null; // viewer's own status for a per-card badge
     runs.push(card);
   }
 

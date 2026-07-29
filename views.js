@@ -1966,7 +1966,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
   } else if (myState === 'in') {
     action = `<form method="POST" action="/checkin/leave"><button class="btn ghost" type="submit">Sit out</button></form>`;
   } else if (myState === 'waitlist') {
-    action = `<form method="POST" action="/checkin/leave"><button class="btn ghost" type="submit">Leave waitlist (#${myWaitPos})</button></form>`;
+    action = `<form method="POST" action="/checkin/leave"><button class="btn ghost" type="submit">Leave waitlist (#${myWaitPos} of ${waiting})</button></form>`;
   } else if (locked) {
     // Locked at 2 PM — roster is set. Players already in can still Sit out (handled above,
     // which frees the spot to the waitlist). No new self-sign-ups; a host can add a +1.
@@ -2024,7 +2024,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
   } else if (myState === 'in') {
     mine = '';  // "You're on the floor for Friday ✓" removed per owner — redundant with the Sit-out button
   } else if (myState === 'waitlist') {
-    mine = `<div class="notice warn">You're <b>#${myWaitPos}</b> on the waitlist. If a spot opens you'll be emailed and have ${offerWindowHours} hour${offerWindowHours === 1 ? '' : 's'} to claim it before it passes to the next person.</div>`;
+    mine = `<div class="notice warn">You're <b>#${myWaitPos} of ${waiting}</b> on the waitlist. If a spot opens you'll be emailed and have ${offerWindowHours} hour${offerWindowHours === 1 ? '' : 's'} to claim it before it passes to the next person.</div>`;
   } else if (full) {
     mine = `<div class="notice warn">Run's full at ${cap}. Join the waitlist and you'll move in if a spot opens.</div>`;
   }
@@ -2744,6 +2744,15 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       : `${names[0]}, ${names[1]} +${names.length - 2} going`;
     return `<span class="rhfr"><span class="rhfr-avs">${avs}</span><span class="rhfr-txt">${label}</span></span>`;
   };
+  // The viewer's OWN status for this run (Javelin-style) — takes visual priority over the generic
+  // open/closed pill, so "Waitlisted · #3 of 8" / "You're in" is the first thing they see on the card.
+  const mineBadge = (r) => {
+    const m = r.mine; if (!m) return '';
+    if (m.state === 'in') return `<span class="rhmine in">✓ You're in</span>`;
+    if (m.state === 'offered') return `<span class="rhmine offer">⏳ Claim your spot</span>`;
+    if (m.state === 'waitlist') return `<span class="rhmine wait">Waitlisted · #${m.pos} of ${m.total}</span>`;
+    return '';
+  };
   const card = (r) => `<a class="rhcard" href="${canJoin ? r.href : applyHref}"${canJoin ? '' : ' data-full'}>
       <span class="rhemoji" aria-hidden="true">${r.emoji}</span>
       <span class="rhbody">
@@ -2752,7 +2761,7 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
         ${frGoing(r)}
       </span>
       <span class="rhmeta">
-        ${pill(r)}
+        ${r.status === 'cancelled' ? pill(r) : (mineBadge(r) || pill(r))}
         ${canJoin ? `<span class="rhcount">${r.going}<span class="rhslash">/${r.cap}</span></span>` : ''}
       </span>
       <span class="rharrow" aria-hidden="true">›</span>
@@ -2786,6 +2795,10 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       .rhpill.amber{background:#f7eccf;color:#8a6a1b}
       .rhcount{font-weight:800;font-size:15px;font-variant-numeric:tabular-nums;color:var(--ink,#20211c)}
       .rhslash{font-weight:500;color:var(--muted)}
+      .rhmine{font-size:11px;font-weight:800;letter-spacing:.02em;padding:3px 9px;border-radius:999px;white-space:nowrap}
+      .rhmine.in{background:#2f9e54;color:#fff}
+      .rhmine.wait{background:#f7eccf;color:#8a6a1b}
+      .rhmine.offer{background:#e0503f;color:#fff}
       .rhfr{display:flex;align-items:center;gap:7px;margin-top:5px}
       .rhfr-avs{display:inline-flex}
       .rhfr-av.mav{width:20px;height:20px;font-size:9px;border:1.5px solid var(--card);box-shadow:0 0 0 .5px var(--line)}
@@ -2800,6 +2813,7 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
         .rhpill.grey{background:#2a2a28;color:#b7b6ae}
         .rhpill.red{background:#3d1e1e;color:#f0a3a3}
         .rhpill.amber{background:#3a3016;color:#e7c766}
+        .rhmine.wait{background:#3a3016;color:#e7c766}
       }
     </style>
     <div class="rhead">
@@ -2873,7 +2887,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
   let action = '';
   if (cancelled) action = `<button class="btn" type="button" disabled>Run cancelled</button>`;
   else if (myState === 'in') action = `<form method="POST" action="${runBase}/leave"><button class="btn ghost" type="submit">Sit out</button></form>`;
-  else if (myState === 'waitlist') action = `<form method="POST" action="${runBase}/leave"><button class="btn ghost" type="submit">Leave waitlist (#${myWaitPos})</button></form>`;
+  else if (myState === 'waitlist') action = `<form method="POST" action="${runBase}/leave"><button class="btn ghost" type="submit">Leave waitlist (#${myWaitPos} of ${waiting})</button></form>`;
   else if (!isOpen) action = `<button class="btn" type="button" disabled>Check-in closed</button>`;
   else if (totalFull) action = `<button class="btn" type="button" disabled>Run &amp; waitlist full</button>`;
   else if (full) action = `<form method="POST" action="${runBase}/join"><button class="btn primary" type="submit">Join waitlist (${waiting}/${waitlistCap})</button></form>`;
@@ -3008,7 +3022,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
     ${myState === 'in' && !cancelled ? (myConfirmed
       ? `<div class="notice good" style="margin-top:10px">✓ <b>You're confirmed</b> for this run — see you there!</div>`
       : `<form method="POST" action="${runBase}/confirm" class="swapform" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming</button></form>`) : ''}
-    ${myState === 'waitlist' && !cancelled ? `<div class="notice warn" style="margin-top:10px">You're <b>#${myWaitPos}</b> on the waitlist. If a spot opens you'll get a notification and move onto the floor — no need to re-check.</div>` : ''}${partyPanel}${teamsPanel}
+    ${myState === 'waitlist' && !cancelled ? `<div class="notice warn" style="margin-top:10px">You're <b>#${myWaitPos} of ${waiting}</b> on the waitlist. If a spot opens you'll get a notification and move onto the floor — no need to re-check.</div>` : ''}${partyPanel}${teamsPanel}
     ${cancelled ? '' : `<div style="margin-top:12px"><a href="${runBase}/run.ics" style="font-size:13px;color:var(--muted)">📅 Add this run to your calendar</a></div>`}
     ${qrBlock}
     <div style="height:28px"></div>
