@@ -616,12 +616,19 @@ export function avatarUrlFor(email) { return avatarUrl(email); }
 // teal avatar disc. Reused by the check-in card, the inbox pin, and the chat bar.
 const GROUP_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:60%;height:60%"><circle cx="9" cy="9" r="3"/><path d="M3.5 19c0-3 2.5-4.5 5.5-4.5s5.5 1.5 5.5 4.5"/><path d="M16 6.2a3 3 0 0 1 0 5.6"/><path d="M17.5 14.6c2.3.4 4 1.8 4 4.4"/></svg>`;
 
-// Role → badge markup (loudest first). p carries host/team/regular/guest flags.
-const roleBadge = (p) => p.host ? '<span class="bdg host">★ Host</span>'
+// Safeguarding: a loud red "Minor" chip for anyone under 18 (known DOB). Orthogonal to
+// role — shown IN ADDITION to it — so the community can see it at a glance. The under-18
+// flag is computed server-side (isMinor) and passed in; the view never guesses age.
+const MINOR_BADGE = '<span class="bdg minor" title="Under 18">⚠ Minor</span>';
+
+// Role → badge markup (loudest first). p carries host/team/regular/guest flags, plus an
+// optional `minor` flag that PREPENDS the red Minor chip before the (single) role badge.
+const roleBadge = (p) => (p.minor ? MINOR_BADGE : '')
+  + (p.host ? '<span class="bdg host">★ Host</span>'
   : p.team ? '<span class="bdg team">◆ Team</span>'
   : p.regular ? '<span class="bdg core">★ Pillar</span>'
   : p.guest ? '<span class="bdg guest">Guest</span>'
-  : '<span class="bdg reg">Regular</span>';
+  : '<span class="bdg reg">Regular</span>');
 
 // Bottom tab bar — Check-in / Roster / Profile. Shown to every signed-in
 // approved player (admins too) on the player-facing pages. Operator pages keep
@@ -2464,8 +2471,8 @@ export function runChatPage({ me, chat, program = 2, theme = 'pk', sport = 'Pick
 // ---------- PROFILE (view another player) ----------
 // Compact profile card — served as a fragment for the quick-look popup (tap a name in the
 // who's-going sheet). Just the essentials + a Message / Full-profile jump; no page chrome.
-export function profileCard({ p, stats, canContact = false, canDM = true, isSelf = false }) {
-  const rb = p.is_host ? '<span class="bdg host">★ Host</span>' : p.is_team ? '<span class="bdg team">◆ Team</span>' : p.is_regular ? '<span class="bdg core">★ Pillar</span>' : '<span class="bdg reg">Regular</span>';
+export function profileCard({ p, stats, canContact = false, canDM = true, isSelf = false, minor = false }) {
+  const rb = (minor ? MINOR_BADGE : '') + (p.is_host ? '<span class="bdg host">★ Host</span>' : p.is_team ? '<span class="bdg team">◆ Team</span>' : p.is_regular ? '<span class="bdg core">★ Pillar</span>' : '<span class="bdg reg">Regular</span>');
   const positions = (p.position || '').split(',').filter(Boolean).join(' · ');
   const memberSince = stats.first ? fmtMonthYear(stats.first) : null;
   const row = (k, v) => `<div class="pcrow"><span class="pck">${esc(k)}</span><span class="pcv">${v}</span></div>`;
@@ -2478,8 +2485,9 @@ export function profileCard({ p, stats, canContact = false, canDM = true, isSelf
     <div class="pcbtns">${isSelf ? `<a class="btn ghost sm" href="/profile">Edit profile</a>` : (canDM ? `<a class="btn primary sm" href="/messages/${p.id}">Message</a>` : '')}<a class="btn ghost sm" href="/u/${p.id}">Full profile →</a></div>`;
 }
 
-export function profilePage({ p, stats, isSelf = false, canContact = false, canDM = true, rel = 'none', following = false, runDate = '', hours = '8:30–10:30 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null, back = '/chat' }) {
+export function profilePage({ p, stats, isSelf = false, canContact = false, canDM = true, rel = 'none', following = false, runDate = '', hours = '8:30–10:30 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null, back = '/chat', minor = false }) {
   const badges = [
+    minor ? MINOR_BADGE : '',
     p.is_host ? '<span class="bdg host">★ Host</span>' : '',
     p.is_team ? '<span class="bdg team">◆ Team</span>' : (p.is_regular ? '<span class="bdg core">★ Pillar</span>' : ''),
     (!p.is_host && !p.is_team && !p.is_regular) ? '<span class="bdg reg">Regular</span>' : '',
@@ -3201,7 +3209,7 @@ function inboxRows(me, threads) {
 }
 
 // ---------- PROFILE (own editable tab) ----------
-export function profileTabPage({ a, stats, saved = false, error = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, canOperate = false, announcementLog = [], iAmHost = false, threads = [], photoMsg = '', ann = null, friendCount = 0, friendReqIn = 0, followerCount = 0 }) {
+export function profileTabPage({ a, stats, saved = false, error = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, canOperate = false, announcementLog = [], iAmHost = false, threads = [], photoMsg = '', ann = null, friendCount = 0, friendReqIn = 0, followerCount = 0, minor = false }) {
   // The own-profile tab is a chromeless editor (its own .bar, no masthead), so the
   // global announcements bell lives in the .bar rather than the .mast here. Same
   // button + panel + JS as every other page (one shared affordance, one live dot).
@@ -3267,7 +3275,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
       <div class="idrow">
         <label class="pic" for="photoinput" title="Change photo" aria-label="Change profile photo">${avatarInner(a.email, a.full_name)}<span class="cam">✎</span></label>
         <div class="idfield">
-          <div class="idname">${esc(a.full_name)}${a.is_host ? '<span class="hostpill">★ Host</span>' : ''}</div>
+          <div class="idname">${esc(a.full_name)}${a.is_host ? '<span class="hostpill">★ Host</span>' : ''}${minor ? ' ' + MINOR_BADGE : ''}</div>
           <div class="phactions">${hasAvatar ? '<button type="submit" form="photoremove" class="phbtn">Remove photo</button>' : '<span class="phsoon">Tap photo to change</span>'}</div>
         </div>
       </div>

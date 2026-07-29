@@ -2193,7 +2193,7 @@ app.get('/u/:id/card', requireLogin, (req, res) => {
   if (!p || (p.status !== 'approved' && !gate.viewerIsAdmin)) return res.status(404).send('');
   const canContact = gate.viewerIsAdmin || !!(gate.a && gate.a.is_team);
   const canDM = canMessage(req.userEmail, gate.a, p);   // hide Message when the server would block it (block / minor)
-  res.send(profileCard({ p, stats: attendanceStats(p.email), canContact, canDM, isSelf: p.email === req.userEmail }));
+  res.send(profileCard({ p, stats: attendanceStats(p.email), canContact, canDM, isSelf: p.email === req.userEmail, minor: isMinor(p) }));
 });
 
 app.get('/u/:id', requireLogin, (req, res) => {
@@ -2216,6 +2216,7 @@ app.get('/u/:id', requireLogin, (req, res) => {
     dmUnread: unreadCount(req.userEmail), groupUnread: cc.group,
     groupMention: cc.gm, chatProgram, // Chat tab reflects the run they've joined (or locks if none)
     ann: annPanel(req.userEmail),
+    minor: isMinor(p), // red safeguarding badge on the profile
   }));
 });
 
@@ -2242,7 +2243,7 @@ app.get('/profile', requireLogin, (req, res) => {
   res.send(profileTabPage({ a, stats: attendanceStats(a.email), saved: req.query.saved === '1', error: '',
     dmUnread: unreadCount(a.email), groupUnread: cc.group, groupMention: cc.gm, chatProgram, canOperate, announcementLog: canOperate ? announcementHistory() : [],
     friendCount: friendsOf(a.email).length, friendReqIn: friendReqIncomingCount(a.email), followerCount: followersOf(a.email).length, // Friends entry-point summary
-    iAmHost, threads: loadInbox(a.email), photoMsg, ann: annPanel(a.email) }));
+    iAmHost, threads: loadInbox(a.email), photoMsg, ann: annPanel(a.email), minor: isMinor(a) }));
 });
 
 // ---------- PROFILE PHOTO (upload / remove) ----------
@@ -2329,6 +2330,7 @@ app.post('/profile', requireLogin, (req, res) => {
     a, stats, dmUnread: unreadCount(a.email), groupUnread: groupUnread(a.email), groupMention: groupMentionUnread(a.email, a.id),
     canOperate, iAmHost, announcementLog: canOperate ? announcementHistory() : [], threads: loadInbox(a.email), ann: annPanel(a.email),
     chatProgram: chatProgramFor(req), // keep the run-aware Chat tab correct on a validation re-render too
+    minor: isMinor(a), // red safeguarding badge (dob is set-once, so unchanged on an error re-render)
   };
   if (!full_name || !phone || !isValidEmail(email))
     return res.send(profileTabPage({ ...errProps, error: 'Name, phone, and a valid email are required.' }));
