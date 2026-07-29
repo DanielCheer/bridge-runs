@@ -1422,8 +1422,10 @@ app.post('/invite/:token', async (req, res) => {
                 VALUES (?,?,?,?,0,'approved',0,0)`)
       .run(full_name, email, phone, 'Pre-approved (invite, unverified)');
   }
-  // Record the invitee's DOB uniformly across all claim branches (drives the under-18 DM rule).
-  db.prepare('UPDATE applicants SET dob = ? WHERE email = ?').run(dob, email);
+  // Record the invitee's DOB (drives the under-18 DM rule). KEEP-FIRST-SET (COALESCE): an already-set
+  // DOB is never overwritten here — otherwise a known minor holding an invite link could re-claim it
+  // with a fake adult DOB and unlock 1:1 DMs, defeating the set-once rule /profile enforces.
+  db.prepare('UPDATE applicants SET dob = COALESCE(dob, ?) WHERE email = ?').run(dob, email);
   db.prepare("UPDATE invites SET used = 1, used_at = datetime('now'), used_email = ? WHERE token = ?")
     .run(email, iv.token);
   // WIRING: a team invite creates an auto-renew team member — seat them on the
@@ -1998,7 +2000,7 @@ app.get('/runs', requireLogin, (req, res) => {
   const cc = chatCountsFor(chatProgram || 1, email, a ? a.id : 0);
   res.send(runsPage({
     email, runs, canJoin, status,
-    firstName, gamesAttended, gamesThisYear, pastRuns, venue: 'The Bridge Church', location: '5440 16th Ave, Markham',
+    firstName, gamesAttended, gamesThisYear, pastRuns,
     isAdmin: viewerIsAdmin,
     canOperate: viewerIsAdmin || !!(a && a.is_team),
     needsWaiver: !!(a && !a.waiver_ok), // tour ends on a "sign your waiver" step for players who haven't
@@ -5293,7 +5295,10 @@ const DEMO_CHAT = [
 // (clears program-90 rows first) so it doubles as the reset button.
 app.post('/admin/demo/seed', requireAdmin, (req, res) => {
   const pid = DEMO_PID, cfg = P(pid).config;
-  const rd = getSetting(cfg.keys.runDate) || programDefaultDate(pid);
+  // Never reuse a PAST rehearsal's stored date (static programs never roll it) — recompute if stale
+  // so the demo always seeds on an upcoming date, not last week's.
+  let rd = getSetting(cfg.keys.runDate);
+  if (!rd || rd < ymdLocal()) rd = programDefaultDate(pid);
   setSetting(cfg.keys.runDate, rd);
   db.prepare('DELETE FROM checkins WHERE program_id = ?').run(pid);
   db.prepare('INSERT OR REPLACE INTO run_state (run_date, program_id, is_open, cancelled) VALUES (?,?,1,0)').run(rd, pid);
@@ -5359,7 +5364,7 @@ function genericHubCard(programId) {
     const floor = cfg.offerWindow ? part.floorReal : part.floor;
     return {
       runDate: rd, dateLabel: runLabelFor(rd), timeLabel: fmtClockRange(`${cfg.startHour}:00`, `${cfg.endHour}:00`),
-      going: floor.length, cap: cfg.cap,
+      going: floor.length + (cfg.offerWindow ? part.offered.length : 0), cap: cfg.cap, // count held offers so the hub card matches the run page (no 8→7 dip mid-offer)
       status: runCancelledFor(programId, rd) ? 'cancelled' : (runOpenFor(programId, rd) ? 'open' : 'closed'),
       hidden: !programActive(programId),
     };
