@@ -2714,7 +2714,7 @@ function dailyVerse() {
 // that run's check-in page. `runs` = [{ key, emoji, name, href, runDate, dateLabel,
 // timeLabel, going, cap, status:'open'|'closed'|'cancelled', hidden }]. Self-contained
 // styles (scoped .rh*) so it needs no new global CSS.
-export function runsPage({ email, runs = [], canJoin = true, status = 'approved', canOperate = false, isAdmin = false, needsWaiver = false, needsDob = false, firstName = 'there', weekDays = [], monthLabel = '', pastRuns = [], venue = '', location = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null }) {
+export function runsPage({ email, runs = [], canJoin = true, status = 'approved', canOperate = false, isAdmin = false, needsWaiver = false, needsDob = false, firstName = 'there', pastRuns = [], venue = '', location = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null }) {
   // Non-approved viewers can SEE the runs but can't join — a tap routes them to apply
   // (or to their status) instead of into a check-in they're not cleared for.
   const applyHref = status === 'none' ? '/' : '/status';
@@ -2754,7 +2754,6 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
   const IBOOK = '<svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v18l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>';
   const IPIN = '<svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>';
   const ICLK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
-  const ICAL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16.5" rx="2.5"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/></svg>';
   const dateLine = (r) => [wdayShort(r.runDate), r.dateLabel].filter(Boolean).join(' · ') || 'No date set';
   // Javelin-style card: orange accent bar + bookmark + title/venue row, then location/time + date +
   // the viewer's own status. Whole card links into that run's check-in (or apply, for non-members).
@@ -2792,17 +2791,6 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       .whead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:6px 2px 13px}
       .whead h1{font-family:var(--head);font-weight:800;font-size:25px;color:var(--ink);margin:0;letter-spacing:-.01em}
       .wheadr{display:flex;align-items:center;gap:14px}
-      .wheadr .wcal{display:flex;color:var(--muted)}
-      .calwrap{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px 6px 11px;margin-bottom:14px}
-      .calmonth{text-align:center;font-family:var(--head);font-weight:700;font-size:15px;color:var(--ink);margin-bottom:9px}
-      .calrow{display:flex}
-      .calday{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;padding:4px 0 3px;border-radius:11px}
-      .cdow{font-family:var(--head);font-weight:700;font-size:9.5px;letter-spacing:.05em;color:var(--muted)}
-      .cdate{font-size:15px;font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums;line-height:1}
-      .calday.today{background:rgba(228,97,31,.09)}
-      .calday.today .cdate{color:var(--orange,#e4611f);font-weight:800}
-      .cdot{width:5px;height:5px;border-radius:50%;background:var(--orange,#e4611f)}
-      .cdotx{width:5px;height:5px}
       .jtabs{display:flex;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:13px;background:var(--card)}
       .jtab{flex:1;border:none;background:none;padding:11px 0;font-family:var(--head);font-weight:700;font-size:13px;letter-spacing:.02em;color:var(--muted);cursor:pointer;-webkit-tap-highlight-color:transparent}
       .jtab.on{background:var(--ink,#22231d);color:#fff}
@@ -2853,8 +2841,7 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
         .jattend{background:#183a25;color:#8fe0ab}
       }
     </style>
-    <div class="whead"><h1>Welcome, ${esc(firstName)}</h1><div class="wheadr"><span class="wcal">${ICAL}</span>${annBtn}</div></div>
-    <div class="calwrap"><div class="calmonth">${esc(monthLabel)}</div><div class="calrow">${weekDays.map(d => `<div class="calday${d.today ? ' today' : ''}"><span class="cdow">${esc(d.dow)}</span><span class="cdate">${d.date}</span><span class="${d.dot ? 'cdot' : 'cdotx'}"></span></div>`).join('')}</div></div>
+    <div class="whead"><h1>Welcome, ${esc(firstName)}</h1><div class="wheadr">${annBtn}</div></div>
     ${nudge}${applyBanner}
     <div class="jtabs"><button type="button" class="jtab on" data-jt="up">Upcoming</button><button type="button" class="jtab" data-jt="past">Past</button></div>
     <div class="jlist" data-jl="up">${runs.length ? runs.map(card).join('') : '<p class="jempty">No runs available yet.</p>'}</div>
@@ -3185,7 +3172,8 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
   // global announcements bell lives in the .bar rather than the .mast here. Same
   // button + panel + JS as every other page (one shared affordance, one live dot).
   const { btn: annBtn, sheet: annSheet } = annBell(ann);
-  const POS = [['PG', 'Point'], ['SG', 'Shoot'], ['SF', 'Small F'], ['PF', 'Power F'], ['C', 'Center']];
+  const BBALL_POS = [['PG', 'Point'], ['SG', 'Shoot'], ['SF', 'Small F'], ['PF', 'Power F'], ['C', 'Center']];
+  const VB_POS = [['S', 'Setter'], ['OH', 'Outside'], ['MB', 'Middle'], ['OPP', 'Opp'], ['L', 'Libero'], ['DS', 'Def']];
   // Host/admin-only: move a given week's run to a different weekday. Compact,
   // collapsed-by-default <details> so it never breaks the profile's no-scroll fit.
   // Run-day + Cancel-run controls moved to the check-in page's Operator-tools card
@@ -3213,8 +3201,9 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
       </details>`
     : '';
   const selected = new Set((a.position || '').split(',').map(s => s.trim()).filter(Boolean));
-  const chips = POS.map(([v, l]) =>
+  const chipRow = (list) => list.map(([v, l]) =>
     `<label class="chip"><input type="checkbox" name="position" value="${v}" hidden${selected.has(v) ? ' checked' : ''}>${v}<small>${l}</small></label>`).join('');
+  const bbChips = chipRow(BBALL_POS), vbChips = chipRow(VB_POS);
   const memberSince = fmtMonthYear(a.created_at);
   const hasAvatar = !!a.avatar;
   // Photo upload/remove outcome (redirect flag → friendly notice). Errors are the
@@ -3252,10 +3241,8 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
         <summary>Account info<span class="acct-hint">name · phone · email · DOB</span></summary>
         <div class="acct-body">
           <div class="field"><label>Name</label><input name="full_name" value="${esc(a.full_name)}" required autocomplete="name"></div>
-          <div class="two">
-            <div class="field"><label>Phone</label><input name="phone" value="${esc(a.phone)}" inputmode="tel" required autocomplete="tel"></div>
-            <div class="field"><label>Email</label><input name="email" type="email" value="${esc(a.email)}" required autocomplete="email"></div>
-          </div>
+          <div class="field"><label>Phone</label><input name="phone" value="${esc(a.phone)}" inputmode="tel" required autocomplete="tel"></div>
+          <div class="field"><label>Email</label><input name="email" type="email" value="${esc(a.email)}" required autocomplete="email"></div>
           <div class="field"><label>Date of birth</label>
             ${a.dob
               ? `<p class="tally-note" style="margin:2px 0 0"><b>${esc(a.dob)}</b> · contact an organizer to change it.</p>`
@@ -3264,7 +3251,10 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
           </div>
         </div>
       </details>
-      <div class="sec"><div class="lb"><b>Position</b><span>Tap to toggle</span></div><div class="chips">${chips}</div></div>
+      <div class="sec"><div class="lb"><b>Position</b><span>Tap to toggle</span></div>
+        <div class="poslab">Basketball</div><div class="chips sm">${bbChips}</div>
+        <div class="poslab">Volleyball</div><div class="chips sm">${vbChips}</div>
+      </div>
       <div class="sec"><div class="lb"><b>Email</b></div>
         <label class="lvl" style="display:block"><input type="checkbox" name="email_announce" value="1"${a.email_optout ? '' : ' checked'}> Email me announcements &amp; run-day changes</label>
         <p class="tally-note" style="margin:6px 0 0">Sign-in links and waitlist spot offers are always sent.</p>

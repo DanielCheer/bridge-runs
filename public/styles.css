@@ -383,6 +383,12 @@ a.score{cursor:pointer}
 .chip small{display:block;font-family:var(--head);font-weight:700;font-size:7px;letter-spacing:.04em;color:var(--muted);margin-top:2px}
 .chip.on,.chip:has(:checked){background:var(--solid);color:#fff;border-color:transparent;box-shadow:0 8px 18px -6px rgba(228,97,31,.6)}
 .chip.on small,.chip:has(:checked) small{color:rgba(255,255,255,.85)}
+/* Per-sport position rows (basketball / volleyball) — a small sport label + a tighter, smaller chip row */
+.poslab{font-family:var(--head);font-weight:700;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:9px 0 5px}
+.chips.sm{gap:6px}
+.chips.sm .chip{padding:6px 0 5px;border-radius:9px;font-size:13px}
+.chips.sm .chip small{font-size:6.5px;margin-top:1px}
+.chips.sm .chip.on,.chips.sm .chip:has(:checked){box-shadow:0 5px 12px -5px rgba(228,97,31,.55)}
 .statcard{display:flex;gap:14px;align-items:center;padding:9px 15px;border-radius:13px;background:#fff;border:1px solid rgba(34,35,29,.09);margin:4px 0 0}
 .statcard .g{font-family:var(--anton);font-size:30px;color:var(--ink);line-height:.9;flex:none}
 .statcard .g em{font-style:normal;font-size:14px;background:var(--foil);-webkit-background-clip:text;background-clip:text;color:transparent}
