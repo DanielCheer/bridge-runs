@@ -838,6 +838,15 @@ function hydrateGroupMessages(programId, me, msgs) {
     const ph3 = emails.map(() => '?').join(',');
     for (const s of db.prepare(`SELECT id, full_name, email, is_host FROM applicants WHERE email IN (${ph3})`).all(...emails))
       senders.set(s.email, s);
+    // Fallback for a sender with no applicant row (the demo run's synthetic @demo.local players):
+    // resolve the display name from this program's check-in roster so chat shows a name, not an email.
+    // No-op for real programs — every real chatter has an applicant row — so it's byte-identical there.
+    const unresolved = emails.filter(e => !senders.has(e));
+    if (unresolved.length) {
+      const phc = unresolved.map(() => '?').join(',');
+      for (const c of db.prepare(`SELECT DISTINCT email, name FROM checkins WHERE program_id = ? AND email IN (${phc})`).all(programId, ...unresolved))
+        if (!senders.has(c.email)) senders.set(c.email, { id: 0, full_name: c.name, is_host: 0 });
+    }
   }
   // Mention-name map: id -> full_name for every applicant @-tagged across the loaded
   // messages. Drives esc-safe linkify in chatFragment (match the escaped name in the
@@ -5251,6 +5260,18 @@ app.post('/pickleball/announce/retract', requireLogin, (req, res) => runAnnounce
 const DEMO_PID = 90;
 const DEMO_NAMES = ['Marcus B.', 'Jordan T.', 'Andre W.', 'Tyler R.', 'Chris O.', 'Devin M.', 'Malik S.',
   'Isaiah H.', 'Xavier P.', 'Cameron D.', 'Trey L.', 'Josh N.', 'Elijah G.', 'Nate F.'];
+// Bot chatter seeded into the demo run's chat so it looks alive during a demo (sender name resolves
+// from the demo roster via the checkins fallback in hydrateGroupMessages). [demo-player-index, line].
+const DEMO_CHAT = [
+  [2, 'yo who’s running tonight? 🏀'],
+  [5, 'me + a couple friends, we’re in'],
+  [1, 'waitlist moved fast last week 😅'],
+  [9, 'first time coming out — how’s the run?'],
+  [3, 'competitive but chill, you’ll love it 🙌'],
+  [7, 'save me a spot on the floor 🙏'],
+  [4, 'anyone got a ball pump? mine died'],
+  [11, 'see everyone at 7 🔥'],
+];
 // Seed/reset: a fresh FULL floor + FULL waitlist of synthetic players, run open. Idempotent
 // (clears program-90 rows first) so it doubles as the reset button.
 app.post('/admin/demo/seed', requireAdmin, (req, res) => {
@@ -5265,6 +5286,10 @@ app.post('/admin/demo/seed', requireAdmin, (req, res) => {
   // ~60% of the floor shows a green ✓ (a realistic mix of confirmed / not-yet-confirmed).
   db.prepare("UPDATE checkins SET confirmed_at = datetime('now') WHERE program_id = ? AND run_date = ? AND sort_order < ?")
     .run(pid, rd, Math.floor(cfg.cap * 0.6));
+  // Seed the demo CHAT with bot chatter so the room looks alive (cleared on reset/clear below).
+  db.prepare('DELETE FROM group_messages WHERE program_id = ?').run(pid);
+  const insMsg = db.prepare('INSERT INTO group_messages (from_email, body, program_id) VALUES (?,?,?)');
+  for (const [i, line] of DEMO_CHAT) if (i < total) insMsg.run(`demo-${i + 1}@demo.local`, line, pid);
   audit(req.userEmail, 'admin', 'demo:seed', `${total} players on ${rd}`);
   res.redirect(P(pid).paths.run);
 });
@@ -5274,6 +5299,7 @@ app.post('/admin/demo/clear', requireAdmin, (req, res) => {
   db.prepare('DELETE FROM checkins WHERE program_id = ?').run(pid);
   db.prepare('DELETE FROM run_state WHERE program_id = ?').run(pid);
   db.prepare('DELETE FROM attendance WHERE program_id = ?').run(pid);
+  db.prepare('DELETE FROM group_messages WHERE program_id = ?').run(pid);   // clear the bot chatter too
   delSetting(cfg.keys.runDate);
   audit(req.userEmail, 'admin', 'demo:clear', '');
   res.redirect(P(pid).paths.run);
