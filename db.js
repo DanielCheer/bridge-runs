@@ -507,6 +507,11 @@ migrateToPhase2(db);
   // vb-only via config.features.groupQueue; NULL everywhere until a party checks in → solo ≡ today.
   // Added AFTER migrateToPhase2 with auto_seated (checkins is rebuilt by that migration).
   if (!cc.includes('group_id')) db.exec('ALTER TABLE checkins ADD COLUMN group_id INTEGER');
+  // checkins.dob (2026-07): optional per-checkin DOB FALLBACK for rows with NO applicant account —
+  // demo players (checkins-only) + guests. partitionFor coalesces applicants.dob → this to drive the
+  // red "Minor" roster badge. Real members keep their DOB on applicants; this stays null for them.
+  // MUST be here (after migrateToPhase2 rebuilds checkins), not with the applicants.dob ALTER above.
+  if (!cc.includes('dob')) db.exec('ALTER TABLE checkins ADD COLUMN dob TEXT');
 }
 
 // --- Social graph (2026-07, PHASE 6 — friends / follow / block) -------------

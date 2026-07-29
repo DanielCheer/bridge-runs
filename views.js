@@ -561,7 +561,7 @@ const FOOT = `${FOOTER_LINKS}</div></body></html>`;
 // The tab bar lives OUTSIDE .wrap (a direct <body> child) so no ancestor of .wrap can ever
 // become a containing block for its position:fixed (iOS WebKit was trapping it mid-page). The
 // SPA router swaps it explicitly (see __swapWrap). .wrap closes first, then the nav.
-const footWithTabs = (tabsHtml) => `${FOOTER_LINKS}</div>${tabsHtml}</body></html>`;
+const footWithTabs = (tabsHtml, opts = {}) => `${opts.noFooter ? '' : FOOTER_LINKS}</div>${tabsHtml}</body></html>`;
 
 // The scoreboard basketball mark — used in the masthead.
 const BALL = `<svg class="ball" viewBox="0 0 40 40" fill="none" aria-hidden="true"><circle cx="20" cy="20" r="18" fill="#22615A"/><path d="M20 2v36M2 20h36M7 7c7 5 7 21 0 26M33 7c-7 5-7 21 0 26" stroke="#F8F5EF" stroke-width="1.5" opacity=".85"/></svg>`;
@@ -2892,7 +2892,8 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
     ${annSheet}
     ${canJoin ? firstRunTour : ''}
     <script>(function(){if(window.__jtabBound)return;window.__jtabBound=1;document.addEventListener('click',function(e){var b=e.target&&e.target.closest&&e.target.closest('.jseg-b[data-jt]');if(!b)return;var sel=b.getAttribute('data-jt');var ts=document.querySelectorAll('.jseg-b[data-jt]');for(var i=0;i<ts.length;i++)ts[i].classList.toggle('on',ts[i]===b);var ls=document.querySelectorAll('.jlist[data-jl]');for(var j=0;j<ls.length;j++)ls[j].hidden=(ls[j].getAttribute('data-jl')!==sel);});})();</script>
-  ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: chatProgram }));
+    <script>(function(){if(window.__hubBfBound)return;window.__hubBfBound=1;window.addEventListener('pageshow',function(e){if(e.persisted)location.reload();});})();</script>
+  ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: chatProgram }), { noFooter: true });
 }
 
 // Pickleball JOIN PROMPT — shown when an approved member who hasn't joined pickleball opens
@@ -2930,7 +2931,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
   // Tappable name → profile popup (reuses the shared pvOpen + /u/:id/card); guests (no
   // applicant_id) stay plain text. Role badge mirrors the basketball roster.
   const nameLink = (p, inner) => (p.applicant_id && !/@guest\.local$/.test(p.email)) ? `<a class="lrlink" href="/u/${p.applicant_id}" onclick="if(window.pvOpen){pvOpen(${p.applicant_id});return false;}">${inner}</a>` : inner;
-  const pkRole = (p) => roleBadge({ host: !!p.is_host, team: !!p.is_team, guest: /@guest\.local$/.test(p.email) }); // no core tier in pickleball
+  const pkRole = (p) => roleBadge({ host: !!p.is_host, team: !!p.is_team, guest: /@guest\.local$/.test(p.email), minor: !!p.minor }); // no core tier in pickleball; minor prepends a red chip
   // Auto-renew penalty badge (Phase 5.5, operators only): an amber ⏸/⚠ chip + a one-tap ✓ Forgive for
   // any floor player carrying strikes or a pause. penaltyState is {} for members + for programs that
   // never enabled the penalty → zero bytes there (pk/basketball stay byte-identical).

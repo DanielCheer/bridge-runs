@@ -1621,7 +1621,7 @@ const stmtRun = db.prepare(`
   SELECT c.*, COALESCE(a.status,'') AS pstatus,
          COALESCE(a.is_team,0) AS is_team, COALESCE(a.is_regular,0) AS is_regular,
          COALESCE(a.is_host,0) AS is_host, COALESCE(a.position,'') AS position,
-         a.id AS applicant_id
+         a.id AS applicant_id, COALESCE(a.dob, c.dob) AS eff_dob
   FROM checkins c LEFT JOIN applicants a ON a.email = c.email
   WHERE c.run_date = ? AND c.program_id = ? ORDER BY c.sort_order ASC, c.id ASC`);
 
@@ -1746,6 +1746,7 @@ function offerPartition(programId, runDate) {
     ...r, tryout: r.pstatus === 'tryout', team: !!r.is_team, regular: !!r.is_regular,
     host: !!r.is_host,
     guest: /@guest\.local$/.test(r.email),
+    minor: isMinor({ dob: r.eff_dob }),   // red safeguarding chip on the roster (real DOB, or a demo checkin DOB)
   }));
   const released = heldReleased(runDate);
   // Before Friday 4pm, held late-regulars are kept off the floor (waitlisted)
@@ -4372,7 +4373,7 @@ const stmtRunOpenById = db.prepare('SELECT is_open FROM run_state WHERE run_date
 const stmtRunCancelledById = db.prepare('SELECT cancelled FROM run_state WHERE run_date = ? AND program_id = ?');
 const stmtPkRoster = db.prepare(`
     SELECT c.email, c.name, c.sort_order, c.id, c.confirmed_at, c.auto_seated, c.group_id,
-           a.id AS applicant_id, a.is_host, a.is_team, a.is_regular
+           a.id AS applicant_id, a.is_host, a.is_team, a.is_regular, COALESCE(a.dob, c.dob) AS eff_dob
     FROM checkins c LEFT JOIN applicants a ON a.email = c.email
     WHERE c.run_date = ? AND c.program_id = ? ORDER BY c.sort_order ASC, c.id ASC`);
 const stmtLatestAnnouncementById = db.prepare('SELECT id, body, author, at AS created_at FROM announcements WHERE program_id = ? AND COALESCE(archived,0) = 0 ORDER BY id DESC LIMIT 1');
@@ -4436,7 +4437,7 @@ function pkSetState(rd, field, val) { return setRunStateFor(2, rd, field, val); 
 function simplePartition(programId, rd) {
   // Join applicants so the roster rows can open a profile popup + show role badges
   // (guests have no applicant row → applicant_id null → non-tappable, matches basketball).
-  const rows = stmtPkRoster.all(rd, programId);
+  const rows = stmtPkRoster.all(rd, programId).map(r => ({ ...r, minor: isMinor({ dob: r.eff_dob }) })); // red safeguarding chip on the roster
   const cap = P(programId).config.cap;
   // Queue-with-friends (volleyball): keep a party (shared group_id) atomic — it boards only if it
   // fits entirely in the remaining floor, else the whole party waits and smaller units behind it
@@ -5302,6 +5303,9 @@ app.post('/admin/demo/seed', requireAdmin, (req, res) => {
   // ~60% of the floor shows a green ✓ (a realistic mix of confirmed / not-yet-confirmed).
   db.prepare("UPDATE checkins SET confirmed_at = datetime('now') WHERE program_id = ? AND run_date = ? AND sort_order < ?")
     .run(pid, rd, Math.floor(cfg.cap * 0.6));
+  // One floor player carries a minor DOB → showcases the red "Minor" safeguarding badge on the roster.
+  // (Demo players are checkins-only, so the DOB lives on the checkin row itself, not an applicant.)
+  db.prepare("UPDATE checkins SET dob = '2010-03-15' WHERE program_id = ? AND run_date = ? AND sort_order = 3").run(pid, rd);
   // Seed the demo CHAT with bot chatter so the room looks alive (cleared on reset/clear below).
   db.prepare('DELETE FROM group_messages WHERE program_id = ?').run(pid);
   const insMsg = db.prepare('INSERT INTO group_messages (from_email, body, program_id) VALUES (?,?,?)');
