@@ -2834,7 +2834,7 @@ export function pkJoinPage(state) { return runJoinPage(state); }
 // NOT rendered yet — volleyball (offerWindow:true) needs a follow-up increment for that.
 export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM', startLabel = '6 PM', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], offeredPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, myConfirmed = false, iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null,
   runBase = '/pickleball', programId = 2, theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒', dayName = 'Tuesday', pollKey = 'pickleball',
-  teamsCfg = null, teamRows = [], teamsOpen = false, penaltyState = {}, partyData = null }) {
+  teamsCfg = null, teamRows = [], teamsOpen = false, penaltyState = {}, partyData = null, demoMode = false }) {
   const full = going >= cap, totalFull = (going + waiting) >= (cap + waitlistCap);
   const rmForm = (p) => `<form method="POST" action="${runBase}/remove" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn leave sm" type="submit">Remove</button></form>`;
   // Tappable name → profile popup (reuses the shared pvOpen + /u/:id/card); guests (no
@@ -2854,7 +2854,12 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
   const rowWait = (p, i) => `<div class="lr"><span class="ln">W${i}</span>${nameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}</span>`)}${canOperate ? `<form method="POST" action="${runBase}/bump" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn sm" type="submit">Bump in</button></form>${rmForm(p)}` : ''}</div>`;
   // Offer-window programs only: a waitlister who's been offered a freed floor spot (holding it until
   // they claim or it expires). offeredPlayers is empty for simple programs, so this never renders.
-  const rowOffer = (p) => `<div class="lr"><span class="ln">·</span>${nameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''} <span class="tag">⏳ Claiming</span></span>`)}${canOperate ? rmForm(p) : ''}</div>`;
+  // In DEMO mode the operator gets a one-tap "✓ Claim" (a real player would tap their emailed link) so
+  // the auto-offer → claim → promote money-moment can be driven live on one screen.
+  const demoClaimForm = (p) => (demoMode && canOperate && p.claim_token)
+    ? `<form method="POST" action="${runBase}/claim/${encodeURIComponent(p.claim_token)}" style="margin:0"><button class="btn primary sm" type="submit" title="Complete the claim (demo)">✓ Claim</button></form>`
+    : '';
+  const rowOffer = (p) => `<div class="lr"><span class="ln">·</span>${nameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''} <span class="tag">⏳ Claiming</span></span>`)}${canOperate ? demoClaimForm(p) + rmForm(p) : ''}</div>`;
   let action = '';
   if (cancelled) action = `<button class="btn" type="button" disabled>Run cancelled</button>`;
   else if (myState === 'in') action = `<form method="POST" action="${runBase}/leave"><button class="btn ghost" type="submit">Sit out</button></form>`;
@@ -2988,7 +2993,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
       ${canOperate ? `<a class="bannedit" href="${runBase}/banner" aria-label="Change banner photo">🖼 Change</a>` : ''}
     </div>
     ${announcement ? `<div class="notice" style="margin-top:10px;display:flex;align-items:flex-start;gap:8px;justify-content:space-between"><span>📣 <b>Announcement</b> · ${esc(announcement.body)}${announcement.author ? `<span style="color:var(--muted)"> — ${esc(announcement.author)}</span>` : ''}</span>${canOperate ? `<form method="POST" action="${runBase}/announce/retract" style="margin:0;flex-shrink:0"><button class="btn ghost sm" type="submit" title="Retract this announcement">Retract</button></form>` : ''}</div>` : ''}
-    ${hero}
+    ${hero}${demoMode && canOperate ? `<div class="notice" style="margin-top:10px;background:#fff4e5;border-color:#e0b070">🎬 <b>Demo mode.</b> Seed a full floor + waitlist, then pull a floor player (Remove in "Who's going") to fire a real auto-offer — the top waitlister moves to <b>⏳ Claiming</b>; tap <b>✓ Claim</b> to slide them onto the floor. Nothing here touches live data.<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><form method="POST" action="/admin/demo/seed" style="margin:0"><button class="btn primary sm" type="submit">${going + waiting ? '↻ Reset' : '▶ Seed'} full run</button></form><form method="POST" action="/admin/demo/clear" style="margin:0" onsubmit="return confirm('Clear the demo run?')"><button class="btn ghost sm" type="submit">Clear</button></form></div></div>` : ''}
     ${(action || runToggle) ? `<div class="controls">${action}${runToggle}</div>` : ''}
     ${myState === 'in' && !cancelled ? (myConfirmed
       ? `<div class="notice good" style="margin-top:10px">✓ <b>You're confirmed</b> for this run — see you there!</div>`

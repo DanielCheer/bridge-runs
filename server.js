@@ -1759,6 +1759,10 @@ function createOffer(runDate, w, req, programId = 1) {
   const base = process.env.PUBLIC_URL || (req ? `${req.protocol}://${req.get('host')}` : `http://localhost:${PORT}`);
   const link = `${base}${P(programId).paths.run}/claim/${token}`;
   audit('system', 'system', 'offer:send', w.email);
+  // A STATIC/demo program's players are synthetic (@demo.local) — the offer row + claim token are
+  // still created (so the money-moment shows on the roster and the claim button works), but never
+  // send a real email/push to a fake address.
+  if (P(programId).config.static) return;
   // Don't block the response on the send (mirrors the magic-link / announce sends).
   // Spot offers are time-critical, so they always go by BOTH email (transactional —
   // ignores the email opt-out) AND push. Both point players at /checkin to claim.
@@ -3909,7 +3913,7 @@ function csvCell(v) {
 // Export hub (admin-only): attendance CSV per run + a full DB backup. The CSV is the Google-
 // Sheets / Planning-Center import path (paste or File\u2192Import); the .db is an offline backup.
 app.get('/admin/export', requireAdmin, (req, res) => {
-  const programs = [...PROGRAMS.values()].map(p => ({
+  const programs = [...PROGRAMS.values()].filter(p => !P(p.id).config.static).map(p => ({   // demo (static) isn't a records source
     id: p.id, key: p.key, name: p.displayName, emoji: p.emoji, active: p.active(),
     count: db.prepare('SELECT COUNT(*) n FROM attendance WHERE program_id = ?').get(p.id).n,
   }));
@@ -3921,7 +3925,7 @@ app.get('/admin/export', requireAdmin, (req, res) => {
 // the live floor isn't logged until the weekly rollover, matching the season board.
 app.get('/admin/export/attendance.csv', requireAdmin, (req, res) => {
   const pid = Number(req.query.program) || 0;
-  if (!PROGRAMS.has(pid)) return res.status(404).send('Unknown run');
+  if (!PROGRAMS.has(pid) || P(pid).config.static) return res.status(404).send('Unknown run');  // demo isn't a records source
   const prog = P(pid);
   const rows = db.prepare(`SELECT run_date, name, email FROM attendance
      WHERE program_id = ? ORDER BY run_date DESC, name COLLATE NOCASE ASC`).all(pid);
@@ -4729,6 +4733,10 @@ const stmtRollSweepOptout = db.prepare('DELETE FROM regular_optout WHERE run_dat
 const lastRolledFor = new Map(); // programId → last gate string that ran the rollover
 function ensureWeekFor(programId) {
   const cfg = P(programId).config;
+  // A STATIC program (the demo run) has no weekly lifecycle: never roll the date, archive to
+  // attendance, or purge — its seeded roster stays exactly as the operator left it until they
+  // reset/clear it. Guarding here covers every caller (render, poll, join, tick).
+  if (cfg.static) return;
   const today = ymdLocal();
   const now = new Date();
   // A run counts as OVER once its end time (config.endHour) passes on run day — so today's run is
@@ -4880,6 +4888,36 @@ function runRemove(programId, req, res) {
   setPartyDeclinedFor(programId, rd, em);   // and out of any party so a group check-in can't re-seat them (P2-2)
   if (offeree) createOffer(rd, offeree, req, programId);
   res.redirect(base);
+}
+// Generic offer-claim for offerWindow programs mounted via mountRunProgram — the piece that
+// completes the auto-offer → confirm → promote money-moment for any program (not just basketball's
+// inline /checkin/claim). Mirrors that route but PROGRAM-SCOPED: GET renders a confirm page (a
+// mail-scanner's bare GET can't auto-claim), POST does the atomic, race-safe claim (read→check→
+// clear; the first tap clears the token, a second finds nothing). A STATIC/demo claim just slides
+// the synthetic player onto the floor and returns to the roster — it never mints a session.
+function runClaimGet(programId, req, res) {
+  const base = P(programId).paths.run;
+  const token = req.params.token || '';
+  const row = db.prepare('SELECT * FROM checkins WHERE claim_token = ? AND program_id = ?').get(token, programId);
+  if (!row || row.offered_at == null || row.offered_at < Date.now() - OFFER_WINDOW_MS) return res.send(claimResultPage({ ok: false }));
+  return res.send(confirmActionPage({
+    title: 'Claim your spot', heading: 'A spot opened up',
+    sub: `You've got a floor spot for ${runLabelFor(row.run_date)} — one tap locks it in.`,
+    action: `${base}/claim/${token}`, fields: {}, button: 'Claim my spot →',
+  }));
+}
+function runClaimPost(programId, req, res) {
+  const base = P(programId).paths.run, cfg = P(programId).config;
+  const token = req.params.token || '';
+  const row = db.prepare('SELECT * FROM checkins WHERE claim_token = ? AND program_id = ?').get(token, programId);
+  if (!row || row.offered_at == null || row.offered_at < Date.now() - OFFER_WINDOW_MS) {
+    return cfg.static ? res.redirect(base) : res.send(claimResultPage({ ok: false }));
+  }
+  db.prepare('UPDATE checkins SET offered_at = NULL, claim_token = NULL WHERE id = ?').run(row.id);
+  audit(row.email, 'player', 'offer:claim', row.email);
+  if (cfg.static) return res.redirect(base);        // demo: synthetic player slides onto the floor
+  setSession(res, row.email);                        // real program: sign the claimer in
+  return res.send(claimResultPage({ ok: true, runLabel: runLabelFor(row.run_date), runDate: row.run_date, startLabel: startLabelFor(programId) }));
 }
 function runIcs(programId, req, res) {
   const cfg = P(programId).config;
@@ -5092,6 +5130,7 @@ function runGetPage(programId, req, res) {
     teamsCfg: teamsFeature(programId), teamRows: teamsFeature(programId) ? runTeamsFor(programId, rd) : [], teamsOpen: teamsFeature(programId) ? teamsOpen(programId, rd) : false,
     penaltyState: g.canOperate ? penaltyStateFor(programId) : {},   // operator-only: {email: {strikes, until}} for the roster badge + forgive button
     partyData: partyPanelFor(programId, rd, req.userEmail),         // queue-with-friends panel (null unless config.features.groupQueue)
+    demoMode: !!cfg.static,                                         // demo run → control strip + per-offer claim button (operator only)
   }));
 }
 
@@ -5142,6 +5181,40 @@ app.post('/pickleball/announce', requireLogin, (req, res) => runAnnounce(2, req,
 // Retract the current pickleball announcement — operator only. Archives it so it stops
 // showing on the page (no new push/email; the original notification already went out).
 app.post('/pickleball/announce/retract', requireLogin, (req, res) => runAnnounceRetract(2, req, res));
+
+// ---------- DEMO run controls (admin-only showcase) ----------
+// Seed/reset/clear the synthetic demo roster (program 90). All rows are @demo.local checkins-only
+// (no applicant rows) confined to program_id=90, so nothing here can touch live data.
+const DEMO_PID = 90;
+const DEMO_NAMES = ['Marcus B.', 'Jordan T.', 'Andre W.', 'Tyler R.', 'Chris O.', 'Devin M.', 'Malik S.',
+  'Isaiah H.', 'Xavier P.', 'Cameron D.', 'Trey L.', 'Josh N.', 'Elijah G.', 'Nate F.'];
+// Seed/reset: a fresh FULL floor + FULL waitlist of synthetic players, run open. Idempotent
+// (clears program-90 rows first) so it doubles as the reset button.
+app.post('/admin/demo/seed', requireAdmin, (req, res) => {
+  const pid = DEMO_PID, cfg = P(pid).config;
+  const rd = getSetting(cfg.keys.runDate) || programDefaultDate(pid);
+  setSetting(cfg.keys.runDate, rd);
+  db.prepare('DELETE FROM checkins WHERE program_id = ?').run(pid);
+  db.prepare('INSERT OR REPLACE INTO run_state (run_date, program_id, is_open, cancelled) VALUES (?,?,1,0)').run(rd, pid);
+  const total = Math.min(cfg.cap + cfg.waitlist, DEMO_NAMES.length);
+  const ins = db.prepare('INSERT INTO checkins (run_date, email, name, program_id, sort_order) VALUES (?,?,?,?,?)');
+  for (let i = 0; i < total; i++) ins.run(rd, `demo-${i + 1}@demo.local`, DEMO_NAMES[i], pid, i);
+  // ~60% of the floor shows a green ✓ (a realistic mix of confirmed / not-yet-confirmed).
+  db.prepare("UPDATE checkins SET confirmed_at = datetime('now') WHERE program_id = ? AND run_date = ? AND sort_order < ?")
+    .run(pid, rd, Math.floor(cfg.cap * 0.6));
+  audit(req.userEmail, 'admin', 'demo:seed', `${total} players on ${rd}`);
+  res.redirect(P(pid).paths.run);
+});
+// Tear the demo down — remove every synthetic row + its run state so nothing lingers.
+app.post('/admin/demo/clear', requireAdmin, (req, res) => {
+  const pid = DEMO_PID, cfg = P(pid).config;
+  db.prepare('DELETE FROM checkins WHERE program_id = ?').run(pid);
+  db.prepare('DELETE FROM run_state WHERE program_id = ?').run(pid);
+  db.prepare('DELETE FROM attendance WHERE program_id = ?').run(pid);
+  delSetting(cfg.keys.runDate);
+  audit(req.userEmail, 'admin', 'demo:clear', '');
+  res.redirect(P(pid).paths.run);
+});
 
 // NB: the terminal 4-arg error handler is registered LAST — after mountRunProgram (see just before
 // app.listen) — so a throw in ANY route (incl. the config-mounted volleyball routes) lands there
@@ -5296,6 +5369,43 @@ const PROGRAM_DEFS = {
     unread: genericUnread(3),
     hubCard: genericHubCard(3),
     tick: genericTick(3),
+  },
+  // DEMO — a live, fully-interactive showcase run that reuses the REAL engine (offerWindow: true, so
+  // the auto-offer → confirm → promote money-moment is genuine, not mocked). Two things keep it safe:
+  //   • static: true — no weekly rollover / archive / auto-open (ensureWeekFor + the tick no-op), so a
+  //     seeded roster stays put and nothing ever lands in attendance/season/exports.
+  //   • players are synthetic checkins-only rows (@demo.local, no applicant rows) in program_id=90 —
+  //     invisible to friend search, people admin, push, and every other live surface.
+  // Ships inactive (program.active=0): only an admin sees/operates it (programGate allows admins on
+  // hidden programs). Seed/reset/clear + the money-moment run from the demo control strip on /demo.
+  90: {
+    key: 'demo', emoji: '🎬', displayName: 'DEMO — Live Waitlist',
+    paths: { run: '/demo', chat: '/demo/chat', season: '/demo/season' }, seasonLabel: 'Demo season',
+    config: {
+      cap: 8, waitlist: 6, prereg: 0,
+      dow: 3, startHour: 19, endHour: 21,          // cosmetic (static — never scheduled): Wed 7–9 PM
+      pingHour: 18, pingDowOffset: 1, lockTime: '18:00',
+      keys: { runDate: 'demo_run_date', runBase: 'demo_run_base', seasonStart: 'demo_season_start',
+              autoopen: 'demo_autoopen_done', autoping: 'demo_autoping_done', autolock: 'demo_autolock_done', arassess: 'demo_arassess_done' },
+      logTag: 'demo', openOffsetDays: -7,
+      copy: {
+        openTitle: 'Demo check-in is open',
+        openBody: (rd) => `Demo check-in is open for ${runLabelFor(rd)}.`,
+        confirmTitle: 'Confirm your demo spot',
+        confirmBody: (rd) => `You're on the floor for the ${runLabelFor(rd)} demo run.`,
+        promoTitle: "You're in (demo)",
+        promoBody: (rd) => `A spot opened — you're on the floor for the ${runLabelFor(rd)} demo run.`,
+        annTitle: 'Demo announcement',
+      },
+      theme: 'default', access: 'opt-in', approval: 'invite',
+      tiers: ['team', 'host'], offerWindow: true, static: true,   // REAL offer money-moment, but frozen lifecycle
+      autoRenew: { from: 'members' },
+      mentionTag: 'demomention', chatSeqKey: 'demo_chat_seq',
+      features: { teams: false, groupQueue: false },
+    },
+    unread: genericUnread(90),
+    hubCard: genericHubCard(90),
+    tick: () => {},   // static — the 60s scheduler does no work for the demo
   },
 };
 // ---------- QUEUE-WITH-FRIENDS (Phase 6b: a party seats atomically) ----------
@@ -5539,6 +5649,10 @@ function mountRunProgram(app, program) {
   app.post(`${b}/join`, requireLogin, (req, res) => runJoin(id, req, res));
   app.post(`${b}/leave`, requireLogin, (req, res) => runLeave(id, req, res));
   app.post(`${b}/confirm`, requireLogin, (req, res) => runConfirm(id, req, res));
+  // Offer-claim (token-based, no login — matches basketball's inline claim). No-op for simple
+  // programs (they never create offers); the money-moment for any offerWindow program.
+  app.get(`${b}/claim/:token`, (req, res) => runClaimGet(id, req, res));
+  app.post(`${b}/claim/:token`, (req, res) => runClaimPost(id, req, res));
   app.post(`${b}/autorenew`, requireLogin, (req, res) => runAutorenew(id, req, res));
   app.post(`${b}/open`, requireLogin, (req, res) => runOpen(id, req, res));
   app.post(`${b}/close`, requireLogin, (req, res) => runClose(id, req, res));

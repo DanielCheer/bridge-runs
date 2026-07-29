@@ -454,6 +454,11 @@ db.exec(`
 db.prepare("INSERT OR IGNORE INTO program (id,name,sport,slug,active,approval) VALUES (1,'Advanced Basketball','basketball','adv',1,'council')").run();
 db.prepare("INSERT OR IGNORE INTO program (id,name,sport,slug,active,approval) VALUES (2,'Pickleball','pickleball','pickleball',0,'invite')").run();
 db.prepare("INSERT OR IGNORE INTO program (id,name,sport,slug,active,approval) VALUES (3,'Volleyball','volleyball','volleyball',0,'invite')").run();
+// Demo run (id 90) — a config-driven showcase program used ONLY for live demos. Ships inactive
+// (active=0) so it is invisible to members and only an admin can open/operate it. Its players are
+// synthetic checkins-only rows (@demo.local, no applicant rows) confined to program_id=90, so it
+// can never touch live basketball/pickleball/volleyball rosters, attendance, or exports.
+db.prepare("INSERT OR IGNORE INTO program (id,name,sport,slug,active,approval) VALUES (90,'Demo','demo','demo',0,'invite')").run();
 // Add program_id (DEFAULT 1) to every run-scoped table — guarded + backfilled so existing rows stay basketball.
 for (const t of ['checkins', 'run_state', 'run_overrides', 'regular_optout', 'attendance', 'group_messages', 'group_reads', 'group_reactions', 'announcements', 'votes']) {
   const cols = db.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name);
