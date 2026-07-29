@@ -2778,11 +2778,11 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
   return HEAD('Runs — The Bridge', 'has-tabs') + header(`<b>RUNS</b>${esc(email)}`, '', ann) + WELCOME_MODAL + `
     ${canJoin ? `<script>window.__tourRole={op:${canOperate ? 1 : 0},adm:${isAdmin ? 1 : 0},waiver:${needsWaiver ? 1 : 0}};</script>` : ''}
     <style>
-      .rhead{margin:14px 2px 4px}
-      .rhead h1{font-size:26px;margin:0}
-      .rhead p{color:var(--muted);margin:3px 0 0;font-size:14px}
-      .rhlist{display:flex;flex-direction:column;gap:12px;margin-top:16px}
-      .rhcard{display:flex;align-items:center;gap:14px;padding:16px 14px;border:1px solid var(--line);border-radius:16px;background:var(--card);text-decoration:none;color:inherit;transition:transform .06s ease,border-color .12s ease}
+      .rhead{margin:8px 2px 2px}
+      .rhead h1{font-size:22px;margin:0}
+      .rhead p{color:var(--muted);margin:2px 0 0;font-size:13px}
+      .rhlist{display:flex;flex-direction:column;gap:9px;margin-top:11px}
+      .rhcard{display:flex;align-items:center;gap:14px;padding:13px 14px;border:1px solid var(--line);border-radius:16px;background:var(--card);text-decoration:none;color:inherit;transition:transform .06s ease,border-color .12s ease}
       .rhcard:active{transform:scale(.985)}
       .rhcard:hover{border-color:var(--muted)}
       .rhemoji{font-size:30px;line-height:1;width:46px;height:46px;display:flex;align-items:center;justify-content:center;border-radius:13px;background:var(--teal-tint,#e9efec);flex:none}
@@ -2809,7 +2809,7 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       .rhfr-avs .rhfr-av:not(:first-child){margin-left:-7px}
       .rhfr-txt{color:var(--muted);font-size:12px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .rharrow{font-size:24px;color:var(--muted);flex:none;margin-left:-2px}
-      .hubverse{max-width:36ch;margin:34px auto 6px;text-align:center;padding:0 14px}
+      .hubverse{max-width:36ch;margin:18px auto 6px;text-align:center;padding:0 14px}
       .hubverse-t{font-size:15px;line-height:1.55;color:var(--ink);font-style:italic;margin:0}
       .hubverse-r{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:9px 0 0;font-weight:700}
       @media (prefers-color-scheme:dark){
