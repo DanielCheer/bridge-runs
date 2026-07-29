@@ -1684,6 +1684,10 @@ export function intakePage({ submitted = false, error = '', alreadyApproved = fa
       <label for="email">Email</label>
       <input id="email" name="email" type="email" required autocomplete="email" placeholder="you@email.com">
 
+      <label for="dob">Date of birth</label>
+      <input id="dob" name="dob" type="date" required autocomplete="bday">
+      <p class="tally-note" style="margin:4px 0 0">Used to confirm age — under-18 members can't use private 1-on-1 messages (a safeguarding rule). Group chat is unaffected.</p>
+
       <label>What level of basketball have you played? <span style="text-transform:none;font-weight:400;color:var(--muted)">(pick all that apply)</span></label>
       <div class="levels">
         <label class="lvl"><input type="checkbox" name="levels" value="Pickup / rec only"> Pickup / rec only</label>
@@ -1709,6 +1713,7 @@ export function intakePage({ submitted = false, error = '', alreadyApproved = fa
       (function(){
         var other=document.getElementById('lvlOther'), otherText=document.getElementById('otherText');
         if(other){other.addEventListener('change',function(){otherText.style.display=other.checked?'block':'none';if(!other.checked)otherText.value='';});}
+        var dobEl=document.getElementById('dob'); if(dobEl){dobEl.max=new Date().toISOString().slice(0,10);}
         var form=document.querySelector('form[action="/apply"]');
         if(form){form.addEventListener('submit',function(e){
           var any=form.querySelectorAll('input[name="levels"]:checked').length>0;
@@ -1770,7 +1775,7 @@ export function loginPage({ sent = false, email = '', next = '', devLink = '', d
 }
 
 // ---------- INVITE (self-serve pre-approval link) ----------
-export function invitePage({ invalid = false, used = false, checkEmail = false, token = '', full_name = '', phone = '', email = '', error = '', devLink = '', devCode = '', codeError = '' } = {}) {
+export function invitePage({ invalid = false, used = false, checkEmail = false, token = '', full_name = '', phone = '', email = '', dob = '', error = '', devLink = '', devCode = '', codeError = '' } = {}) {
   if (checkEmail) {
     // Invite claimed, but the submitted email wasn't proven (no admin pre-fill match),
     // so we didn't open a session — we emailed a code + link to verify it.
@@ -1820,6 +1825,10 @@ export function invitePage({ invalid = false, used = false, checkEmail = false, 
       <input id="email" name="email" type="email" required autocomplete="email" value="${esc(email)}" placeholder="you@email.com">
       <p class="tally-note" style="margin:6px 0 0">This is the email you'll sign in with every time — make sure it's one you check.</p>
 
+      <label for="dob">Date of birth</label>
+      <input id="dob" name="dob" type="date" required autocomplete="bday" value="${esc(dob)}">
+      <p class="tally-note" style="margin:6px 0 0">Confirms age — under-18 members can't use private 1-on-1 messages (a safeguarding rule).</p>
+
       <div class="check">
         <input id="waiver_ok" name="waiver_ok" type="checkbox" value="1" required>
         <label for="waiver_ok">I've completed (or will complete) the church waiver linked below. I understand I can't play without it.</label>
@@ -1828,6 +1837,7 @@ export function invitePage({ invalid = false, used = false, checkEmail = false, 
       <div style="height:16px"></div>
       <button class="btn" type="submit">Confirm and check in →</button>
     </form>
+    <script>(function(){var d=document.getElementById('dob');if(d)d.max=new Date().toISOString().slice(0,10);})();</script>
 
     ${qrBlock}
     <div class="foot" style="margin-top:20px">Already set up? <a href="/login">Sign in</a></div>
@@ -2448,7 +2458,7 @@ export function runChatPage({ me, chat, program = 2, theme = 'pk', sport = 'Pick
 // ---------- PROFILE (view another player) ----------
 // Compact profile card — served as a fragment for the quick-look popup (tap a name in the
 // who's-going sheet). Just the essentials + a Message / Full-profile jump; no page chrome.
-export function profileCard({ p, stats, canContact = false, isSelf = false }) {
+export function profileCard({ p, stats, canContact = false, canDM = true, isSelf = false }) {
   const rb = p.is_host ? '<span class="bdg host">★ Host</span>' : p.is_team ? '<span class="bdg team">◆ Team</span>' : p.is_regular ? '<span class="bdg core">★ Pillar</span>' : '<span class="bdg reg">Regular</span>';
   const positions = (p.position || '').split(',').filter(Boolean).join(' · ');
   const memberSince = stats.first ? fmtMonthYear(stats.first) : null;
@@ -2459,10 +2469,10 @@ export function profileCard({ p, stats, canContact = false, isSelf = false }) {
     ${positions ? row('Position', esc(positions)) : ''}
     ${memberSince ? row('Member since', esc(memberSince)) : ''}
     ${canContact ? row('Contact', `<a href="tel:${esc(p.phone)}">${esc(p.phone)}</a> · <a href="mailto:${esc(p.email)}">${esc(p.email)}</a>`) : ''}
-    <div class="pcbtns">${isSelf ? `<a class="btn ghost sm" href="/profile">Edit profile</a>` : `<a class="btn primary sm" href="/messages/${p.id}">Message</a>`}<a class="btn ghost sm" href="/u/${p.id}">Full profile →</a></div>`;
+    <div class="pcbtns">${isSelf ? `<a class="btn ghost sm" href="/profile">Edit profile</a>` : (canDM ? `<a class="btn primary sm" href="/messages/${p.id}">Message</a>` : '')}<a class="btn ghost sm" href="/u/${p.id}">Full profile →</a></div>`;
 }
 
-export function profilePage({ p, stats, isSelf = false, canContact = false, rel = 'none', following = false, runDate = '', hours = '8:30–10:30 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null, back = '/chat' }) {
+export function profilePage({ p, stats, isSelf = false, canContact = false, canDM = true, rel = 'none', following = false, runDate = '', hours = '8:30–10:30 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null, back = '/chat' }) {
   const badges = [
     p.is_host ? '<span class="bdg host">★ Host</span>' : '',
     p.is_team ? '<span class="bdg team">◆ Team</span>' : (p.is_regular ? '<span class="bdg core">★ Pillar</span>' : ''),
@@ -2478,7 +2488,7 @@ export function profilePage({ p, stats, isSelf = false, canContact = false, rel 
   const prowBtns = [];
   // Message any approved player in-app (player-to-player DMs). Host keeps its own wording.
   // Hidden across a block (either direction) — matches canMessage server-side (Phase 6).
-  if (!isSelf && p.status === 'approved' && !/@guest\.local$/.test(p.email) && rel !== 'blocked' && rel !== 'blocked_by')
+  if (!isSelf && canDM && p.status === 'approved' && !/@guest\.local$/.test(p.email) && rel !== 'blocked' && rel !== 'blocked_by')
     prowBtns.push(`<a class="btn primary" href="/messages/${p.id}">Message${p.is_host ? ' the host' : ' ' + esc((p.full_name || '').split(' ')[0])}</a>`);
   if (canContact) prowBtns.push(`<a class="btn ghost" href="tel:${esc(p.phone)}">Call</a>`);
   if (canContact && !p.is_host) prowBtns.push(`<a class="btn ghost" href="sms:${esc(p.phone)}">Text</a>`);
@@ -3190,6 +3200,12 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
       <div class="two">
         <div class="field"><label>Phone</label><input name="phone" value="${esc(a.phone)}" inputmode="tel" required autocomplete="tel"></div>
         <div class="field"><label>Email</label><input name="email" type="email" value="${esc(a.email)}" required autocomplete="email"></div>
+      </div>
+      <div class="sec"><div class="lb"><b>Date of birth</b></div>
+        ${a.dob
+          ? `<p class="tally-note" style="margin:0"><b>${esc(a.dob)}</b> · contact an organizer to correct this.</p>`
+          : `<input name="dob" type="date" autocomplete="bday">
+        <p class="tally-note" style="margin:6px 0 0">Optional but recommended. Under-18 members can't use private 1-on-1 messages (a safeguarding rule); group chat is unaffected. Once set, only an organizer can change it.</p>`}
       </div>
       <div class="sec"><div class="lb"><b>Position</b><span>Tap to toggle</span></div><div class="chips">${chips}</div></div>
       <div class="sec"><div class="lb"><b>Email</b></div>

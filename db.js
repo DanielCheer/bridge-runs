@@ -146,6 +146,12 @@ if (!rsCols.includes('cancelled')) {
 if (!appCols.includes('auto_renew')) {
   db.exec('ALTER TABLE applicants ADD COLUMN auto_renew INTEGER NOT NULL DEFAULT 1');
 }
+// dob (2026-07): date of birth ('YYYY-MM-DD'), captured at signup/invite. Drives the safeguarding
+// rule that a known minor (<18) can't use 1:1 direct messages. Nullable — legacy members have none
+// (treated as unknown/not-a-minor until they add it in their profile).
+if (!appCols.includes('dob')) {
+  db.exec('ALTER TABLE applicants ADD COLUMN dob TEXT');
+}
 // Announcements: archive instead of delete, so cleared/replaced posts stay as history.
 const annCols = db.prepare('PRAGMA table_info(announcements)').all().map(c => c.name);
 if (!annCols.includes('archived')) {

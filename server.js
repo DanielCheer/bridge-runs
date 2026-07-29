@@ -1068,11 +1068,27 @@ function chatCountsFor(program, email, aid) {
 // message the host; the host may message any approved, non-guest player. To open
 // full DMs later, relax only the final return (+ add a people-picker) — no route
 // or schema change. senderA is the sender's applicant row.
+// Age from a 'YYYY-MM-DD' dob against the (test-aware) current date. Null if absent/malformed.
+function ageFromDob(dob) {
+  if (typeof dob !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dob)) return null;
+  const b = new Date(dob + 'T00:00:00'); if (isNaN(b.getTime())) return null;
+  const now = new Date(schedNow());
+  let age = now.getFullYear() - b.getFullYear();
+  const m = now.getMonth() - b.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < b.getDate())) age--;
+  return age;
+}
+// Safeguarding: a KNOWN minor (dob on file, age < 18) may not use 1:1 direct messages, in either
+// direction. Unknown dob → NOT treated as a minor (new signups/invites capture it; legacy members
+// can add it in their profile). Group run-chat is monitored/public and is unaffected.
+function isMinor(a) { const age = a ? ageFromDob(a.dob) : null; return age != null && age < 18; }
+
 function canMessage(senderEmail, senderA, recip) {
   if (!recip || recip.status !== 'approved') return false;
   if (recip.email === senderEmail) return false;            // no messaging yourself
   if (/@guest\.local$/.test(recip.email)) return false;     // guest placeholders aren't accounts
   if (blockedPair(senderEmail, recip.email)) return false;  // a blocked pair (either direction) can't DM (Phase 6)
+  if (isMinor(senderA) || isMinor(recip)) return false;     // no unmonitored 1:1 DMs for a known minor (safeguarding)
   if (senderA && senderA.is_host) return true;              // host → anyone approved
   // Player-to-player DMs: any approved player may message any other approved player.
   return !!(senderA && (senderA.status === 'approved' || senderA.is_team));
@@ -1104,6 +1120,7 @@ app.post('/apply', (req, res) => {
     return res.send(intakePage({ error: 'Too many submissions from here — give it a few minutes and try again.' }));
   }
   const { full_name, phone, email, where_played, waiver_ok } = req.body;
+  const dob = String(req.body.dob || '').trim();
   // levels can be a single string, an array, or undefined
   let levels = req.body.levels || [];
   if (typeof levels === 'string') levels = [levels];
@@ -1120,6 +1137,11 @@ app.post('/apply', (req, res) => {
   // A stored address is later a nodemailer recipient (announcement BCC, spot offers), so it
   // has to survive the same gate as /login rather than entering the DB unchecked.
   if (!isValidEmail(em)) return res.send(intakePage({ error: 'That email doesn’t look right — check it and try again.' }));
+  // DOB is required (drives the under-18 DM safeguarding rule). Reject missing / malformed / absurd.
+  const applicantAge = ageFromDob(dob);
+  if (applicantAge == null || applicantAge < 5 || applicantAge > 110) {
+    return res.send(intakePage({ error: 'Please enter a valid date of birth.' }));
+  }
   try {
     const existing = applicantByEmail(em);
     // Anyone with a player's email could otherwise rename/rehome them via the
@@ -1129,15 +1151,15 @@ app.post('/apply', (req, res) => {
       return res.send(intakePage({ alreadyApproved: true }));
     }
     if (existing) {
-      db.prepare(`UPDATE applicants SET full_name=?, phone=?, experience=?, where_played=?, waiver_ok=?
+      db.prepare(`UPDATE applicants SET full_name=?, phone=?, experience=?, where_played=?, waiver_ok=?, dob=?
                   WHERE email=?`)
         .run(full_name.trim(), phone.trim(), experience, (where_played || '').trim(),
-             waiver_ok ? 1 : 0, em);
+             waiver_ok ? 1 : 0, dob, em);
     } else {
-      db.prepare(`INSERT INTO applicants (full_name,email,phone,experience,where_played,waiver_ok)
-                  VALUES (?,?,?,?,?,?)`)
+      db.prepare(`INSERT INTO applicants (full_name,email,phone,experience,where_played,waiver_ok,dob)
+                  VALUES (?,?,?,?,?,?,?)`)
         .run(full_name.trim(), em, phone.trim(), experience, (where_played || '').trim(),
-             waiver_ok ? 1 : 0);
+             waiver_ok ? 1 : 0, dob);
     }
     res.send(intakePage({ submitted: true }));
   } catch (e) {
@@ -1330,10 +1352,15 @@ app.post('/invite/:token', async (req, res) => {
   const phone = (req.body.phone || iv.phone || '').trim();
   const email = (req.body.email || iv.email || '').trim().toLowerCase();
   const waiverOk = req.body.waiver_ok ? 1 : 0;
-  if (!full_name || !phone || !isValidEmail(email) || !waiverOk) {
+  const dob = String(req.body.dob || '').trim();
+  const inviteAge = ageFromDob(dob);
+  const dobBad = inviteAge == null || inviteAge < 5 || inviteAge > 110;
+  if (!full_name || !phone || !isValidEmail(email) || !waiverOk || dobBad) {
     return res.send(invitePage({
-      token: iv.token, full_name, phone, email,
-      error: !waiverOk ? 'Please confirm the waiver to continue.' : 'Fill in your name, phone, and a valid email.',
+      token: iv.token, full_name, phone, email, dob,
+      error: !waiverOk ? 'Please confirm the waiver to continue.'
+        : dobBad ? 'Please enter a valid date of birth.'
+        : 'Fill in your name, phone, and a valid email.',
     }));
   }
 
@@ -1382,6 +1409,8 @@ app.post('/invite/:token', async (req, res) => {
                 VALUES (?,?,?,?,0,'approved',0,0)`)
       .run(full_name, email, phone, 'Pre-approved (invite, unverified)');
   }
+  // Record the invitee's DOB uniformly across all claim branches (drives the under-18 DM rule).
+  db.prepare('UPDATE applicants SET dob = ? WHERE email = ?').run(dob, email);
   db.prepare("UPDATE invites SET used = 1, used_at = datetime('now'), used_email = ? WHERE token = ?")
     .run(email, iv.token);
   // WIRING: a team invite creates an auto-renew team member — seat them on the
@@ -2119,7 +2148,8 @@ app.get('/u/:id/card', requireLogin, (req, res) => {
   const p = db.prepare('SELECT * FROM applicants WHERE id = ?').get(Number(req.params.id) || 0);
   if (!p || (p.status !== 'approved' && !gate.viewerIsAdmin)) return res.status(404).send('');
   const canContact = gate.viewerIsAdmin || !!(gate.a && gate.a.is_team);
-  res.send(profileCard({ p, stats: attendanceStats(p.email), canContact, isSelf: p.email === req.userEmail }));
+  const canDM = canMessage(req.userEmail, gate.a, p);   // hide Message when the server would block it (block / minor)
+  res.send(profileCard({ p, stats: attendanceStats(p.email), canContact, canDM, isSelf: p.email === req.userEmail }));
 });
 
 app.get('/u/:id', requireLogin, (req, res) => {
@@ -2133,6 +2163,7 @@ app.get('/u/:id', requireLogin, (req, res) => {
   const cc = chatCountsFor(chatProgram || 1, req.userEmail, gate.a ? gate.a.id : 0);
   res.send(profilePage({
     p, stats: attendanceStats(p.email), isSelf: p.email === req.userEmail, canContact,
+    canDM: canMessage(req.userEmail, gate.a, p), // hide Message when the server would block it (block / minor)
     rel: relationshipTo(req.userEmail, p.email), // friend/block affordance state
     following: isFollowing(req.userEmail, p.email), // one-way follow affordance
     runDate: nextRunDate(),
@@ -2242,6 +2273,10 @@ app.post('/profile', requireLogin, (req, res) => {
   const position = [...new Set(posInput.filter(p => POSITIONS.includes(p) && p))].join(',');
   // Email opt-out — an unchecked checkbox doesn't POST, so absent = opted OUT.
   const email_optout = req.body.email_announce ? 0 : 1;
+  // DOB: SET-ONCE by the member (add it if legacy/missing); an already-set dob can only be changed by
+  // an admin — otherwise a minor could self-edit to adult and unlock DMs. Blank on edit = leave as-is.
+  const dobIn = String(req.body.dob || '').trim();
+  let dobToSave = a.dob || null;
   const stats = attendanceStats(a.email);
   // Full prop set so a validation error re-renders the WHOLE profile tab (bell, host inbox,
   // run-day control, announcement history) — not a stripped-down page. Reused by every error branch.
@@ -2259,13 +2294,18 @@ app.post('/profile', requireLogin, (req, res) => {
   // ADMINS env set keyed by email, so changing INTO an admin address = takeover.
   if (email !== a.email && ADMINS.includes(email))
     return res.send(profileTabPage({ ...errProps, error: 'That email can’t be used. Pick another.' }));
+  if (!a.dob && dobIn) {   // settable only when currently empty
+    const age = ageFromDob(dobIn);
+    if (age == null || age < 5 || age > 110) return res.send(profileTabPage({ ...errProps, error: 'That date of birth doesn’t look right.' }));
+    dobToSave = dobIn;
+  }
   // The identity row and its rekey cascade commit together or not at all — committing the
   // applicants row first would leave every history row (checkins, votes, DMs, chat, push subs)
   // stranded on the old address if the cascade failed, orphaning the account.
   try {
     transact(() => {
-      db.prepare('UPDATE applicants SET full_name=?, phone=?, email=?, position=?, email_optout=? WHERE id=?')
-        .run(full_name, phone, email, position, email_optout, a.id);
+      db.prepare('UPDATE applicants SET full_name=?, phone=?, email=?, position=?, email_optout=?, dob=? WHERE id=?')
+        .run(full_name, phone, email, position, email_optout, dobToSave, a.id);
       // Carry EVERY per-user row (checkins, attendance, votes, DMs, Run Chat, reads, push
       // subs, opt-outs…) onto the new address. rekeyEmailTx in db.js is the single source
       // of truth for the cascade.
