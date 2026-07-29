@@ -1325,7 +1325,9 @@ const opsNav = (current, { isAdmin = false, isTeam = false } = {}) => {
 // Big orange "back to the Runs hub" button — sits top-left on each run's page so the
 // picker is one obvious tap away (in addition to the Runs tab). Inline styles so it
 // renders identically on the basketball + pickleball pages without page-specific CSS.
-const backToRuns = `<a href="/runs" class="backruns" aria-label="Back to all runs" style="display:inline-flex;align-items:center;gap:6px;background:#E86A33;color:#fff;font-weight:800;font-size:15px;line-height:1;padding:11px 18px 11px 15px;border-radius:13px;text-decoration:none;margin:14px 0 2px;box-shadow:0 3px 10px rgba(232,106,51,.32);-webkit-tap-highlight-color:transparent"><span style="font-size:22px;margin-top:-2px">‹</span>All runs</a>`;
+// A true "Back" — history.back() so Chat → Check-in (and any page → wherever you came from) works,
+// with a /runs fallback when there's no history (e.g. a notification deep-link or a fresh load).
+const backToRuns = `<button type="button" class="backruns" aria-label="Go back" onclick="if(window.history.length>1){window.history.back()}else{window.location.assign('/runs')}" style="display:inline-flex;align-items:center;gap:6px;background:#E86A33;color:#fff;font-family:inherit;font-weight:800;font-size:15px;line-height:1;padding:11px 18px 11px 15px;border:none;border-radius:13px;cursor:pointer;margin:14px 0 2px;box-shadow:0 3px 10px rgba(232,106,51,.32);-webkit-tap-highlight-color:transparent"><span style="font-size:22px;margin-top:-2px">‹</span>Back</button>`;
 
 // Copy-to-clipboard button for a readonly <input>/<textarea> by id. Shows
 // "Copied ✓" briefly, then restores the label. Used on the people + share pages.
@@ -2788,33 +2790,33 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
   return HEAD('Runs — The Bridge', 'has-tabs') + WELCOME_MODAL + `
     ${canJoin ? `<script>window.__tourRole={op:${canOperate ? 1 : 0},adm:${isAdmin ? 1 : 0},waiver:${needsWaiver ? 1 : 0}};</script>` : ''}
     <style>
-      .whead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin:6px 2px 14px}
-      .whead h1{font-family:var(--head);font-weight:800;font-size:25px;color:var(--ink);margin:0;letter-spacing:-.01em}
+      .whead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin:4px 2px 9px}
+      .whead h1{font-family:var(--head);font-weight:800;font-size:23px;color:var(--ink);margin:0;letter-spacing:-.01em}
       .wheadl{min-width:0}
-      .wsub{margin:3px 0 0;font-size:12.5px;color:var(--muted)}
+      .wsub{margin:2px 0 0;font-size:12px;color:var(--muted)}
       .wsub b{color:var(--orange,#e4611f);font-variant-numeric:tabular-nums}
       .wheadr{display:flex;align-items:center;gap:14px;flex:none;padding-top:3px}
       .jtabs{display:flex;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:13px;background:var(--card)}
-      .jtab{flex:1;border:none;background:none;padding:11px 0;font-family:var(--head);font-weight:700;font-size:13px;letter-spacing:.02em;color:var(--muted);cursor:pointer;-webkit-tap-highlight-color:transparent}
+      .jtab{flex:1;border:none;background:none;padding:9px 0;font-family:var(--head);font-weight:700;font-size:13px;letter-spacing:.02em;color:var(--muted);cursor:pointer;-webkit-tap-highlight-color:transparent}
       .jtab.on{background:var(--ink,#22231d);color:#fff}
-      .jlist{display:flex;flex-direction:column;gap:11px}
+      .jlist{display:flex;flex-direction:column;gap:8px}
       .jlist[hidden]{display:none}
       .jcard{position:relative;display:flex;background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;text-decoration:none;color:inherit;box-shadow:0 1px 2px rgba(0,0,0,.04);transition:transform .06s ease}
       .jcard:active{transform:scale(.99)}
       .jbar{width:5px;flex:none;align-self:stretch;background:var(--orange,#e4611f)}
       .jcard.cancelled .jbar{background:var(--muted)}
-      .jbody{flex:1;min-width:0;padding:12px 14px}
+      .jbody{flex:1;min-width:0;padding:9px 13px}
       .jr1{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
-      .jname{display:flex;align-items:center;gap:7px;font-family:var(--head);font-weight:800;font-size:17px;color:var(--ink);min-width:0}
+      .jname{display:flex;align-items:center;gap:7px;font-family:var(--head);font-weight:800;font-size:15.5px;color:var(--ink);min-width:0}
       .jbook{color:var(--orange,#e4611f);display:flex;flex:none}
-      .jvenue{font-size:12px;color:var(--muted);flex:none;white-space:nowrap;max-width:46%;overflow:hidden;text-overflow:ellipsis}
-      .jrule{height:1px;background:var(--line);margin:9px 0}
+      .jvenue{font-size:11.5px;color:var(--muted);flex:none;white-space:nowrap;max-width:46%;overflow:hidden;text-overflow:ellipsis}
+      .jrule{height:1px;background:var(--line);margin:6px 0}
       .jr2{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
-      .jwhere{display:flex;flex-direction:column;gap:4px;min-width:0}
-      .jloc,.jtime{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink)}
+      .jwhere{display:flex;flex-direction:column;gap:3px;min-width:0}
+      .jloc,.jtime{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink)}
       .jloc svg,.jtime svg{color:var(--orange,#e4611f);flex:none}
-      .jright{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex:none;text-align:right}
-      .jdate{font-size:13px;color:var(--muted);white-space:nowrap}
+      .jright{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex:none;text-align:right}
+      .jdate{font-size:12.5px;color:var(--muted);white-space:nowrap}
       .jcount{font-size:11.5px;font-weight:700;color:var(--muted);font-variant-numeric:tabular-nums}
       .jattend{font-size:11px;font-weight:800;color:#1f6b3a;background:#dcf0e2;border-radius:999px;padding:3px 9px}
       .jcard.past{opacity:.9}
@@ -2834,9 +2836,9 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       .rhfr-av.mav{width:20px;height:20px;font-size:9px;border:1.5px solid var(--card);box-shadow:0 0 0 .5px var(--line)}
       .rhfr-avs .rhfr-av:not(:first-child){margin-left:-7px}
       .rhfr-txt{color:var(--muted);font-size:12px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-      .hubverse{max-width:36ch;margin:18px auto 6px;text-align:center;padding:0 14px}
-      .hubverse-t{font-size:15px;line-height:1.55;color:var(--ink);font-style:italic;margin:0}
-      .hubverse-r{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:9px 0 0;font-weight:700}
+      .hubverse{max-width:36ch;margin:11px auto 4px;text-align:center;padding:0 14px}
+      .hubverse-t{font-size:13.5px;line-height:1.5;color:var(--ink);font-style:italic;margin:0}
+      .hubverse-r{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:6px 0 0;font-weight:700}
       @media (prefers-color-scheme:dark){
         .rhpill.grey{background:#2a2a28;color:#b7b6ae}
         .rhpill.red{background:#3d1e1e;color:#f0a3a3}
@@ -3033,7 +3035,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
     <div class="rule"></div>
     ${hidden ? `<div class="notice" style="margin-top:10px">🔒 <b>Hidden run</b> — only admins can see this. Flip it live when it's ready.${isAdmin ? ` <form method="POST" action="${runBase}/publish" class="swapform" style="display:inline"><button class="btn sm" type="submit" style="margin-left:6px">Make it live</button></form>` : ''}</div>` : (isAdmin ? `<div class="notice good" style="margin-top:10px">✅ <b>Live</b> — members can join. <form method="POST" action="${runBase}/publish" class="swapform" style="display:inline"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit" style="margin-left:6px">Hide again</button></form></div>` : '')}
     <div class="phead"><h1>${sport} ${sportEmoji}</h1></div>
-    <p class="psub" style="margin:-4px 0 8px;color:var(--muted)">${cancelled ? 'Cancelled this week' : (runLabel ? `Next: ${esc(wdayFull(runDate))}, ${esc(runLabel)}` : 'No date set')} · ${going}/${cap} in${waiting ? ` · ${waiting} waiting` : ''}</p>
+    ${cancelled ? `<p class="psub" style="margin:-4px 0 8px;color:var(--muted)">Cancelled this week</p>` : ''}
     <div class="gymbanner">
       <img src="${esc(bannerSrc)}?v=${esc(String(bannerVer))}" alt="The Bridge court" width="1160" height="580" fetchpriority="high">
       <div class="gymcap">
