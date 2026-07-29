@@ -783,6 +783,8 @@ ol.ig li b{font-weight:700}
 .pinx svg{width:15px;height:15px}
 .msg.flash .mb{animation:pinflash 1.2s ease}
 @keyframes pinflash{0%,100%{box-shadow:0 0 0 0 transparent}30%{box-shadow:0 0 0 3px var(--orange)}}
+.dmpriv{max-width:580px;margin:2px auto 0;padding:6px 14px;text-align:center;
+  color:var(--muted);font-size:11.5px;line-height:1.35}
 .thread{display:flex;flex-direction:column;gap:2px;padding:8px 0 4px}
 .loadmore{align-self:center;margin:6px 0 12px;padding:7px 18px;border:none;cursor:pointer;
   font-family:var(--head);font-weight:700;font-size:11px;letter-spacing:.1em;text-transform:uppercase;

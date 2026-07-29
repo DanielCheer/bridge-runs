@@ -2279,6 +2279,36 @@ app.post('/profile', requireLogin, (req, res) => {
   res.redirect('/profile?saved=1');
 });
 
+// ---------- DM at-rest encryption ----------
+// Direct-message bodies are encrypted at rest (AES-256-GCM) so a leaked DB file / off-site
+// backup does not spill people's private conversations in plaintext. The key is derived from
+// SESSION_SECRET (already mandatory + fail-loud in auth.js) via HKDF — no new secret to manage,
+// and no key material sits inside the DB it protects. Legacy plaintext rows (pre-encryption)
+// stay readable: dmDec passes through anything without the `enc1:` marker, and empty bodies
+// (sticker/photo-only rows) are never encrypted. This is at-rest privacy, NOT end-to-end: the
+// host process can derive the key, so there is no admin-facing surface that reads DMs (that is
+// deliberate), but the operator is not cryptographically locked out — see SECURITY-OVERVIEW.
+const DM_KEY = crypto.hkdfSync('sha256',
+  Buffer.from(process.env.SESSION_SECRET || 'CHANGE_ME_dev_secret_do_not_ship'),
+  Buffer.from('bridge-dm-atrest'), Buffer.from('dm-body-v1'), 32);
+function dmEnc(text) {
+  if (!text) return text || '';                    // '' / null → store as-is (no empty ciphertext)
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', Buffer.from(DM_KEY), iv);
+  const ct = Buffer.concat([c.update(String(text), 'utf8'), c.final()]);
+  return 'enc1:' + Buffer.concat([iv, c.getAuthTag(), ct]).toString('base64');
+}
+function dmDec(stored) {
+  if (typeof stored !== 'string' || !stored.startsWith('enc1:')) return stored; // legacy plaintext / non-string
+  try {
+    const buf = Buffer.from(stored.slice(5), 'base64');
+    const iv = buf.subarray(0, 12), tag = buf.subarray(12, 28), ct = buf.subarray(28);
+    const d = crypto.createDecipheriv('aes-256-gcm', Buffer.from(DM_KEY), iv);
+    d.setAuthTag(tag);
+    return Buffer.concat([d.update(ct), d.final()]).toString('utf8');
+  } catch { return ''; }                             // tamper / wrong key → empty, never crash the thread
+}
+
 // ---------- MESSAGES (in-app, host <-> players) ----------
 // Threads: requireLogin + requirePlayer + require an applicant row. Sender identity
 // comes ONLY from req.userEmail — a body from_email is never trusted, so "message as
@@ -2304,8 +2334,10 @@ function loadInbox(me) {
   const lastIds = rows.map(r => r.last_id);
   const ph2 = lastIds.map(() => '?').join(',');
   const snips = new Map();
-  for (const m of db.prepare(`SELECT id, from_email, body, image, created_at FROM messages WHERE id IN (${ph2})`).all(...lastIds))
+  for (const m of db.prepare(`SELECT id, from_email, body, image, created_at FROM messages WHERE id IN (${ph2})`).all(...lastIds)) {
+    m.body = dmDec(m.body);                          // decrypt at-rest DM body for the preview snippet
     snips.set(m.id, m);
+  }
   return rows.map(r => {
     const last = snips.get(r.last_id) || null;
     return { other: r.other, person: people.get(r.other) || null, unread: r.unread, last, fromMe: !!last && last.from_email === me };
@@ -2368,6 +2400,7 @@ app.get('/messages/:id', requireLogin, (req, res) => {
       SELECT * FROM messages WHERE (from_email=? AND to_email=?) OR (from_email=? AND to_email=?)
       ORDER BY id DESC LIMIT 500
     ) ORDER BY id ASC`).all(me, p.email, p.email, me);
+  for (const m of msgs) m.body = dmDec(m.body);        // decrypt at-rest DM bodies for the thread render
   const reactions = new Map();  // message_id -> [{emoji,count,mine}]
   const parents = new Map();    // parent id -> {from_email, body, image}
   if (msgs.length) {
@@ -2384,8 +2417,10 @@ app.get('/messages/:id', requireLogin, (req, res) => {
     const replyIds = [...new Set(msgs.map(m => m.reply_to).filter(Boolean))];
     if (replyIds.length) {
       const ph3 = replyIds.map(() => '?').join(',');
-      for (const pr of db.prepare(`SELECT id, from_email, body, image FROM messages WHERE id IN (${ph3})`).all(...replyIds))
+      for (const pr of db.prepare(`SELECT id, from_email, body, image FROM messages WHERE id IN (${ph3})`).all(...replyIds)) {
+        pr.body = dmDec(pr.body);                     // decrypt reply-parent preview body
         parents.set(pr.id, pr);
+      }
     }
   }
   res.send(threadPage({ me, p, msgs, reactions, parents, canPost, unread: unreadCount(me), err: req.query.err || '' }));
@@ -2433,7 +2468,7 @@ app.post('/messages/:id', requireLogin, (req, res) => {
       try {
         const jpeg = await processChatImage(file.buffer);                    // process BEFORE insert
         const info = db.prepare('INSERT INTO messages (from_email, to_email, body, reply_to) VALUES (?,?,?,?)')
-          .run(me, p.email, body, replyTo || null);
+          .run(me, p.email, dmEnc(body), replyTo || null);                   // body encrypted at rest
         msgId = info.lastInsertRowid;
         const imgPath = await writeChatImage(jpeg, msgId);
         db.prepare('UPDATE messages SET image = ? WHERE id = ?').run(imgPath, msgId);
@@ -2449,7 +2484,7 @@ app.post('/messages/:id', requireLogin, (req, res) => {
     if (!body) return res.redirect(dest);
     if (rateLimited('msg-send', me, 20, 10 * 60 * 1000)) return res.redirect(dest + '?err=slow');
     db.prepare('INSERT INTO messages (from_email, to_email, body, reply_to) VALUES (?,?,?,?)')
-      .run(me, p.email, body, replyTo || null);
+      .run(me, p.email, dmEnc(body), replyTo || null);                       // body encrypted at rest
     notifyDM(a, p.email, body);
     res.redirect(dest);
   });
@@ -2507,6 +2542,10 @@ const friendsOf   = me => (me = lc(me), stmtFriendsOf.all(me, me, me).map(r => r
 const isFollowing = (a, b) => !!stmtIsFollowing.get(lc(a), lc(b));                     // directed: does `a` follow `b`?
 const followersOf = me => stmtFollowersOf.all(lc(me)).map(r => r.email);               // who follows me
 const followingOf = me => stmtFollowingOf.all(lc(me)).map(r => r.email);               // who I follow
+// "Friends" = we follow EACH OTHER (mutual). This is the consent boundary for seeing someone's
+// game attendance — a one-way follow is NOT enough, so you never broadcast where you'll be to
+// someone who hasn't followed you back.
+const mutualFollowsOf = me => { const back = new Set(followersOf(me).map(e => lc(e))); return followingOf(me).filter(e => back.has(lc(e))); };
 const friendReqIncomingCount = me => stmtReqIncoming.all(lc(me)).length;
 
 // `me` is always req.userEmail (never a body field). Handlers are no-ops on bad/foreign input.
@@ -2583,7 +2622,7 @@ function peopleByEmails(emails) {
 // "Friends' Games" — upcoming runs (ACTIVE programs only) where an accepted friend of `me` is on
 // the roster. Grouped per (program, run_date) with the friends going + a Join link to that run.
 function friendsGamesFor(me) {
-  const fr = followingOf(me); // people you follow (follow-only model)
+  const fr = mutualFollowsOf(me); // FRIENDS = mutual follow — you see someone's games only if you follow each other
   if (!fr.length) return [];
   const today = ymdLocal(new Date(schedNow()));
   const ph = fr.map(() => '?').join(',');

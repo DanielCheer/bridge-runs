@@ -1422,7 +1422,7 @@ const firstRunTour = `
       // ---- everyone ----
       {path:'/runs',ttl:"Welcome 👋",txt:"Here’s a quick tour of the app."},
       {path:'/runs',sel:'.rhcard',ttl:"Pick your run",txt:"These are the runs — basketball, pickleball and more. Each has its own check-in, chat and season board. Tap one to open it."},
-      {path:'/runs',ttl:"Play with friends 🤝",txt:"Follow other players and you’ll see who’s going right on each run’s card. Some runs even let you check in together as a group."},
+      {path:'/runs',ttl:"Play with friends 🤝",txt:"Follow other players — once you follow each other, you’ll see who’s going right on each run’s card, and you can check in together as a group."},
       {path:'/checkin',sel:'[data-tour="join"]',ttl:"Grab your spot",txt:"Tap “I’m in” each week to claim a spot. Spots are limited — first come, first served. If it’s full you join the waitlist and move up automatically when a spot opens."},
       {path:'/checkin',sel:'.tabs a[href="/chat"]',ttl:"Run chat",txt:"Every run has its own chat — photos, voice notes, @mentions. It unlocks once you’ve joined that run. On the team? Press & hold a message to Pin it."},
       {path:'/checkin',sel:'.tabs a[href="/profile"]',ttl:"Your profile & friends",txt:"Your stats, photo and settings live here — plus Friends, where you follow players and see their games."},
@@ -3556,6 +3556,7 @@ export function threadPage({ me, p, msgs = [], reactions = new Map(), parents = 
         <span class="pbnm">${esc(name)}${p.is_host ? '<small>★ Host</small>' : ''}</span>
       </a>
     </div>
+    <div class="dmpriv" role="note">🔒 Private chat — kept encrypted, and organizers don't read your messages.</div>
     ${sendErrNotice(err)}
     <div class="thread" id="thread">${body}</div>
     ${composer}
