@@ -21,7 +21,7 @@ import {
 import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, exportPage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap, setProgramMeta,
-  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage, runPage, runsPage, pkChatPage, pkJoinPage, runJoinPage, waiverPage,
+  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage, runPage, runsPage, pkJoinPage, runJoinPage, waiverPage,
   friendsPage, friendsSearchFragment, chatLockedPage, runChatPage,
 } from './views.js';
 
@@ -972,14 +972,11 @@ const stmtMarkChatRead = db.prepare(`INSERT INTO group_reads (email, last_read_i
 function markChatRead(programId, me) { stmtMarkChatRead.run(me, programId, programId); }
 function markGroupRead(me) { return markChatRead(1, me); }
 
-// --- Pickleball chat = the SAME unified engine, program 2. Thin wrappers keep the pk names the
-// pickleball routes + page renders call; the old duplicated pk_ chat helpers are gone (unified above).
+// --- Pickleball unread counts on the unified chat engine (program 2), still used by the inline
+// pickleball season board. The pk chat ROUTES delegate to the generic runChat* handlers now, so the
+// old load/older/notify/markRead pk wrappers were removed as dead after that extraction (P3-8).
 function pkGroupUnread(email) { return chatUnreadFor(2, email); }
-function loadPkGroupChat(me) { return loadChat(2, me); }
-function loadPkGroupChatOlder(me, beforeId) { return loadChatOlder(2, me, beforeId); }
-function notifyPkMentions(fromEmail, body, mentions) { return notifyChatMentions(2, fromEmail, body, mentions); }
 function pkGroupMentionUnread(email, applicantId) { return chatMentionUnreadFor(2, email, applicantId); }
-function markPkGroupRead(me) { return markChatRead(2, me); }
 // Chat gate = page gate + pickleball MEMBERSHIP. You must have opened the pickleball run
 // (which joins you) to access its chat — being an approved basketball player isn't enough.
 // pkIsMember/pkGate are hoisted function declarations, so this resolves despite ordering.
@@ -1033,9 +1030,11 @@ const stmtEverAttendedProg  = db.prepare('SELECT 1 FROM attendance WHERE program
 function programJoinedBy(programId, email) {
   if (!email) return false;
   if (isAdmin(email)) return true;
-  if (P(programId).config.access === 'opt-in') return memberOf(programId, email);
   const a = applicantByEmail(email);
-  if (a && a.is_team) return true;
+  if (!a || a.status !== 'approved') return false;   // rejected/pending/no-row → joined to nothing, even if old
+                                                     // attendance survives (P3-1: don't unlock a chat the gate bounces)
+  if (P(programId).config.access === 'opt-in') return memberOf(programId, email);
+  if (a.is_team) return true;
   return !!stmtEverCheckedInProg.get(programId, email) || !!stmtEverAttendedProg.get(programId, email);
 }
 // The program whose chat the Chat tab should open on a run-agnostic page (runs hub, profile,
@@ -1617,7 +1616,6 @@ const stmtPollChatReact = db.prepare('SELECT COUNT(*) c, MAX(created_at) mx FROM
 const stmtPollPkChat = db.prepare('SELECT COALESCE(MAX(id),0) mx FROM group_messages WHERE program_id = 2');
 const stmtPollPkChatReact = db.prepare('SELECT COUNT(*) c, MAX(created_at) mx FROM group_reactions WHERE program_id = 2');
 function bumpChatSeqFor(programId) { const k = P(programId).config.chatSeqKey; setSetting(k, String((Number(getSetting(k)) || 0) + 1)); }
-function bumpPkChatSeq() { return bumpChatSeqFor(2); }
 // Program-generic poll fingerprints (basketball id=1 + pickleball id=2 keep their own hoisted
 // statements/branches above; these serve every OTHER run — e.g. volleyball — so a new run gets
 // live-refresh from the registry, no new /poll branch). Statements bind program_id at call (node:
@@ -4425,10 +4423,11 @@ function joinProgramMembership(programId, email) {
   if (!email || /@guest\.local$/.test(email)) return;
   db.prepare("INSERT OR IGNORE INTO program_membership (program_id, email, status, role) VALUES (?, ?, 'approved', 'approved')").run(programId, email);
 }
+const stmtIsMember = db.prepare('SELECT 1 FROM program_membership WHERE program_id = ? AND email = ?'); // hoisted — runs per neutral-page render (chatProgramFor) + every chat gate (P3-6)
 function memberOf(programId, email) {
   if (!email) return false;
   if (isAdmin(email)) return true; // admins operate the run — always members
-  return !!db.prepare('SELECT 1 FROM program_membership WHERE program_id = ? AND email = ?').get(programId, email);
+  return !!stmtIsMember.get(programId, email);
 }
 // Push/announce audience = actual members (approved, non-guest). Not the whole club.
 function programMemberEmails(programId) {
@@ -4566,13 +4565,20 @@ function pkSeatRenewers(rd) { return seatRenewers(2, rd); }
 // generic (copy/paths from config); only used by non-offer-window programs (offer-window ones send
 // a held offer via createOffer instead). pkNotifyPromotion stays a wrapper.
 function notifyPromotionFor(programId, rd, leavingEmail) {
-  const part = partitionFor(programId, rd);
-  if (!part.floor.some(p => p.email === leavingEmail)) return; // leaver was on the waitlist → no floor spot frees
-  const next = part.wait[0];                                   // first waitlister → promoted once the leaver goes
-  if (!next || /@guest\.local$/.test(next.email)) return;
-  const cfg = P(programId).config;
-  setImmediate(() => sendPush([next.email], { title: cfg.copy.promoTitle, body: cfg.copy.promoBody(rd), url: P(programId).paths.run, tag: `${cfg.logTag}promo` }));
-  audit('system', 'system', `${cfg.logTag}:promote`, next.email);
+  const cfg = P(programId).config, lv = lc(leavingEmail);
+  const part = partitionFor(programId, rd);                      // called for SIMPLE programs, so part.floor is the shape
+  if (!part.floor.some(p => lc(p.email) === lv)) return;         // leaver wasn't on the floor → no spot frees
+  const oldSet = new Set(part.floor.map(p => lc(p.email)));
+  // Recompute the floor as it will be AFTER the leaver's row is deleted (the caller deletes next).
+  // Under queue-with-friends a waiting PARTY that still doesn't fit the one freed seat is skipped and
+  // a solo behind it is seated instead — so the real promotee(s) come from a partition diff, not
+  // wait[0] (P2-2). For a solo run this is exactly the old wait[0].
+  const remaining = part.rows.filter(p => lc(p.email) !== lv);
+  const newFloor = groupQueueFeature(programId) ? packParties(remaining, cfg.cap).floor : remaining.slice(0, cfg.cap);
+  const promoted = newFloor.filter(p => !oldSet.has(lc(p.email)) && !/@guest\.local$/.test(p.email));
+  if (!promoted.length) return;
+  setImmediate(() => sendPush(promoted.map(p => p.email), { title: cfg.copy.promoTitle, body: cfg.copy.promoBody(rd), url: P(programId).paths.run, tag: `${cfg.logTag}promo` }));
+  for (const p of promoted) audit('system', 'system', `${cfg.logTag}:promote`, p.email);
 }
 function pkNotifyPromotion(rd, leavingEmail) { return notifyPromotionFor(2, rd, leavingEmail); }
 // Pull someone off the pickleball floor for THIS cycle, promoting the waitlist behind them —
@@ -4671,6 +4677,7 @@ const stmtRollSweepOptout = db.prepare('DELETE FROM regular_optout WHERE run_dat
 // archive its floor into attendance, purge past rows, and clear a spent explicit date back to the
 // weekly standing day. Program-generic — cap, end hour and the date keys come from config;
 // pkEnsureWeek is a thin wrapper.
+const lastRolledFor = new Map(); // programId → last gate string that ran the rollover
 function ensureWeekFor(programId) {
   const cfg = P(programId).config;
   const today = ymdLocal();
@@ -4678,6 +4685,12 @@ function ensureWeekFor(programId) {
   // A run counts as OVER once its end time (config.endHour) passes on run day — so today's run is
   // archived that same night and the cycle rolls forward, letting check-in reopen that evening.
   const endedToday = now.getHours() >= cfg.endHour ? today : null;
+  // Gate the archive/purge/sweep work like basketball's ensureWeek (P3-5): re-run only when the run
+  // advances OR a run has just ended today — NOT on every /poll tick + /runs render (this is called
+  // from runPollFingerprint, genericHubCard, runGetPage, runJoin and the 60s tick).
+  const gate = `${programRunDate(programId)}|${endedToday ? 1 : 0}`;
+  if (lastRolledFor.get(programId) === gate) return;
+  lastRolledFor.set(programId, gate);
   const isPast = rd => rd < today || rd === endedToday;
   // Archive + purge ANY finished run so the floor is recorded to attendance and stale rows never accumulate.
   const pastDates = stmtRollPastDates.all(programId, today).map(r => r.run_date).filter(isPast);
@@ -4879,9 +4892,10 @@ function runSeasonSet(programId, req, res) {
   if (raw < today) return res.redirect(base + '?pkerr=seasonpast');
   const maxD = new Date(); maxD.setFullYear(maxD.getFullYear() + 1);
   if (raw > ymdLocal(maxD)) return res.redirect(base + '?pkerr=seasonrange');
-  setSetting(cfg.keys.seasonStart, raw);
   db.exec('BEGIN');
   try {
+    setSetting(cfg.keys.seasonStart, raw);   // inside the txn (P3-7): a rollback of the gap-cleanup must not leave
+                                             // the season set while stranded rosters survive → phantom attendance
     db.prepare('DELETE FROM checkins WHERE run_date > ? AND run_date < ? AND program_id = ?').run(today, raw, programId);
     db.prepare('DELETE FROM regular_optout WHERE run_date > ? AND run_date < ? AND program_id = ?').run(today, raw, programId);
     db.prepare('DELETE FROM run_state WHERE run_date > ? AND run_date < ? AND program_id = ?').run(today, raw, programId);
@@ -5080,13 +5094,10 @@ app.post('/pickleball/announce', requireLogin, (req, res) => runAnnounce(2, req,
 // showing on the page (no new push/email; the original notification already went out).
 app.post('/pickleball/announce/retract', requireLogin, (req, res) => runAnnounceRetract(2, req, res));
 
-// Terminal error handler — a sync throw (or a forwarded async reject via next(e)) in any route
-// lands here with a 500 instead of a hung socket. Must be the LAST app.use (4-arg signature).
-app.use((err, req, res, next) => {
-  console.error(`[route-error] ${req.method} ${req.originalUrl}: ${(err && err.stack) || err}`);
-  if (res.headersSent) return next(err);
-  res.status(500).send('Something went wrong on our end. Please try again in a moment.');
-});
+// NB: the terminal 4-arg error handler is registered LAST — after mountRunProgram (see just before
+// app.listen) — so a throw in ANY route (incl. the config-mounted volleyball routes) lands there
+// with a friendly 500 instead of falling through to Express's default handler (which would leak a
+// stack trace in dev mode). Express matches middleware in registration order, hence the placement.
 // Last resort: a stray unhandled promise rejection must NOT exit the process (Node's default),
 // which would drop check-in for everyone mid-run. Log it and keep serving.
 process.on('unhandledRejection', (reason) => {
@@ -5243,8 +5254,8 @@ const PROGRAM_DEFS = {
 // unsplit at partition time (floor-together or wait-together, never 2-on/1-off). Gated by
 // config.features.groupQueue (volleyball only): every route below no-ops otherwise, so with the
 // flag off no signup_group rows are written and every checkins.group_id stays NULL → seating is
-// byte-identical to today. Invitees must be accepted FRIENDS and a blocked pair is never allowed
-// into one party (the block invariant, enforced HERE at the mutation boundary; the seating code
+// byte-identical to today. You may invite anyone you FOLLOW (follow-only model) and a blocked pair
+// is never allowed into one party (the block invariant, enforced HERE at the mutation boundary; the seating code
 // trusts it). group_id is set ONLY via the explicit party check-in (never a solo join), so a party
 // never grows under seated members — it lands together in one action or waits together.
 const stmtPartyByLeader = db.prepare('SELECT * FROM signup_groups WHERE program_id=? AND run_date=? AND leader_email=?');
@@ -5316,7 +5327,7 @@ function setPartyDeclinedFor(programId, rd, email) {
   db.prepare("UPDATE signup_group_members SET status='declined' WHERE group_id=? AND email=?").run(party.id, email);
   resyncPartyGroupIds(party.id);
 }
-// Invite an accepted friend into my party for this run (I lead it; created lazily). Friends-only +
+// Invite someone I follow into my party for this run (I lead it; created lazily). Follow-only +
 // block invariant + party-size cap. Returns silently on any violation (swap re-renders the page).
 function runPartyInvite(programId, req, res) {
   const base = P(programId).paths.run;
@@ -5362,7 +5373,9 @@ function runPartyDecline(programId, req, res) {
   const base = P(programId).paths.run, me = lc(req.userEmail);
   const g = programGate(programId, req, res); if (!g) return res.redirect(base);
   if (!groupQueueFeature(programId)) return res.redirect(base);
-  const gid = Number(req.body.group) || 0;
+  const rd = programRunDate(programId), gid = Number(req.body.group) || 0;
+  const party = stmtPartyById.get(gid);
+  if (!party || party.program_id !== programId || party.run_date !== rd) return res.redirect(base); // scope group→(program,run_date) like accept (P3-2)
   db.prepare("UPDATE signup_group_members SET status='declined' WHERE group_id=? AND email=?").run(gid, me);
   resyncPartyGroupIds(gid);
   res.redirect(base);
@@ -5408,17 +5421,21 @@ function runPartyCheckin(programId, req, res) {
   const toAdd = seatable.filter(a => !already.has(lc(a.email)) && (lc(a.email) === me || !optRow.get(rd, a.email, programId)));
   if (rows.length + toAdd.length > cfg.cap + cfg.waitlist) return res.redirect(base + '?partyfull=1'); // atomic: whole party or none
   const ins = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, program_id, group_id) VALUES (?,?,?,?,?)');
-  for (const a of toAdd) {
-    joinProgramMembership(programId, a.email);
-    if (lc(a.email) === me) db.prepare('DELETE FROM regular_optout WHERE run_date=? AND email=? AND program_id=?').run(rd, a.email, programId); // tapper opts back in
-    ins.run(rd, a.email, a.full_name, programId, party.id);
-  }
-  resyncPartyGroupIds(party.id);
+  db.exec('BEGIN'); // whole party seats or none — a mid-loop throw must not leave a PARTIAL party (P3-3)
+  try {
+    for (const a of toAdd) {
+      joinProgramMembership(programId, a.email);
+      if (lc(a.email) === me) db.prepare('DELETE FROM regular_optout WHERE run_date=? AND email=? AND program_id=?').run(rd, a.email, programId); // tapper opts back in
+      ins.run(rd, a.email, a.full_name, programId, party.id);
+    }
+    resyncPartyGroupIds(party.id);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); console.error(`[${cfg.logTag}-party] group check-in FAILED: ${e.message}`); }
   res.redirect(base);
 }
 
 // Party panel data for the run page (null unless groupQueue is on). Shows my party (members +
-// who's checked in), pending invites to me, and friends I can still invite. Leader-only invites.
+// who's checked in), pending invites to me, and people I follow I can still invite. Leader-only invites.
 function partyPanelFor(programId, rd, email) {
   if (!groupQueueFeature(programId)) return null;
   email = lc(email);
@@ -5450,8 +5467,10 @@ function partyPanelFor(programId, rd, email) {
   if (!g || lc(g.leader_email) === email) {   // only a (potential) leader invites
     const inParty = new Set(party ? party.members.map(m => lc(m.email)) : [email]);
     inParty.add(email);
-    invitable = [...peopleByEmails(friendsOf(email)).values()]
-      .filter(p => p.status === 'approved' && !/@guest\.local$/.test(p.email) && !inParty.has(lc(p.email)))
+    // People you FOLLOW — matches the invite route's isFollowing gate. (The app is follow-only now;
+    // friendsOf = mutual-friend edges is dead, so it returned an empty invitable list — P3-4.)
+    invitable = [...peopleByEmails(followingOf(email)).values()]
+      .filter(p => p.status === 'approved' && !/@guest\.local$/.test(p.email) && !inParty.has(lc(p.email)) && !blockedPair(email, p.email))
       .map(p => ({ id: p.id, name: p.full_name })).sort((a, b) => a.name.localeCompare(b.name));
   }
   return { maxSize, party, invites, invitable };
@@ -5460,10 +5479,9 @@ function partyPanelFor(programId, rd, email) {
 const stmtProgActiveById = db.prepare('SELECT active FROM program WHERE id = ?');
 // Register a program's full run-route set from config (paths + the generic runXxx handlers).
 // Basketball (/checkin/*) and pickleball (/pickleball/*) keep their inline routes for now; other
-// programs (volleyball, …) get theirs here. These mount after the terminal error middleware, so an
-// uncaught throw falls through to Express's default handler — acceptable for the hidden pre-launch
-// program (the process-level backstops still catch escapes). Chat + season-board + banner routes
-// for a new program are follow-ups.
+// programs (volleyball, …) get theirs here. The terminal error handler is registered AFTER this
+// mount (just before app.listen), so an uncaught throw in a mounted route lands there with a
+// friendly 500 (no stack-trace leak) — same as the inline routes.
 function mountRunProgram(app, program) {
   const b = program.paths.run, id = program.id;
   app.get(b, requireLogin, (req, res) => runGetPage(id, req, res));
@@ -5533,6 +5551,14 @@ buildPrograms();
 // which keep their inline routes — e.g. volleyball via the config-driven factory. After
 // buildPrograms() so P(id) is hydrated (mountRunProgram reads program.paths.run).
 for (const p of PROGRAMS.values()) if (p.id >= 3) mountRunProgram(app, p);
+// Terminal error handler — registered LAST (after every inline + mounted route) so a sync throw
+// (or a forwarded async reject via next(e)) in ANY route lands here with a friendly 500 instead of
+// a hung socket OR Express's stack-trace-leaking default handler. Must be the last app.use (4-arg).
+app.use((err, req, res, next) => {
+  console.error(`[route-error] ${req.method} ${req.originalUrl}: ${(err && err.stack) || err}`);
+  if (res.headersSent) return next(err);
+  res.status(500).send('Something went wrong on our end. Please try again in a moment.');
+});
 // Boot-time weekly rollover (archive/purge/auto-seat) — MUST run after buildPrograms() so the
 // unified engine's P(id).config is hydrated (ensureWeek → autoJoinTeam → seatRenewers reads it).
 ensureWeek(nextRunDate());

@@ -253,7 +253,7 @@ window.__pollStop=function(){window.__pollPage=null;window.__pollOnChange=null;}
       paint(res,href,push,type);
       // Actually LANDED on chat → now mark it read (the prewarm skipped it). Beacon =
       // fire-and-forget; the badge clears on the next poll tick.
-      if((abs.pathname==='/chat'||abs.pathname==='/pickleball/chat')&&navigator.sendBeacon){try{navigator.sendBeacon(abs.pathname+'/seen');}catch(e){}}
+      if(abs.pathname.endsWith('/chat')&&navigator.sendBeacon){try{navigator.sendBeacon(abs.pathname+'/seen');}catch(e){}} // any run's chat room (/chat, /pickleball/chat, /volleyball/chat, …) — P2-1
     }).catch(function(){hard(href);});
   }
   window.__go=go; // exposed so the team tour can drive a smooth router swap between pages
@@ -2436,10 +2436,6 @@ export function runChatPage({ me, chat, program = 2, theme = 'pk', sport = 'Pick
         else{w.classList.remove('open');document.body.style.overflow='';restore();}};
     </script>
   ` + footWithTabs(tabNav('chat', { dm: dmUnread, group: groupUnread, groupMention, program }));
-}
-// Pickleball chat page — thin wrapper over the generic (byte-identical params).
-export function pkChatPage({ me, chat, runDate = '', dmUnread = 0, pkGroupUnread = 0, pkGroupMention = 0, ann = null }) {
-  return runChatPage({ me, chat, program: 2, theme: 'pk', sport: 'Pickleball', sportEmoji: '🥒', base: '/pickleball/chat', pollPage: 'pkchat', dmUnread, groupUnread: pkGroupUnread, groupMention: pkGroupMention, ann });
 }
 
 // ---------- PROFILE (view another player) ----------
