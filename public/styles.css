@@ -240,6 +240,11 @@ a.score{cursor:pointer}
 .bdg.minor{background:#c62828;color:#fff;box-shadow:0 2px 8px rgba(198,40,40,.45);margin-right:6px}
 /* In lists, minors get a small red asterisk after the name (awareness, no clutter). */
 .minast{color:#c62828;font-weight:800;margin-left:2px}
+/* Teams: players who queued in a PARTY share a muted dot (one colour per party, cycling);
+   solo players get no dot. Deliberately quiet — differentiation, not decoration. */
+.pdot{display:inline-block;width:8px;height:8px;border-radius:50%;flex:none;box-shadow:inset 0 0 0 1px rgba(34,35,29,.12)}
+.pd1{background:#8fb4a8}.pd2{background:#b9a6cf}.pd3{background:#cbb37f}
+.pd4{background:#9db3d1}.pd5{background:#cf9f9b}.pd6{background:#a3b98a}
 
 /* ---------- waitlist line + court notes ---------- */
 .wait{font-family:var(--body);font-size:12px;color:var(--muted);padding:1px 8px;margin:2px 0}
