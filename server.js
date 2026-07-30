@@ -1913,6 +1913,7 @@ function loadRun(req) {
     offeredPlayers: part.offered,     // held pending-claim spots (count as taken, not "on the floor")
     waitPlayers: part.waitPlayers,
     totalCount: part.rows.length,
+    part, // full partition — shared with the /runs hub-card badge (myRunStatusFor) so it isn't recomputed
   };
 }
 
@@ -1948,10 +1949,11 @@ function mutedOut(gate, res, { json = false, back = '/chat' } = {}) {
 // 'in' (on the floor), 'offered' (holding a pending offer), or 'waitlist' (with position #pos of total).
 // Returns null when they're not signed up — the card then shows no personal badge. Reuses the same
 // partition the run page uses, so the badge and the run page never disagree.
-function myRunStatusFor(programId, rd, email) {
+function myRunStatusFor(programId, rd, email, part) {
   if (!email || !rd) return null;
   const cfg = P(programId).config;
-  const part = partitionFor(programId, rd);
+  part = part || partitionFor(programId, rd);   // reuse the hub card's partition when passed — avoids a 2nd partition per program per /runs
+
   const me = String(email).toLowerCase();
   const floor = cfg.offerWindow ? part.floorReal : part.floor;
   const wait = cfg.offerWindow ? part.waitPlayers : part.wait;
@@ -1981,9 +1983,10 @@ app.get('/runs', requireLogin, (req, res) => {
   // that program's own dispatch (basketball / pickleball engine today) — no hardcoded pushes.
   for (const p of PROGRAMS.values()) {
     if (!p.active() && !viewerIsAdmin) continue;
-    const card = { key: p.key, emoji: p.emoji, name: p.displayName, href: p.paths.run, ...p.hubCard(req) };
+    const { part, ...hub } = p.hubCard(req); // `part` = the program's already-computed partition; strip it so it never leaks into view props
+    const card = { key: p.key, emoji: p.emoji, name: p.displayName, href: p.paths.run, ...hub };
     card.friendsGoing = fgMap.get(p.id + '|' + card.runDate) || [];
-    card.mine = a ? myRunStatusFor(p.id, card.runDate, email) : null; // viewer's own status for a per-card badge
+    card.mine = a ? myRunStatusFor(p.id, card.runDate, email, part) : null; // reuses the hub card's partition (no 2nd partition)
     runs.push(card);
   }
 
@@ -5374,6 +5377,7 @@ function genericHubCard(programId) {
       going: floor.length + (cfg.offerWindow ? part.offered.length : 0), cap: cfg.cap, // count held offers so the hub card matches the run page (no 8→7 dip mid-offer)
       status: runCancelledFor(programId, rd) ? 'cancelled' : (runOpenFor(programId, rd) ? 'open' : 'closed'),
       hidden: !programActive(programId),
+      part, // the partition this card already computed — reused by myRunStatusFor on /runs (stripped before view props)
     };
   };
 }
@@ -5412,6 +5416,7 @@ const PROGRAM_DEFS = {
         going: bb.inPlayers.length + bb.offeredPlayers.length, cap: CAP,
         status: runIsCancelled(bb.runDate) ? 'cancelled' : (runIsOpen(bb.runDate) ? 'open' : 'closed'),
         hidden: false,
+        part: bb.part, // reuse loadRun's partition for the /runs badge (myRunStatusFor) — post-expireAndReoffer, exactly what a 2nd partition would see
       };
     },
     // Per-tick work for the 60s scheduler loop: rollover + offer-expiry + auto open/close.
