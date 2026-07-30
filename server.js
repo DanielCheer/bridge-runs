@@ -1796,6 +1796,24 @@ function topOfferee(part, exclude = null) {
     !p.guest && p.offered_at == null && !p.held && p.email !== exclude) || null;
 }
 
+// GUEST PRIORITY (owner rule): a waitlisted GUEST takes any freed floor spot ahead of the
+// waitlist. Guests can't do the email claim loop (no inbox), so they're seated IMMEDIATELY —
+// floated to the top exactly like an operator Bump (MIN(sort_order)-1; a plain positional swap
+// can lose to lower row-ids at the same sort_order). Returns true if a guest took the spot.
+// Callers skip the offer / promotion-notify for that spot when this returns true.
+function seatWaitingGuest(programId, rd) {
+  const cfg = P(programId).config;
+  const part = partitionFor(programId, rd);
+  const wait = cfg.offerWindow ? part.waitPlayers : part.wait;
+  const g = wait.find(p => /@guest\.local$/.test(p.email));
+  if (!g) return false;
+  const { m } = db.prepare('SELECT MIN(sort_order) m FROM checkins WHERE run_date = ? AND program_id = ?').get(rd, programId);
+  db.prepare('UPDATE checkins SET sort_order = ?, held = 0 WHERE run_date = ? AND email = ? AND program_id = ?')
+    .run((m ?? 0) - 1, rd, g.email, programId);
+  audit('system', 'system', `${cfg.logTag || 'run'}:guest-priority-seat`, g.email);
+  return true;
+}
+
 // Mark a waitlister's freed floor spot as OFFERED + HELD: stamp offered_at/claim_token
 // and email them a one-tap claim link. The `offered_at IS NULL` guard makes this
 // idempotent and race-safe (a second concurrent trigger can't double-offer/double-email).
@@ -1835,6 +1853,7 @@ function createOffer(runDate, w, req, programId = 1) {
 function offereeForFloorLeave(runDate, leavingEmail, programId = 1) {
   const part = offerPartition(programId, runDate);
   if (!occupiesFloorSlot(part, leavingEmail)) return null;
+  if (seatWaitingGuest(programId, runDate)) return null;   // guest priority: the spot is already filled — no offer
   return topOfferee(part, leavingEmail);
 }
 
@@ -1850,8 +1869,9 @@ function expireAndReoffer(runDate, req, programId = 1) {
   for (const ex of expired) {
     // Capture the next offeree BEFORE dropping the expired hold, so the freed slot
     // offers the true top waitlister rather than one auto-promoted by the drop.
+    // Guest priority: a waitlisted guest takes the expired hold's spot instead.
     const part = offerPartition(programId, runDate);
-    const offeree = topOfferee(part, ex.email);
+    const offeree = seatWaitingGuest(programId, runDate) ? null : topOfferee(part, ex.email);
     db.prepare('DELETE FROM checkins WHERE id = ?').run(ex.id);
     audit('system', 'system', 'offer:expire', ex.email);
     if (offeree) createOffer(runDate, offeree, req, programId);
@@ -5105,8 +5125,13 @@ function runLeave(programId, req, res) {
 // promotion push). req may be null (scheduler) — createOffer falls back to PUBLIC_URL.
 function removeFromRun(programId, rd, em, req = null) {
   const cfg = P(programId).config;
-  const offeree = cfg.offerWindow ? offereeForFloorLeave(rd, em, programId) : null;
-  if (!cfg.offerWindow) notifyPromotionFor(programId, rd, em);
+  const offeree = cfg.offerWindow ? offereeForFloorLeave(rd, em, programId) : null;   // guest priority handled inside
+  if (!cfg.offerWindow) {
+    // Simple model: only a FLOOR leaver frees a spot. Guest priority — a waitlisted guest is
+    // floated into the freed spot (no member promotion happened, so skip the promo push).
+    const onFloor = partitionFor(programId, rd).floor.some(p => lc(p.email) === lc(em));
+    if (onFloor && !seatWaitingGuest(programId, rd)) notifyPromotionFor(programId, rd, em);
+  }
   db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = ?').run(rd, em, programId);
   clearTeamAssignment(programId, rd, em);   // off the floor → off any team
   setPartyDeclinedFor(programId, rd, em);   // and out of any party so a group check-in can't re-seat them (P2-2)
