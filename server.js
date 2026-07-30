@@ -455,10 +455,9 @@ function runBaseFor(runDate) {
 // Default run window — 8:30 PM to 10:30 PM, server-local (Eastern). The host can override
 // per week via run_overrides.run_time / run_end (HH:MM). NULL columns fall back here.
 const DEFAULT_START = '20:30', DEFAULT_END = '22:30';
-// Confirm-or-release cutoff: unconfirmed floor spots are released this many minutes before the
-// run starts (90 = 7 PM for the default 8:30 basketball run; pk/vb read the same rule from their
-// config.confirmCutoffMins). The run-day 9 AM ping warns with the exact time.
-const CONFIRM_CUTOFF_MINS = 90;
+// Confirm-or-release cutoff lives in EACH program's config as an absolute 'HH:MM'
+// (config.confirmCutoff, e.g. '16:30') — change it there, never here. The run-day 9 AM ping
+// and the run-page note both derive their copy from it.
 // The {start,end} HH:MM for the run on a given date — from that week's override (keyed
 // by its nearest run day) or the defaults. Time-only overrides (run_date === default)
 // still carry run_time/run_end, so this resolves them even when the day didn't move.
@@ -467,12 +466,6 @@ function runTimesFor(runDate) {
   return { start: (row && row.run_time) || DEFAULT_START, end: (row && row.run_end) || DEFAULT_END };
 }
 // "7 PM" / "7:30 PM" from HH:MM.
-// 'HH:MM' minus N minutes → 'HH:MM' (for the confirm cutoff: 90 min before start).
-function hhmmMinus(hhmm, mins) {
-  const [h, m] = String(hhmm).split(':').map(Number);
-  const t = h * 60 + (m || 0) - mins;
-  return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
-}
 function fmtClockLabel(hhmm) {
   const [h, m] = String(hhmm).split(':').map(Number);
   const ap = h < 12 ? 'AM' : 'PM', h12 = ((h + 11) % 12) + 1;
@@ -2138,7 +2131,7 @@ app.get('/checkin', requireLogin, (req, res) => {
     iAmTeam, iAmRegular, iOptedOut, iAutoRenew,
     viewerIsAdmin, canOperate, canSeeRoster,
     suspended: !!(a && a.suspended), suspendReason: (a && a.suspend_reason) || '',
-    myConfirmed, confirmBy: fmtClockLabel(hhmmMinus(runTimesFor(runDate).start, CONFIRM_CUTOFF_MINS)), msg: req.query.msg || '', bannerVer: bannerVersion(),
+    myConfirmed, confirmBy: fmtClockLabel(P(1).config.confirmCutoff), msg: req.query.msg || '', bannerVer: bannerVersion(),
     cancelled: runIsCancelled(runDate),
     locked: runIsLocked(runDate),
     announcement: latestAnnouncement(),
@@ -4321,10 +4314,10 @@ function runStateSchedule() {
 function autoRunState() {
   const { rd, openAt, closeAt } = runStateSchedule();
   const now = schedNow();   // == Date.now() in prod; honours the TEST_NOW seam like the generic engine
-  // Confirm cutoff: CONFIRM_CUTOFF_MINS before the (host-editable) start — 7 PM for the default
-  // 8:30 run. Unconfirmed floor spots are RELEASED to the waitlist at the cutoff (owner rule).
-  const cutoffAt = new Date(rd + 'T' + runTimesFor(rd).start + ':00').getTime() - CONFIRM_CUTOFF_MINS * 60000;
-  const cutoffLabel = fmtClockLabel(hhmmMinus(runTimesFor(rd).start, CONFIRM_CUTOFF_MINS));
+  // Confirm cutoff (config.confirmCutoff, absolute 'HH:MM'): unconfirmed floor spots are
+  // RELEASED to the waitlist at this time on run day (owner rule — 4:30 PM).
+  const cutoffAt = new Date(rd + 'T' + P(1).config.confirmCutoff + ':00').getTime();
+  const cutoffLabel = fmtClockLabel(P(1).config.confirmCutoff);
   // RUN-DAY 9 AM CONFIRM PING (once) — push every unconfirmed floor player, deadline spelled out.
   // Fires any time from 9 AM up to the cutoff (a late boot still pings; past the cutoff the sweep
   // is the message).
@@ -4874,10 +4867,10 @@ function autoRunStateFor(programId) {
       console.log(`[${cfg.logTag}-autoopen] opened ${cfg.logTag} check-in for ${rd} (auto-added ${added})`);
     }
   }
-  // Confirm cutoff (config.confirmCutoffMins before start): unconfirmed floor spots are RELEASED
-  // to the next in line (owner rule). null = no sweep for this program.
-  const cutoffAt = cfg.confirmCutoffMins != null ? new Date(rd + hh(cfg.startHour)).getTime() - cfg.confirmCutoffMins * 60000 : null;
-  const cutoffLabel = cutoffAt ? fmtClockLabel(hhmmMinus(`${cfg.startHour}:00`, cfg.confirmCutoffMins)) : '';
+  // Confirm cutoff (config.confirmCutoff, absolute 'HH:MM' on run day): unconfirmed floor spots
+  // are RELEASED to the next in line (owner rule). Absent = no sweep for this program.
+  const cutoffAt = cfg.confirmCutoff ? new Date(rd + 'T' + cfg.confirmCutoff + ':00').getTime() : null;
+  const cutoffLabel = cutoffAt ? fmtClockLabel(cfg.confirmCutoff) : '';
   // CONFIRM PING (once) — run-day morning (config.pingHour), deadline spelled out. Stops firing
   // once the cutoff has passed (the sweep is the message then).
   if (now >= pingAt && now < (cutoffAt || lockAt) && getSetting(cfg.keys.autoping) !== rd) {
@@ -5356,7 +5349,7 @@ function runGetPage(programId, req, res) {
     cap: cfg.cap, waitlistCap: cfg.waitlist, going: floor.length + offered.length, waiting: wait.length,
     canOperate: g.canOperate, isAdmin: g.admin, myState, myWaitPos, floorPlayers: floor, offeredPlayers: offered, waitPlayers: wait, hidden: !programActive(programId),
     myConfirmed, iAutoRenew,
-    confirmBy: cfg.confirmCutoffMins != null ? fmtClockLabel(hhmmMinus(`${cfg.startHour}:00`, cfg.confirmCutoffMins)) : '',
+    confirmBy: cfg.confirmCutoff ? fmtClockLabel(cfg.confirmCutoff) : '',
     bannerSrc: bannerSrcFor(programId), bannerVer: bannerVersionFor(programId),
     tipoff: startEpochFor(programId, rd), announcement: latestAnnouncementFor(programId),
     season: opener || '', seasonWeekday: opener ? runWeekday(opener) : '', seasonLabel: opener ? runLabelFor(opener) : '',
@@ -5611,6 +5604,7 @@ const PROGRAM_DEFS = {
       get cap() { return CAP; }, get waitlist() { return WAITLIST_CAP; }, get prereg() { return PREREG_CAP; },
       dow: RUN_DOW, start: DEFAULT_START, end: DEFAULT_END,          // Wed 8:30–10:30 PM
       openDaysBefore: OPEN_DAYS_BEFORE, openHour: OPEN_H, lockTime: '14:00',
+      confirmCutoff: '16:30',   // unconfirmed floor released at 4:30 PM run day (owner-set; must be ≥ lockTime — the sweep runs inside the post-lock branch)
       theme: 'default', access: 'apply', approval: 'council',
       tiers: ['team', 'core', 'host'], offerWindow: true,
       autoRenew: { from: 'team' },   // only the org team (applicants.is_team) auto-renews; no non-team fill
@@ -5641,7 +5635,7 @@ const PROGRAM_DEFS = {
       cap: PK_CAP, waitlist: PK_WAIT, prereg: 0,
       dow: PK_DOW, startHour: PK_START_H, endHour: PK_END_H,         // Tue 6–8 PM
       pingHour: PK_PING_H, pingDowOffset: PK_PING_DOW_OFFSET, lockTime: PK_LOCK,
-      confirmCutoffMins: 90,   // unconfirmed floor released 90 min before start (4:30 PM for the 6 PM run)
+      confirmCutoff: '16:30',   // unconfirmed floor released at 4:30 PM run day (absolute, owner-set)
       keys: { runDate: 'pk_run_date', runBase: 'pk_run_base', seasonStart: 'pk_season_start',
               autoopen: 'pk_autoopen_done', autoping: 'pk_autoping_done', autolock: 'pk_autolock_done', arassess: 'pk_arassess_done', confirmsweep: 'pk_confirmsweep_done' },  // app_settings keys
       logTag: 'pk', openOffsetDays: -7,   // audit/push/log prefix; reopen openOffsetDays before run day at endHour
@@ -5683,7 +5677,7 @@ const PROGRAM_DEFS = {
       cap: 21, waitlist: 6, prereg: 0,
       dow: 5, startHour: 18, endHour: 21,          // Fri 6–9 PM (PLACEHOLDER — owner to finalize 6:30–9:30)
       pingHour: 9, pingDowOffset: 0, lockTime: '18:00',    // confirm ping RUN-DAY 9 AM (owner rule), roster locks 6 PM
-      confirmCutoffMins: 90,                               // unconfirmed floor released 90 min before start (4:30 PM for a 6 PM run)
+      confirmCutoff: '16:30',                              // unconfirmed floor released at 4:30 PM run day (absolute, owner-set)
       keys: { runDate: 'vb_run_date', runBase: 'vb_run_base', seasonStart: 'vb_season_start',
               autoopen: 'vb_autoopen_done', autoping: 'vb_autoping_done', autolock: 'vb_autolock_done', arassess: 'vb_arassess_done', confirmsweep: 'vb_confirmsweep_done' },
       logTag: 'vb', openOffsetDays: -7,

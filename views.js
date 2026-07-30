@@ -184,8 +184,21 @@ window.__swapWrap=function(html){
 // covers the installed-PWA resize mode, where both viewports shrink and overlap reads ~0).
 window.__kbSync=function(){
   var vv=window.visualViewport;
+  // Overlay mode (Safari tab): the keyboard shrinks ONLY the visual viewport → overlap>50.
+  // Resize mode (installed PWA): iOS shrinks the LAYOUT viewport too → overlap reads ~0, so
+  // fall back to "a text input is focused on a touch device" (same signal the composer uses).
   var kb=vv?Math.max(0,window.innerHeight-vv.height-vv.offsetTop):0;
-  document.body.classList.toggle('kb-open', kb>50 || !!window.__composerEngaged);
+  var ae=document.activeElement;
+  var typing=!!(ae&&((ae.tagName==='TEXTAREA')||(ae.tagName==='INPUT'&&!/^(checkbox|radio|button|submit|file|range)$/.test(ae.type||''))||ae.isContentEditable));
+  var coarse=!!(window.matchMedia&&window.matchMedia('(pointer:coarse)').matches);
+  var open=kb>50||(typing&&coarse)||!!window.__composerEngaged;
+  document.body.classList.toggle('kb-open',open);
+  if(!open){
+    // WebKit can leave fixed elements PAINTED at the stale keyboard-era viewport position after
+    // dismissal (they sit mid-screen until something forces a re-anchor). Nudge a composite.
+    var els=[document.querySelector('.tabs'),document.querySelector('.composer')];
+    for(var i=0;i<els.length;i++)(function(el){if(!el)return;el.style.transform='translateZ(0)';requestAnimationFrame(function(){el.style.transform='';});})(els[i]);
+  }
 };
 (function(){
   if(window.__kbWatchBound)return; window.__kbWatchBound=1;
@@ -2431,7 +2444,7 @@ export function chatPage({ me, chat, runDate = '', hours = '8:30–10:30 PM', dm
         if(sh&&!still){sh.classList.add('closing');setTimeout(function(){w.classList.remove('open');sh.classList.remove('closing');document.body.style.overflow='';restore();},200);}
         else{w.classList.remove('open');document.body.style.overflow='';restore();}};
     </script>
-  ` + footWithTabs(tabNav('chat', { dm: dmUnread, group: groupUnread, groupMention }));
+  ` + footWithTabs(tabNav('chat', { dm: dmUnread, group: groupUnread, groupMention }), { noFooter: true });
 }
 
 // Run chat — an opt-in run's own room (pickleball, volleyball, …), a program-generic mirror of the
@@ -2476,7 +2489,7 @@ export function runChatPage({ me, chat, program = 2, theme = 'pk', sport = 'Pick
         if(sh&&!still){sh.classList.add('closing');setTimeout(function(){w.classList.remove('open');sh.classList.remove('closing');document.body.style.overflow='';restore();},200);}
         else{w.classList.remove('open');document.body.style.overflow='';restore();}};
     </script>
-  ` + footWithTabs(tabNav('chat', { dm: dmUnread, group: groupUnread, groupMention, program }));
+  ` + footWithTabs(tabNav('chat', { dm: dmUnread, group: groupUnread, groupMention, program }), { noFooter: true });
 }
 
 // ---------- PROFILE (view another player) ----------
@@ -4169,7 +4182,7 @@ export function chatLockedPage({ email, dmUnread = 0 }) {
       <p class="lead" style="margin:0 auto 18px;max-width:32ch">Join a run to unlock its chat and talk with the group.</p>
       <a class="btn primary" href="/runs">Browse runs →</a>
     </div>
-  ` + footWithTabs(tabNav('chat', { dm: dmUnread, program: 0 }));
+  ` + footWithTabs(tabNav('chat', { dm: dmUnread, program: 0 }), { noFooter: true });
 }
 
 // Sign-out confirmation. GET /logout renders THIS (a harmless read — no state
