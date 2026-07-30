@@ -455,6 +455,10 @@ function runBaseFor(runDate) {
 // Default run window — 8:30 PM to 10:30 PM, server-local (Eastern). The host can override
 // per week via run_overrides.run_time / run_end (HH:MM). NULL columns fall back here.
 const DEFAULT_START = '20:30', DEFAULT_END = '22:30';
+// Confirm-or-release cutoff: unconfirmed floor spots are released this many minutes before the
+// run starts (90 = 7 PM for the default 8:30 basketball run; pk/vb read the same rule from their
+// config.confirmCutoffMins). The run-day 9 AM ping warns with the exact time.
+const CONFIRM_CUTOFF_MINS = 90;
 // The {start,end} HH:MM for the run on a given date — from that week's override (keyed
 // by its nearest run day) or the defaults. Time-only overrides (run_date === default)
 // still carry run_time/run_end, so this resolves them even when the day didn't move.
@@ -463,6 +467,12 @@ function runTimesFor(runDate) {
   return { start: (row && row.run_time) || DEFAULT_START, end: (row && row.run_end) || DEFAULT_END };
 }
 // "7 PM" / "7:30 PM" from HH:MM.
+// 'HH:MM' minus N minutes → 'HH:MM' (for the confirm cutoff: 90 min before start).
+function hhmmMinus(hhmm, mins) {
+  const [h, m] = String(hhmm).split(':').map(Number);
+  const t = h * 60 + (m || 0) - mins;
+  return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+}
 function fmtClockLabel(hhmm) {
   const [h, m] = String(hhmm).split(':').map(Number);
   const ap = h < 12 ? 'AM' : 'PM', h12 = ((h + 11) % 12) + 1;
@@ -2128,7 +2138,7 @@ app.get('/checkin', requireLogin, (req, res) => {
     iAmTeam, iAmRegular, iOptedOut, iAutoRenew,
     viewerIsAdmin, canOperate, canSeeRoster,
     suspended: !!(a && a.suspended), suspendReason: (a && a.suspend_reason) || '',
-    myConfirmed, msg: req.query.msg || '', bannerVer: bannerVersion(),
+    myConfirmed, confirmBy: fmtClockLabel(hhmmMinus(runTimesFor(runDate).start, CONFIRM_CUTOFF_MINS)), msg: req.query.msg || '', bannerVer: bannerVersion(),
     cancelled: runIsCancelled(runDate),
     locked: runIsLocked(runDate),
     announcement: latestAnnouncement(),
@@ -3374,8 +3384,9 @@ app.post('/checkin/claim/:token', (req, res) => {
     return res.send(claimResultPage({ ok: false }));
   }
   // Convert the held offer into a real floor spot (clear the hold → they slide onto
-  // the floor positionally) and sign them in.
-  db.prepare('UPDATE checkins SET offered_at = NULL, claim_token = NULL WHERE id = ?').run(row.id);
+  // the floor positionally) and sign them in. Claiming IS confirming (they tapped "claim
+  // my spot") — the ✓ also shields them from the run-day confirm-or-release sweep.
+  db.prepare("UPDATE checkins SET offered_at = NULL, claim_token = NULL, confirmed_at = datetime('now') WHERE id = ?").run(row.id);
   audit(row.email, 'player', 'offer:claim', row.email);
   setSession(res, row.email);
   return res.send(claimResultPage({ ok: true, runLabel: runLabelFor(row.run_date), runDate: row.run_date, startLabel: runStartLabel(row.run_date) }));
@@ -4309,23 +4320,52 @@ function runStateSchedule() {
 }
 function autoRunState() {
   const { rd, openAt, closeAt } = runStateSchedule();
-  const now = Date.now();
-  // Auto-CLOSE + auto-PING at run-day 2 PM (once). Respects a host who already closed.
-  // The queue locks here (runIsLocked); the floor is pinged to confirm/release.
+  const now = schedNow();   // == Date.now() in prod; honours the TEST_NOW seam like the generic engine
+  // Confirm cutoff: CONFIRM_CUTOFF_MINS before the (host-editable) start — 7 PM for the default
+  // 8:30 run. Unconfirmed floor spots are RELEASED to the waitlist at the cutoff (owner rule).
+  const cutoffAt = new Date(rd + 'T' + runTimesFor(rd).start + ':00').getTime() - CONFIRM_CUTOFF_MINS * 60000;
+  const cutoffLabel = fmtClockLabel(hhmmMinus(runTimesFor(rd).start, CONFIRM_CUTOFF_MINS));
+  // RUN-DAY 9 AM CONFIRM PING (once) — push every unconfirmed floor player, deadline spelled out.
+  // Fires any time from 9 AM up to the cutoff (a late boot still pings; past the cutoff the sweep
+  // is the message).
+  if (now >= new Date(rd + 'T09:00:00').getTime() && now < cutoffAt
+      && getSetting('autoping_done') !== rd && !runIsCancelled(rd)) {
+    setSetting('autoping_done', rd);
+    const targets = partitionRun(rd).floorReal.filter(p => !p.guest && !p.confirmed_at).map(p => p.email);
+    if (targets.length) setImmediate(() => sendPush(targets, {
+      title: 'Confirm your spot for tonight',
+      body: `You're on the floor for ${runLabelFor(rd)}. Confirm by ${cutoffLabel} — unconfirmed spots go to the waitlist.`,
+      url: '/checkin', tag: 'confirm',
+    }));
+    audit('system', 'system', 'confirm:autoping', String(targets.length));
+    console.log(`[autoping] pinged ${targets.length} unconfirmed floor player(s) for ${rd}`);
+  }
+  // Auto-CLOSE at run-day 2 PM (once). Respects a host who already closed. The queue locks here.
   if (now >= closeAt) {
     if (getSetting('autoclose_done') !== rd) {
       setSetting('autoclose_done', rd);
       if (runIsOpen(rd)) { setRunOpen(rd, false); audit('system', 'system', 'run:autoclose', rd); console.log(`[autoclose] locked check-in for ${rd}`); }
-      // Auto-ping every unconfirmed floor player to confirm or release (replaces the old manual button).
-      if (!runIsCancelled(rd)) {
-        const targets = partitionRun(rd).floorReal.filter(p => !p.guest && !p.confirmed_at).map(p => p.email);
-        if (targets.length) setImmediate(() => sendPush(targets, {
-          title: 'Confirm your spot for tonight',
-          body: `You're on the floor for ${runLabelFor(rd)}. Tap to confirm you're coming — or Sit out to release your spot to the waitlist.`,
+    }
+    // CONFIRM-OR-RELEASE (once, at the cutoff): every unconfirmed floor player is removed and
+    // each freed spot is offered onward to the top waitlister (the same claim loop as any drop).
+    // Guests exempt — an operator vouched them in and they have no account to confirm from.
+    if (now >= cutoffAt && getSetting('confirmsweep_done') !== rd && !runIsCancelled(rd)) {
+      setSetting('confirmsweep_done', rd);
+      const drop = partitionRun(rd).floorReal.filter(p => !p.guest && !p.confirmed_at);
+      for (const p of drop) {
+        const offeree = offereeForFloorLeave(rd, p.email);
+        db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = 1').run(rd, p.email);
+        clearTeamAssignment(1, rd, p.email);
+        if (offeree) createOffer(rd, offeree, null, 1);
+      }
+      if (drop.length) {
+        setImmediate(() => sendPush(drop.map(p => p.email), {
+          title: 'Your spot was released',
+          body: `You didn't confirm for ${runLabelFor(rd)} by ${cutoffLabel}, so your spot went to the next in line.`,
           url: '/checkin', tag: 'confirm',
         }));
-        audit('system', 'system', 'confirm:autoping', String(targets.length));
-        console.log(`[autoping] pinged ${targets.length} unconfirmed floor player(s) for ${rd}`);
+        audit('system', 'system', 'confirm:sweep', String(drop.length));
+        console.log(`[confirmsweep] released ${drop.length} unconfirmed spot(s) for ${rd}`);
       }
     }
     // PENALTY ASSESS (once, after the run ENDS) — strike auto-seated no-shows. DARK until
@@ -4428,7 +4468,7 @@ function pkProgramActive() { return programActive(2); }
 // basketball run (RUN_DOW) never drags pickleball's date along. Weekly auto-schedule:
 // check-in reopens right after the run ends (PK_END_H), the roster locks at start
 // (PK_START_H), and the floor gets a confirm ping the night before (PK_PING_H, day before).
-const PK_DOW = 2, PK_START_H = 18, PK_END_H = 20, PK_PING_H = 20, PK_PING_DOW_OFFSET = 1, PK_LOCK = '17:30';
+const PK_DOW = 2, PK_START_H = 18, PK_END_H = 20, PK_PING_H = 9, PK_PING_DOW_OFFSET = 0, PK_LOCK = '17:30';   // confirm ping RUN-DAY 9 AM (owner rule)
 // Season opener (YYYY-MM-DD) or null — program-generic; the key comes from config.keys.seasonStart.
 function programSeasonStart(programId) { const s = getSetting(P(programId).config.keys.seasonStart); return (s && /^\d{4}-\d{2}-\d{2}$/.test(s)) ? s : null; }
 function pkSeasonStart() { return programSeasonStart(2); }
@@ -4819,7 +4859,7 @@ function autoRunStateFor(programId) {
   const now = schedNow();
   const hh = hhLocal;
   const openAt = new Date(shiftYmd(rd, cfg.openOffsetDays) + hh(cfg.endHour)).getTime();       // prior run's end → reopen
-  const pingAt = new Date(shiftYmd(rd, -cfg.pingDowOffset) + hh(cfg.pingHour)).getTime();       // the night before
+  const pingAt = new Date(shiftYmd(rd, -cfg.pingDowOffset) + hh(cfg.pingHour)).getTime();       // run-day 9 AM (offset 0 / hour 9 in config)
   const lockAt = new Date(rd + 'T' + cfg.lockTime + ':00').getTime();                           // roster locks before start
   const runUrl = P(programId).paths.run;
   // OPEN (once) — from the prior run's end through lock.
@@ -4834,18 +4874,45 @@ function autoRunStateFor(programId) {
       console.log(`[${cfg.logTag}-autoopen] opened ${cfg.logTag} check-in for ${rd} (auto-added ${added})`);
     }
   }
-  // CONFIRM PING (once) — the night before, ping unconfirmed floor to confirm or drop.
-  if (now >= pingAt && now < lockAt && getSetting(cfg.keys.autoping) !== rd) {
+  // Confirm cutoff (config.confirmCutoffMins before start): unconfirmed floor spots are RELEASED
+  // to the next in line (owner rule). null = no sweep for this program.
+  const cutoffAt = cfg.confirmCutoffMins != null ? new Date(rd + hh(cfg.startHour)).getTime() - cfg.confirmCutoffMins * 60000 : null;
+  const cutoffLabel = cutoffAt ? fmtClockLabel(hhmmMinus(`${cfg.startHour}:00`, cfg.confirmCutoffMins)) : '';
+  // CONFIRM PING (once) — run-day morning (config.pingHour), deadline spelled out. Stops firing
+  // once the cutoff has passed (the sweep is the message then).
+  if (now >= pingAt && now < (cutoffAt || lockAt) && getSetting(cfg.keys.autoping) !== rd) {
     setSetting(cfg.keys.autoping, rd);
     if (runOpenFor(programId, rd) && !runCancelledFor(programId, rd)) {
       const part = partitionFor(programId, rd);
       const floorRows = cfg.offerWindow ? part.floorReal : part.floor;
       const floor = floorRows.filter(p => !/@guest\.local$/.test(p.email) && !p.confirmed_at).map(p => p.email);
       if (floor.length) {
-        setImmediate(() => sendPush(floor, { title: cfg.copy.confirmTitle, body: cfg.copy.confirmBody(rd), url: runUrl, tag: `${cfg.logTag}confirm` }));
+        const body = cfg.copy.confirmBody(rd) + (cutoffLabel ? ` Confirm by ${cutoffLabel} — unconfirmed spots go to the waitlist.` : '');
+        setImmediate(() => sendPush(floor, { title: cfg.copy.confirmTitle, body, url: runUrl, tag: `${cfg.logTag}confirm` }));
         audit('system', 'system', `${cfg.logTag}:autoping`, String(floor.length));
         console.log(`[${cfg.logTag}-autoping] pinged ${floor.length} unconfirmed ${cfg.logTag} floor player(s) for ${rd}`);
       }
+    }
+  }
+  // CONFIRM-OR-RELEASE (once, at the cutoff): every unconfirmed floor player is removed via the
+  // same path as an operator Remove — simple programs auto-slide the next waitlister up (with the
+  // promotion push), offer-window programs offer the freed spot. Guests exempt (operator-vouched,
+  // no account to confirm from).
+  if (cutoffAt && cfg.keys.confirmsweep && now >= cutoffAt
+      && getSetting(cfg.keys.confirmsweep) !== rd && !runCancelledFor(programId, rd)) {
+    setSetting(cfg.keys.confirmsweep, rd);
+    const part = partitionFor(programId, rd);
+    const floorRows = cfg.offerWindow ? part.floorReal : part.floor;
+    const drop = floorRows.filter(p => !/@guest\.local$/.test(p.email) && !p.confirmed_at);
+    for (const p of drop) removeFromRun(programId, rd, String(p.email).toLowerCase(), null);
+    if (drop.length) {
+      setImmediate(() => sendPush(drop.map(p => p.email), {
+        title: 'Your spot was released',
+        body: `You didn't confirm for ${runLabelFor(rd)} by ${cutoffLabel}, so your spot went to the next in line.`,
+        url: runUrl, tag: `${cfg.logTag}confirm`,
+      }));
+      audit('system', 'system', `${cfg.logTag}:confirmsweep`, String(drop.length));
+      console.log(`[${cfg.logTag}-confirmsweep] released ${drop.length} unconfirmed spot(s) for ${rd}`);
     }
   }
   // LOCK (once) — at run start.
@@ -5039,16 +5106,23 @@ function runLeave(programId, req, res) {
 }
 // Operator pulls someone off the floor for THIS cycle (no sit-out recorded — an operator action,
 // not the player opting out). Same offer-vs-notify split as runLeave.
-function runRemove(programId, req, res) {
-  const base = P(programId).paths.run, cfg = P(programId).config;
-  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
-  const rd = programRunDate(programId), em = String(req.body.email || '').toLowerCase();
+// Take ONE player off a run's roster + hand their spot onward — the single removal path shared
+// by the operator Remove button and the confirm-or-release sweep. Offer-window programs offer
+// the freed spot (claim link); simple programs auto-slide the next waitlister up (with the
+// promotion push). req may be null (scheduler) — createOffer falls back to PUBLIC_URL.
+function removeFromRun(programId, rd, em, req = null) {
+  const cfg = P(programId).config;
   const offeree = cfg.offerWindow ? offereeForFloorLeave(rd, em, programId) : null;
   if (!cfg.offerWindow) notifyPromotionFor(programId, rd, em);
   db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = ?').run(rd, em, programId);
   clearTeamAssignment(programId, rd, em);   // off the floor → off any team
   setPartyDeclinedFor(programId, rd, em);   // and out of any party so a group check-in can't re-seat them (P2-2)
   if (offeree) createOffer(rd, offeree, req, programId);
+}
+function runRemove(programId, req, res) {
+  const base = P(programId).paths.run;
+  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  removeFromRun(programId, programRunDate(programId), String(req.body.email || '').toLowerCase(), req);
   res.redirect(base);
 }
 // Generic offer-claim for offerWindow programs mounted via mountRunProgram — the piece that
@@ -5075,7 +5149,7 @@ function runClaimPost(programId, req, res) {
   if (!row || row.offered_at == null || row.offered_at < Date.now() - OFFER_WINDOW_MS) {
     return cfg.static ? res.redirect(base) : res.send(claimResultPage({ ok: false }));
   }
-  db.prepare('UPDATE checkins SET offered_at = NULL, claim_token = NULL WHERE id = ?').run(row.id);
+  db.prepare("UPDATE checkins SET offered_at = NULL, claim_token = NULL, confirmed_at = datetime('now') WHERE id = ?").run(row.id);   // claiming IS confirming
   audit(row.email, 'player', 'offer:claim', row.email);
   if (cfg.static) return res.redirect(base);        // demo: synthetic player slides onto the floor
   setSession(res, row.email);                        // real program: sign the claimer in
@@ -5282,6 +5356,7 @@ function runGetPage(programId, req, res) {
     cap: cfg.cap, waitlistCap: cfg.waitlist, going: floor.length + offered.length, waiting: wait.length,
     canOperate: g.canOperate, isAdmin: g.admin, myState, myWaitPos, floorPlayers: floor, offeredPlayers: offered, waitPlayers: wait, hidden: !programActive(programId),
     myConfirmed, iAutoRenew,
+    confirmBy: cfg.confirmCutoffMins != null ? fmtClockLabel(hhmmMinus(`${cfg.startHour}:00`, cfg.confirmCutoffMins)) : '',
     bannerSrc: bannerSrcFor(programId), bannerVer: bannerVersionFor(programId),
     tipoff: startEpochFor(programId, rd), announcement: latestAnnouncementFor(programId),
     season: opener || '', seasonWeekday: opener ? runWeekday(opener) : '', seasonLabel: opener ? runLabelFor(opener) : '',
@@ -5566,8 +5641,9 @@ const PROGRAM_DEFS = {
       cap: PK_CAP, waitlist: PK_WAIT, prereg: 0,
       dow: PK_DOW, startHour: PK_START_H, endHour: PK_END_H,         // Tue 6–8 PM
       pingHour: PK_PING_H, pingDowOffset: PK_PING_DOW_OFFSET, lockTime: PK_LOCK,
+      confirmCutoffMins: 90,   // unconfirmed floor released 90 min before start (4:30 PM for the 6 PM run)
       keys: { runDate: 'pk_run_date', runBase: 'pk_run_base', seasonStart: 'pk_season_start',
-              autoopen: 'pk_autoopen_done', autoping: 'pk_autoping_done', autolock: 'pk_autolock_done', arassess: 'pk_arassess_done' },  // app_settings keys
+              autoopen: 'pk_autoopen_done', autoping: 'pk_autoping_done', autolock: 'pk_autolock_done', arassess: 'pk_arassess_done', confirmsweep: 'pk_confirmsweep_done' },  // app_settings keys
       logTag: 'pk', openOffsetDays: -7,   // audit/push/log prefix; reopen openOffsetDays before run day at endHour
       copy: {
         openTitle: 'Pickleball check-in is open',
@@ -5606,9 +5682,10 @@ const PROGRAM_DEFS = {
     config: {
       cap: 21, waitlist: 6, prereg: 0,
       dow: 5, startHour: 18, endHour: 21,          // Fri 6–9 PM (PLACEHOLDER — owner to finalize 6:30–9:30)
-      pingHour: 20, pingDowOffset: 1, lockTime: '18:00',   // confirm ping Thu 8 PM, roster locks 6 PM
+      pingHour: 9, pingDowOffset: 0, lockTime: '18:00',    // confirm ping RUN-DAY 9 AM (owner rule), roster locks 6 PM
+      confirmCutoffMins: 90,                               // unconfirmed floor released 90 min before start (4:30 PM for a 6 PM run)
       keys: { runDate: 'vb_run_date', runBase: 'vb_run_base', seasonStart: 'vb_season_start',
-              autoopen: 'vb_autoopen_done', autoping: 'vb_autoping_done', autolock: 'vb_autolock_done', arassess: 'vb_arassess_done' },
+              autoopen: 'vb_autoopen_done', autoping: 'vb_autoping_done', autolock: 'vb_autolock_done', arassess: 'vb_arassess_done', confirmsweep: 'vb_confirmsweep_done' },
       logTag: 'vb', openOffsetDays: -7,
       copy: {
         openTitle: 'Volleyball check-in is open',
