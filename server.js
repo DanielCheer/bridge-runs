@@ -2254,7 +2254,7 @@ app.get('/u/:id/card', requireLogin, (req, res) => {
   if (!p || (p.status !== 'approved' && !gate.viewerIsAdmin)) return res.status(404).send('');
   const canContact = gate.viewerIsAdmin || !!(gate.a && gate.a.is_team);
   const canDM = canMessage(req.userEmail, gate.a, p);   // hide Message when the server would block it (block / minor)
-  res.send(profileCard({ p, stats: attendanceStats(p.email), canContact, canDM, isSelf: p.email === req.userEmail, minor: isMinor(p), showRoles: gate.viewerIsAdmin }));
+  res.send(profileCard({ p, stats: attendanceStats(p.email), canContact, canDM, isSelf: p.email === req.userEmail, minor: isMinor(p), showRoles: gate.viewerIsAdmin, following: isFollowing(req.userEmail, p.email), blocked: blockedPair(req.userEmail, p.email) }));
 });
 
 app.get('/u/:id', requireLogin, (req, res) => {

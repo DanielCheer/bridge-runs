@@ -657,6 +657,22 @@ const MINOR_BADGE = '<span class="bdg minor" title="Under 18">⚠ Minor</span>';
 // name — everyone sees it for awareness. The full "Minor" tag + all other roles live on the profile.
 const MINOR_STAR = '<span class="minast" title="Under 18" aria-label="under 18">*</span>';
 
+// Quick-look profile popup — SHARED include for the chat pages (the check-in + run pages carry
+// their own inline copy beside the who's-going sheet). Tapping a sender name opens the card in
+// place; demo senders resolve through the demo card route.
+const pvSheet = () => `<div id="pvwrap" class="wgwrap pvwrap"><div class="wgscrim" onclick="pvClose()"></div>
+      <div class="wgsheet pvsheet" role="dialog" aria-modal="true" aria-label="Player profile">
+        <div class="wgsheet-h"><b>Profile</b><button class="wgx" type="button" onclick="pvClose()" aria-label="Close">${IC_CLOSE}</button></div>
+        <div class="wgsheet-b pvbody"><div class="pcload">Loading…</div></div>
+      </div></div>`;
+const pvScript = () => `<script>
+      window.pvOpen=function(id){var w=document.getElementById('pvwrap');if(!w)return;var b=w.querySelector('.pvbody');if(b)b.innerHTML='<div class="pcload">Loading…</div>';w.classList.add('open');document.body.style.overflow='hidden';
+        if(window.fetch)fetch('/u/'+id+'/card',{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.ok?r.text():Promise.reject();}).then(function(h){if(b)b.innerHTML=h;}).catch(function(){if(b)b.innerHTML='<div class="pcload">Couldn\\u2019t load that profile.</div>';});};
+      window.pvOpenDemo=function(i){var w=document.getElementById('pvwrap');if(!w)return;var b=w.querySelector('.pvbody');if(b)b.innerHTML='<div class="pcload">Loading…</div>';w.classList.add('open');document.body.style.overflow='hidden';
+        if(window.fetch)fetch('/demo/u/'+i+'/card',{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.ok?r.text():Promise.reject();}).then(function(h){if(b)b.innerHTML=h;}).catch(function(){if(b)b.innerHTML='<div class="pcload">Couldn\\u2019t load that profile.</div>';});};
+      window.pvClose=function(){var w=document.getElementById('pvwrap');if(!w)return;w.classList.remove('open');var wg=document.getElementById('wgwrap');if(!(wg&&wg.classList.contains('open')))document.body.style.overflow='';};
+    </script>`;
+
 // Role badges live ONLY on profiles now, and only an ADMIN viewer sees them (owner rule:
 // lists stay clean; roles aren't public). The red Minor tag is the one exception — every
 // viewer sees it on a profile (awareness), and lists show the MINOR_STAR asterisk.
@@ -2434,6 +2450,8 @@ export function chatPage({ me, chat, runDate = '', hours = '8:30–10:30 PM', dm
     </div>
     ${chatFragment(chat)}
     ${membersSheet}
+    ${pvSheet()}
+    ${pvScript()}
     <script>
       // Members bottom-sheet. Open is instant; close plays a slide-down (unless
       // reduced-motion / noanim). Mirrors the who's-going overlay wgOpen/wgClose.
@@ -2481,6 +2499,8 @@ export function runChatPage({ me, chat, program = 2, theme = 'pk', sport = 'Pick
     </div>
     ${chatFragment({ ...chat, base, pollPage, placeholder: `Message the ${low} run`, emptyName: `${sport} Chat`, emptyMsg: `This is the start of the ${low} room — say hi ${sportEmoji}` })}
     ${membersSheet}
+    ${pvSheet()}
+    ${pvScript()}
     <script>
       window.memOpen=function(){var w=document.getElementById('memwrap');if(w){window.__ovPrev=document.activeElement;w.classList.add('open');document.body.style.overflow='hidden';var sh=w.querySelector('.wgsheet');if(sh){sh.setAttribute('tabindex','-1');try{sh.focus();}catch(e){}}}};
       window.memClose=function(){var w=document.getElementById('memwrap');if(!w)return;var sh=w.querySelector('.wgsheet');
@@ -2506,28 +2526,36 @@ export function demoProfileCard({ name = '', idx = 1, minor = false }) {
     : '<span class="bdg reg">Regular</span>';
   const stats = { total: 24 - idx, season: ((idx * 3) % 9) + 2, streak: idx % 4 };   // deterministic, plausible
   const POS = ['PG', 'SG', 'SF', 'PF', 'C'];
-  const row = (k, v) => `<div class="pcrow"><span class="pck">${esc(k)}</span><span class="pcv">${v}</span></div>`;
-  return `<div class="pctop"><div class="pcav">${avatarInner(`demo-${idx}@demo.local`, name)}</div>
-      <div class="pcid"><div class="pcnm">${esc(name)}</div><div class="pcbadge">${minor ? MINOR_BADGE : ''}${role}</div></div></div>
+  return `<div class="pchero"><div class="pcav pcav-xl">${avatarInner(`demo-${idx}@demo.local`, name)}</div>
+      <div class="pcnm pcnm-xl">${esc(name)}</div><div class="pcbadge">${minor ? MINOR_BADGE : ''}${role}</div><div class="pcsince">${esc(POS[idx % POS.length])} · Member since Mar 2026</div></div>
     <div class="pcstats"><div><b>${stats.total}</b><span>Games</span></div><div><b>${stats.season}</b><span>Season</span></div><div><b>${stats.streak}</b><span>Streak</span></div></div>
-    ${row('Position', esc(POS[idx % POS.length]))}
-    ${row('Member since', 'Mar 2026')}
-    <div class="pcbtns"><button class="btn primary sm" type="button" onclick="var on=this.dataset.on;this.dataset.on=on?'':'1';this.textContent=on?'＋ Follow':'✓ Following';">＋ Follow</button></div>`;
+    <a class="pact primary" href="/demo/chat"><span class="pic">💬</span>Send a Message<span class="pchev">›</span></a>
+    <button type="button" class="pact" onclick="var b=this,on=b.dataset.on;b.dataset.on=on?'':'1';b.querySelector('.pl').textContent=on?'Follow':'✓ Following';"><span class="pic">👥</span><span class="pl">Follow</span><span class="pchev">›</span></button>`;
 }
 
-export function profileCard({ p, stats, canContact = false, canDM = true, isSelf = false, minor = false, showRoles = false }) {
-  // Minor tag: EVERYONE sees it (awareness). Role badges: ADMIN viewers only.
+// Quick-look profile card — ACTION-SHEET layout (owner spec, Javelin-style): big centered
+// avatar + name, then stacked action rows — Send a Message (primary), View Profile, Follow
+// toggle, Block. Minor tag for every viewer; role badges admin-only. Contact info stays on the
+// full profile (operator rule) — the card is actions, not data.
+export function profileCard({ p, stats, canContact = false, canDM = true, isSelf = false, minor = false, showRoles = false, following = false, blocked = false }) {
   const rb = (minor ? MINOR_BADGE : '') + (showRoles ? (p.is_host ? '<span class="bdg host">★ Host</span>' : p.is_team ? '<span class="bdg team">◆ Team</span>' : p.is_regular ? '<span class="bdg core">★ Pillar</span>' : '<span class="bdg reg">Regular</span>') : '');
-  const positions = (p.position || '').split(',').filter(Boolean).join(' · ');
   const memberSince = stats.first ? fmtMonthYear(stats.first) : null;
-  const row = (k, v) => `<div class="pcrow"><span class="pck">${esc(k)}</span><span class="pcv">${v}</span></div>`;
-  return `<div class="pctop"><div class="pcav">${avatarInner(p.email, p.full_name)}</div>
-      <div class="pcid"><div class="pcnm">${esc(p.full_name)}</div><div class="pcbadge">${rb}</div></div></div>
+  const chev = '<span class="pchev">›</span>';
+  const post = (path) => `fetch('${path}',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'fetch'},body:'id=${p.id}',credentials:'same-origin'})`;
+  const actions = isSelf
+    ? `<a class="pact" href="/profile"><span class="pic">👤</span>Edit profile${chev}</a>`
+    : [
+      canDM ? `<a class="pact primary" href="/messages/${p.id}"><span class="pic">💬</span>Send a Message${chev}</a>` : '',
+      `<a class="pact" href="/u/${p.id}"><span class="pic">👤</span>View Profile${chev}</a>`,
+      blocked
+        ? `<button type="button" class="pact danger" onclick="${post('/friends/unblock')};this.outerHTML='<div class=\\'pact\\'>Unblocked ✓</div>';"><span class="pic">🚫</span>Unblock${chev}</button>`
+        : `<button type="button" class="pact" data-on="${following ? '1' : ''}" onclick="var b=this,on=b.dataset.on;fetch('/friends/'+(on?'unfollow':'follow'),{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'fetch'},body:'id=${p.id}',credentials:'same-origin'});b.dataset.on=on?'':'1';b.querySelector('.pl').textContent=on?'Follow':'✓ Following';"><span class="pic">👥</span><span class="pl">${following ? '✓ Following' : 'Follow'}</span>${chev}</button>`
+        + `<button type="button" class="pact danger" onclick="if(confirm('Block this member? You will not see or message each other.')){${post('/friends/block')};if(window.pvClose)pvClose();}"><span class="pic">🚫</span>Block user${chev}</button>`,
+    ].join('');
+  return `<div class="pchero"><div class="pcav pcav-xl">${avatarInner(p.email, p.full_name)}</div>
+      <div class="pcnm pcnm-xl">${esc(p.full_name)}</div>${rb ? `<div class="pcbadge">${rb}</div>` : ''}${memberSince ? `<div class="pcsince">Member since ${esc(memberSince)}</div>` : ''}</div>
     <div class="pcstats"><div><b>${stats.total}</b><span>Games</span></div><div><b>${stats.season}</b><span>Season</span></div><div><b>${stats.streak}</b><span>Streak</span></div></div>
-    ${positions ? row('Position', esc(positions)) : ''}
-    ${memberSince ? row('Member since', esc(memberSince)) : ''}
-    ${canContact ? row('Contact', `<a href="tel:${esc(p.phone)}">${esc(p.phone)}</a> · <a href="mailto:${esc(p.email)}">${esc(p.email)}</a>`) : ''}
-    <div class="pcbtns">${isSelf ? `<a class="btn ghost sm" href="/profile">Edit profile</a>` : (canDM ? `<a class="btn primary sm" href="/messages/${p.id}">Message</a>` : '')}<a class="btn ghost sm" href="/u/${p.id}">Full profile →</a></div>`;
+    ${actions}`;
 }
 
 export function profilePage({ p, stats, isSelf = false, canContact = false, canDM = true, rel = 'none', following = false, runDate = '', hours = '8:30–10:30 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null, back = '/chat', minor = false, showRoles = false }) {
@@ -3877,7 +3905,10 @@ function groupMsgBody({ me, msgs = [], reactions = new Map(), parents = new Map(
       const nm = nameFor(m.from_email);
       const label = `<span class="gav">${avatarInner(m.from_email, nm)}</span>${esc(nm)}`;
       const sid = idFor(m.from_email);
-      head = sid ? `<a class="mname" href="/u/${sid}">${label}</a>` : `<div class="mname">${label}</div>`;
+      const dIdx = /^demo-(\d+)@demo\.local$/.exec(m.from_email);
+      head = sid ? `<a class="mname" href="/u/${sid}" onclick="if(window.pvOpen){pvOpen(${sid});return false;}">${label}</a>`
+        : dIdx ? `<a class="mname" href="#" onclick="if(window.pvOpenDemo){pvOpenDemo(${Number(dIdx[1])});}return false;">${label}</a>`
+        : `<div class="mname">${label}</div>`;
     }
 
     let stub = '';
