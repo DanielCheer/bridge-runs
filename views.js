@@ -2495,6 +2495,26 @@ export function runChatPage({ me, chat, program = 2, theme = 'pk', sport = 'Pick
 // ---------- PROFILE (view another player) ----------
 // Compact profile card — served as a fragment for the quick-look popup (tap a name in the
 // who's-going sheet). Just the essentials + a Message / Full-profile jump; no page chrome.
+// DEMO-ONLY quick-look card for synthetic @demo.local players (the demo run is admin-only):
+// looks and feels like the live card — avatar, role badge, stats, minor tag, a Follow toggle —
+// but is generated from the seeded roster row. Nothing persists (demo players have no accounts
+// by design); the Follow button toggles client-side so the showcase reads as live.
+export function demoProfileCard({ name = '', idx = 1, minor = false }) {
+  const role = idx === 1 ? '<span class="bdg host">★ Host</span>'
+    : (idx === 2 || idx === 6) ? '<span class="bdg team">◆ Team</span>'
+    : idx === 3 ? '<span class="bdg core">★ Pillar</span>'
+    : '<span class="bdg reg">Regular</span>';
+  const stats = { total: 24 - idx, season: ((idx * 3) % 9) + 2, streak: idx % 4 };   // deterministic, plausible
+  const POS = ['PG', 'SG', 'SF', 'PF', 'C'];
+  const row = (k, v) => `<div class="pcrow"><span class="pck">${esc(k)}</span><span class="pcv">${v}</span></div>`;
+  return `<div class="pctop"><div class="pcav">${avatarInner(`demo-${idx}@demo.local`, name)}</div>
+      <div class="pcid"><div class="pcnm">${esc(name)}</div><div class="pcbadge">${minor ? MINOR_BADGE : ''}${role}</div></div></div>
+    <div class="pcstats"><div><b>${stats.total}</b><span>Games</span></div><div><b>${stats.season}</b><span>Season</span></div><div><b>${stats.streak}</b><span>Streak</span></div></div>
+    ${row('Position', esc(POS[idx % POS.length]))}
+    ${row('Member since', 'Mar 2026')}
+    <div class="pcbtns"><button class="btn primary sm" type="button" onclick="var on=this.dataset.on;this.dataset.on=on?'':'1';this.textContent=on?'＋ Follow':'✓ Following';">＋ Follow</button></div>`;
+}
+
 export function profileCard({ p, stats, canContact = false, canDM = true, isSelf = false, minor = false, showRoles = false }) {
   // Minor tag: EVERYONE sees it (awareness). Role badges: ADMIN viewers only.
   const rb = (minor ? MINOR_BADGE : '') + (showRoles ? (p.is_host ? '<span class="bdg host">★ Host</span>' : p.is_team ? '<span class="bdg team">◆ Team</span>' : p.is_regular ? '<span class="bdg core">★ Pillar</span>' : '<span class="bdg reg">Regular</span>') : '');
@@ -2997,7 +3017,12 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
   const rmForm = (p) => `<form method="POST" action="${runBase}/remove" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn leave sm" type="submit">Remove</button></form>`;
   // Tappable name → profile popup (reuses the shared pvOpen + /u/:id/card); guests (no
   // applicant_id) stay plain text. Role badge mirrors the basketball roster.
-  const nameLink = (p, inner) => (p.applicant_id && !/@guest\.local$/.test(p.email)) ? `<a class="lrlink" href="/u/${p.applicant_id}" onclick="if(window.pvOpen){pvOpen(${p.applicant_id});return false;}">${inner}</a>` : inner;
+  const demoIdx = (em) => { const m = /^demo-(\d+)@demo\.local$/.exec(em); return m ? Number(m[1]) : 0; };
+  const nameLink = (p, inner) => (p.applicant_id && !/@guest\.local$/.test(p.email))
+    ? `<a class="lrlink" href="/u/${p.applicant_id}" onclick="if(window.pvOpen){pvOpen(${p.applicant_id});return false;}">${inner}</a>`
+    // Demo players have no account — their names open the same profile popup via the demo card
+    // route, so the showcase feels live (profile, role, stats, Follow) without real rows.
+    : (demoMode && demoIdx(p.email) ? `<a class="lrlink" href="#" onclick="if(window.pvOpenDemo){pvOpenDemo(${demoIdx(p.email)});}return false;">${inner}</a>` : inner);
   // Auto-renew penalty badge (Phase 5.5, operators only): an amber ⏸/⚠ chip + a one-tap ✓ Forgive for
   // any floor player carrying strikes or a pause. penaltyState is {} for members + for programs that
   // never enabled the penalty → zero bytes there (pk/basketball stay byte-identical).
@@ -3212,6 +3237,9 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
       // reveals the who's-going sheet still underneath.
       window.pvOpen=function(id){var w=document.getElementById('pvwrap');if(!w)return;var b=w.querySelector('.pvbody');if(b)b.innerHTML='<div class="pcload">Loading…</div>';w.classList.add('open');document.body.style.overflow='hidden';
         if(window.fetch)fetch('/u/'+id+'/card',{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.ok?r.text():Promise.reject();}).then(function(h){if(b)b.innerHTML=h;}).catch(function(){if(b)b.innerHTML='<div class="pcload">Couldn\\u2019t load that profile.</div>';});};
+      // Demo-run variant: synthetic players have no /u id — their card comes from /demo/u/:i/card.
+      window.pvOpenDemo=function(i){var w=document.getElementById('pvwrap');if(!w)return;var b=w.querySelector('.pvbody');if(b)b.innerHTML='<div class="pcload">Loading…</div>';w.classList.add('open');document.body.style.overflow='hidden';
+        if(window.fetch)fetch('/demo/u/'+i+'/card',{credentials:'same-origin',headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.ok?r.text():Promise.reject();}).then(function(h){if(b)b.innerHTML=h;}).catch(function(){if(b)b.innerHTML='<div class="pcload">Couldn\\u2019t load that profile.</div>';});};
       window.pvClose=function(){var w=document.getElementById('pvwrap');if(!w)return;w.classList.remove('open');var wg=document.getElementById('wgwrap');if(!(wg&&wg.classList.contains('open')))document.body.style.overflow='';};
       // Countdown ticker for the next-run banner (mirrors the check-in tip-off ticker).
       function pkTick(){var el=document.querySelector('.gymbanner .tick');if(!el)return;var tip=+el.getAttribute('data-tip');var diff=tip-Date.now();

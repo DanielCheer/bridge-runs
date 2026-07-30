@@ -21,7 +21,7 @@ import {
 import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, exportPage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap, setProgramMeta,
-  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage, runPage, runsPage, pkJoinPage, runJoinPage, pastRunPage, waiverPage,
+  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, demoProfileCard, pickleballPage, runPage, runsPage, pkJoinPage, runJoinPage, pastRunPage, waiverPage,
   friendsPage, friendsSearchFragment, chatLockedPage, runChatPage,
 } from './views.js';
 
@@ -5597,6 +5597,15 @@ app.post('/admin/demo/startqueue', requireAdmin, (req, res) => {
   for (let i = 0; i < AUTO_RENEWERS; i++) ins.run(rd, `demo-${i + 1}@demo.local`, DEMO_NAMES[i], pid, i);
   audit(req.userEmail, 'admin', 'demo:startqueue', `${rd} +${AUTO_RENEWERS} auto`);
   res.redirect(P(pid).paths.run);
+});
+// Synthetic profile card for a DEMO player — roster names are tappable like live (profile, role,
+// stats, a client-side Follow toggle) but nothing persists: demo players have no accounts by
+// design. Admin-only, same as every demo surface.
+app.get('/demo/u/:i/card', requireAdmin, (req, res) => {
+  const i = Number(req.params.i) || 0;
+  const row = db.prepare('SELECT name, dob FROM checkins WHERE program_id = ? AND email = ?').get(DEMO_PID, `demo-${i}@demo.local`);
+  if (!row) return res.status(404).send('');
+  res.send(demoProfileCard({ name: row.name, idx: i, minor: isMinor(row) }));
 });
 // Tear the demo down — remove every synthetic row + its run state so nothing lingers.
 app.post('/admin/demo/clear', requireAdmin, (req, res) => {
