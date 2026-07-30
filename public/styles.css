@@ -803,7 +803,7 @@ ol.ig li b{font-weight:700}
 .pinned>summary{font-family:var(--head);font-weight:800;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:9px 12px;cursor:pointer;list-style:none;-webkit-tap-highlight-color:transparent}
 .pinned>summary::-webkit-details-marker{display:none}
 .pinrow{display:flex;align-items:center;gap:4px;border-top:1px solid var(--line-soft);padding:0 4px 0 12px}
-.pinjump{flex:1;min-width:0;text-align:left;background:none;border:none;padding:9px 0;font-size:13px;color:var(--ink);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;-webkit-tap-highlight-color:transparent}
+.pinjump{flex:1;min-width:0;text-align:left;background:none;border:none;padding:9px 0;font-size:13px;line-height:1.45;color:var(--ink);cursor:pointer;overflow-wrap:anywhere;-webkit-tap-highlight-color:transparent}
 .pinjump b{font-weight:700}.pinjump span{color:var(--muted)}
 .pinx-f{margin:0}
 .pinx{background:none;border:none;color:var(--muted);padding:7px;cursor:pointer;display:flex;-webkit-tap-highlight-color:transparent}

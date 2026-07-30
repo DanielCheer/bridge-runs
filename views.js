@@ -3128,16 +3128,21 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
     const partyIdx = new Map();
     for (const p of floorPlayers) if (p.group_id && !partyIdx.has(p.group_id)) partyIdx.set(p.group_id, (partyIdx.size % 6) + 1);
     const pdot = (em) => { const p = floorPlayers.find(x => x.email === em); const i = p && p.group_id ? partyIdx.get(p.group_id) : 0; return i ? `<span class="pdot pd${i}" title="Checked in as a group"></span>` : ''; };
+    // Tappable like every roster: real players open the profile popup, demo players the demo card.
+    const nameCell = (em) => { const p = floorPlayers.find(x => x.email === em); return p ? nameLink(p, nameOf(em)) : nameOf(em); };
     const myTeam = (teamRows.find(r => r.email === email) || {}).team_no || 0;
     const onFloor = floorPlayers.some(p => p.email === email);
     const cols = [];
+    const teamCount = {};   // per-team sizes, reused by the Unassigned quick-assign buttons
     for (let n = 1; n <= teamsCfg.count; n++) {
       const mem = teamRows.filter(r => r.team_no === n);
-      const canJoin = teamsOpen && onFloor && teamsCfg.selfServe && myTeam !== n && mem.length < teamsCfg.size;
-      cols.push(`<div style="flex:1;min-width:118px;border:1px solid var(--line);border-radius:12px;padding:10px;background:var(--card)"><div style="font-weight:800;margin-bottom:6px">Team ${n} <span style="color:var(--muted);font-weight:600">${mem.length}/${teamsCfg.size}</span></div>${mem.map(r => `<div style="display:flex;align-items:center;gap:6px;padding:3px 0">${pdot(r.email)}<span style="flex:1">${nameOf(r.email)}${r.email === email ? ' <span class="tag">You</span>' : ''}</span>${canOperate ? `<form method="POST" action="${runBase}/team/assign" style="margin:0"><input type="hidden" name="email" value="${esc(r.email)}"><input type="hidden" name="team" value="0"><button class="btn ghost sm" type="submit" title="Unassign">×</button></form>` : ''}</div>`).join('') || '<div style="color:var(--muted)">—</div>'}${canJoin ? `<form method="POST" action="${runBase}/team/join" style="margin:6px 0 0"><input type="hidden" name="team" value="${n}"><button class="btn sm" type="submit">${myTeam ? 'Switch here' : 'Join'}</button></form>` : ''}</div>`);
+      teamCount[n] = mem.length;
+      const full = mem.length >= teamsCfg.size;
+      const canJoin = teamsOpen && onFloor && teamsCfg.selfServe && myTeam !== n && !full;
+      cols.push(`<div style="flex:1;min-width:118px;border:1px solid var(--line);border-radius:12px;padding:10px;background:var(--card)${full ? ';opacity:.55' : ''}"><div style="font-weight:800;margin-bottom:6px">Team ${n} <span style="color:var(--muted);font-weight:600">${mem.length}/${teamsCfg.size}${full ? ' · FULL' : ''}</span></div>${mem.map(r => `<div style="display:flex;align-items:center;gap:6px;padding:3px 0">${pdot(r.email)}<span style="flex:1">${nameCell(r.email)}${r.email === email ? ' <span class="tag">You</span>' : ''}</span>${canOperate ? `<form method="POST" action="${runBase}/team/assign" style="margin:0"><input type="hidden" name="email" value="${esc(r.email)}"><input type="hidden" name="team" value="0"><button class="btn ghost sm" type="submit" title="Unassign">×</button></form>` : ''}</div>`).join('') || '<div style="color:var(--muted)">—</div>'}${canJoin ? `<form method="POST" action="${runBase}/team/join" style="margin:6px 0 0"><input type="hidden" name="team" value="${n}"><button class="btn sm" type="submit">${myTeam ? 'Switch here' : 'Join'}</button></form>` : ''}</div>`);
     }
     const unassigned = floorPlayers.filter(p => !assigned.has(p.email) && !/@guest\.local$/.test(p.email));
-    const ops = canOperate ? `<form method="POST" action="${runBase}/team/fill" style="margin:10px 0 0"><button class="btn sm" type="submit">⚖ Auto-fill teams</button></form>${unassigned.length ? `<div class="subh" style="margin-top:10px">Unassigned · ${unassigned.length}</div>${unassigned.map(p => `<div style="display:flex;align-items:center;gap:6px;padding:3px 0">${pdot(p.email)}<span style="flex:1">${esc(p.name)}</span>${Array.from({ length: teamsCfg.count }, (_, i) => `<form method="POST" action="${runBase}/team/assign" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><input type="hidden" name="team" value="${i + 1}"><button class="btn ghost sm" type="submit">${i + 1}</button></form>`).join('')}</div>`).join('')}` : ''}` : '';
+    const ops = canOperate ? `<form method="POST" action="${runBase}/team/fill" style="margin:10px 0 0"><button class="btn sm" type="submit">⚖ Auto-fill teams</button></form>${unassigned.length ? `<div class="subh" style="margin-top:10px">Unassigned · ${unassigned.length}</div>${unassigned.map(p => `<div style="display:flex;align-items:center;gap:6px;padding:3px 0">${pdot(p.email)}<span style="flex:1">${nameCell(p.email)}</span>${Array.from({ length: teamsCfg.count }, (_, i) => `<form method="POST" action="${runBase}/team/assign" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><input type="hidden" name="team" value="${i + 1}"><button class="btn ghost sm" type="submit"${teamCount[i + 1] >= teamsCfg.size ? ' disabled style="opacity:.35"' : ''}>${i + 1}</button></form>`).join('')}</div>`).join('')}` : ''}` : '';
     const mine = myTeam ? `<form method="POST" action="${runBase}/team/leave" style="margin:10px 0 0"><button class="btn ghost sm" type="submit">Leave my team</button></form>` : '';
     return `<div class="infosec teamspanel" style="margin-top:20px"><div class="card"><div class="clab">Teams</div>${teamsOpen ? '' : '<p class="tally-note" style="color:var(--muted);margin:6px 0 10px">Teams open once the roster locks.</p>'}<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">${cols.join('')}</div>${mine}${ops}</div></div>`;
   })();
@@ -3152,7 +3157,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
     if (pd.party) {
       const p = pd.party;
       const rows = p.members.map(m => `<div style="display:flex;align-items:center;gap:6px;padding:3px 0">
-          <span style="flex:1">${esc(m.name)}${m.minor ? MINOR_STAR : ''}</span>${m.checkedIn ? '<span class="tag" style="background:#2f7169;color:#fff">✓ In</span>' : ''}</div>`).join('');
+          <span style="flex:1">${m.id ? `<a class="lrlink" href="/u/${m.id}" onclick="if(window.pvOpen){pvOpen(${m.id});return false;}">${esc(m.name)}${m.minor ? MINOR_STAR : ''}</a>` : esc(m.name) + (m.minor ? MINOR_STAR : '')}</span>${m.checkedIn ? '<span class="tag" style="background:#2f7169;color:#fff">✓ In</span>' : ''}</div>`).join('');
       const allIn = p.members.every(m => m.checkedIn);
       const checkinBtn = (isOpen && !cancelled && !allIn && !p.tooBig)
         ? `<form class="swapform" method="POST" action="${runBase}/party/checkin" style="margin:0"><button class="btn primary" type="submit">✓ Check in my party (${p.members.length})</button></form>` : '';
@@ -3927,7 +3932,7 @@ const pinnedBar = (pinned = [], pinnedNames = new Map(), canPin = false, base = 
   if (!pinned.length) return '';
   const rows = pinned.map(p => {
     const who = esc(pinnedNames.get(p.from_email) || p.from_email);
-    const txt = p.body ? esc(p.body.slice(0, 90)) : (p.audio ? '🎤 Voice message' : p.video ? '🎥 Video' : p.image ? '📷 Photo' : '📌 Pinned');
+    const txt = p.body ? esc(p.body) : (p.audio ? '🎤 Voice message' : p.video ? '🎥 Video' : p.image ? '📷 Photo' : '📌 Pinned');
     const unpin = canPin ? `<form method="POST" action="${base}/pin" class="pinx-f"><input type="hidden" name="message_id" value="${p.id}"><button type="submit" class="pinx" aria-label="Unpin">${IC_CLOSE}</button></form>` : '';
     return `<div class="pinrow"><button type="button" class="pinjump" data-jump="${p.id}"><b>${who}</b> <span>${txt}</span></button>${unpin}</div>`;
   }).join('');
