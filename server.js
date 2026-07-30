@@ -21,7 +21,7 @@ import {
 import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, exportPage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap, setProgramMeta,
-  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage, runPage, runsPage, pkJoinPage, runJoinPage, waiverPage,
+  STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, pickleballPage, runPage, runsPage, pkJoinPage, runJoinPage, pastRunPage, waiverPage,
   friendsPage, friendsSearchFragment, chatLockedPage, runChatPage,
 } from './views.js';
 
@@ -871,17 +871,18 @@ const stmtChatMsgs = db.prepare('SELECT * FROM ( SELECT * FROM group_messages WH
 const stmtChatOlder = db.prepare('SELECT * FROM ( SELECT * FROM group_messages WHERE id < ? AND program_id = ? ORDER BY id DESC LIMIT 200 ) ORDER BY id ASC');
 // Member roster: an APPLY program (basketball) lists every approved player; an OPT-IN program
 // (pickleball) lists only those who joined it (program_membership). Same columns + sort either way.
-const stmtChatMembersAll = db.prepare(`SELECT id, full_name, email, is_host, is_team, is_regular, avatar
+const stmtChatMembersAll = db.prepare(`SELECT id, full_name, email, is_host, is_team, is_regular, avatar, dob
     FROM applicants WHERE status = 'approved' AND email NOT LIKE '%@guest.local'
     ORDER BY is_host DESC, is_team DESC, is_regular DESC, full_name COLLATE NOCASE`);
-const stmtChatMembersJoined = db.prepare(`SELECT a.id, a.full_name, a.email, a.is_host, a.is_team, a.is_regular, a.avatar
+const stmtChatMembersJoined = db.prepare(`SELECT a.id, a.full_name, a.email, a.is_host, a.is_team, a.is_regular, a.avatar, a.dob
     FROM program_membership pm JOIN applicants a ON a.email = pm.email
     WHERE pm.program_id = ? AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local'
     ORDER BY a.is_host DESC, a.is_team DESC, a.is_regular DESC, a.full_name COLLATE NOCASE`);
 const stmtChatPinned = db.prepare('SELECT * FROM group_messages WHERE pinned_at IS NOT NULL AND program_id = ? ORDER BY pinned_at DESC LIMIT 5');
 function chatMembersFor(programId) {
   const p = P(programId);
-  return (p && p.config.access === 'opt-in') ? stmtChatMembersJoined.all(programId) : stmtChatMembersAll.all();
+  const rows = (p && p.config.access === 'opt-in') ? stmtChatMembersJoined.all(programId) : stmtChatMembersAll.all();
+  return rows.map(r => ({ ...r, minor: isMinor(r) }));   // red asterisk in the member sheet (awareness)
 }
 // True if at least one group message exists older than `id` in this program's room (drives the
 // "Load earlier messages" button — shown only when there is more history).
@@ -1997,7 +1998,7 @@ app.get('/runs', requireLogin, (req, res) => {
   const gamesAttended = attC ? (attC.n || 0) : 0, gamesThisYear = attC ? (attC.s || 0) : 0;
   const pastRuns = a ? stmtHubPast.all(email)
     .filter(r => PROGRAMS.has(r.program_id))
-    .map(r => ({ name: PROGRAMS.get(r.program_id).displayName, emoji: PROGRAMS.get(r.program_id).emoji, runDate: r.run_date })) : [];
+    .map(r => ({ name: PROGRAMS.get(r.program_id).displayName, emoji: PROGRAMS.get(r.program_id).emoji, runDate: r.run_date, programId: r.program_id, key: PROGRAMS.get(r.program_id).key })) : [];
 
   const chatProgram = chatProgramFor(req);
   const cc = chatCountsFor(chatProgram || 1, email, a ? a.id : 0);
@@ -2012,6 +2013,31 @@ app.get('/runs', requireLogin, (req, res) => {
     groupUnread: cc.group,
     groupMention: cc.gm,
     chatProgram,
+    ann: annPanel(email),
+  }));
+});
+
+// Past run — read-only "who went" roster from the attendance archive. Opens from the hub's
+// Past tab exactly like a live run card, but it's done: no actions, just the list. Approved
+// members + admins only (same visibility bar as a live who's-going sheet).
+const stmtPastRoster = db.prepare(`SELECT t.name, t.email, a.id AS applicant_id, a.dob
+    FROM attendance t LEFT JOIN applicants a ON a.email = t.email
+    WHERE t.program_id = ? AND t.run_date = ? ORDER BY t.name COLLATE NOCASE`);
+app.get('/runs/past/:pid/:date', requireLogin, (req, res) => {
+  const email = req.userEmail;
+  const a = applicantByEmail(email);
+  const admin = isAdmin(email);
+  if (!admin && (!a || a.status !== 'approved')) return res.redirect('/status');
+  const pid = Number(req.params.pid), rd = String(req.params.date);
+  const p = PROGRAMS.get(pid);
+  if (!p || !/^\d{4}-\d{2}-\d{2}$/.test(rd)) return res.redirect('/runs');
+  if (p.config.static && !admin) return res.redirect('/runs');   // demo archive is admin-only
+  const rows = stmtPastRoster.all(pid, rd).map(r => ({ ...r, minor: isMinor(r) }));
+  const chatProgram = chatProgramFor(req);
+  const cc = chatCountsFor(chatProgram || 1, email, a ? a.id : 0);
+  res.send(pastRunPage({
+    name: p.displayName, emoji: p.emoji, runDate: rd, rows,
+    dmUnread: unreadCount(email), groupUnread: cc.group, groupMention: cc.gm, chatProgram,
     ann: annPanel(email),
   }));
 });
@@ -2203,7 +2229,7 @@ app.get('/u/:id/card', requireLogin, (req, res) => {
   if (!p || (p.status !== 'approved' && !gate.viewerIsAdmin)) return res.status(404).send('');
   const canContact = gate.viewerIsAdmin || !!(gate.a && gate.a.is_team);
   const canDM = canMessage(req.userEmail, gate.a, p);   // hide Message when the server would block it (block / minor)
-  res.send(profileCard({ p, stats: attendanceStats(p.email), canContact, canDM, isSelf: p.email === req.userEmail, minor: isMinor(p) }));
+  res.send(profileCard({ p, stats: attendanceStats(p.email), canContact, canDM, isSelf: p.email === req.userEmail, minor: isMinor(p), showRoles: gate.viewerIsAdmin }));
 });
 
 app.get('/u/:id', requireLogin, (req, res) => {
@@ -2226,7 +2252,8 @@ app.get('/u/:id', requireLogin, (req, res) => {
     dmUnread: unreadCount(req.userEmail), groupUnread: cc.group,
     groupMention: cc.gm, chatProgram, // Chat tab reflects the run they've joined (or locks if none)
     ann: annPanel(req.userEmail),
-    minor: isMinor(p), // red safeguarding badge on the profile
+    minor: isMinor(p), // red safeguarding badge on the profile (visible to every viewer)
+    showRoles: gate.viewerIsAdmin, // role badges are admin-eyes-only
   }));
 });
 
@@ -2253,7 +2280,7 @@ app.get('/profile', requireLogin, (req, res) => {
   res.send(profileTabPage({ a, stats: attendanceStats(a.email), saved: req.query.saved === '1', error: '',
     dmUnread: unreadCount(a.email), groupUnread: cc.group, groupMention: cc.gm, chatProgram, canOperate, announcementLog: canOperate ? announcementHistory() : [],
     friendCount: friendsOf(a.email).length, friendReqIn: friendReqIncomingCount(a.email), followerCount: followersOf(a.email).length, // Friends entry-point summary
-    iAmHost, threads: loadInbox(a.email), photoMsg, ann: annPanel(a.email), minor: isMinor(a) }));
+    iAmHost, threads: loadInbox(a.email), photoMsg, ann: annPanel(a.email), minor: isMinor(a), showRoles: gate.viewerIsAdmin }));
 });
 
 // ---------- PROFILE PHOTO (upload / remove) ----------
@@ -5322,10 +5349,62 @@ app.post('/admin/demo/seed', requireAdmin, (req, res) => {
   // (Demo players are checkins-only, so the DOB lives on the checkin row itself, not an applicant.)
   db.prepare("UPDATE checkins SET dob = '2010-03-15' WHERE program_id = ? AND run_date = ? AND sort_order = 3").run(pid, rd);
   // Seed the demo CHAT with bot chatter so the room looks alive (cleared on reset/clear below).
+  // Beyond text it showcases EVERY message type: a photo (with caption), a sticker, a voice note,
+  // a video, a threaded reply, and a pinned message — the media are tiny bundled static assets
+  // (public/demo/*, referenced by path exactly like /stickers/*), so nothing is uploaded/orphaned.
   db.prepare('DELETE FROM group_messages WHERE program_id = ?').run(pid);
   const insMsg = db.prepare('INSERT INTO group_messages (from_email, body, program_id) VALUES (?,?,?)');
-  for (const [i, line] of DEMO_CHAT) if (i < total) insMsg.run(`demo-${i + 1}@demo.local`, line, pid);
+  const em = (i) => `demo-${i + 1}@demo.local`;
+  const msgIds = [];
+  for (const [i, line] of DEMO_CHAT) if (i < total) msgIds.push(insMsg.run(em(i), line, pid).lastInsertRowid);
+  // reply — threads the 5th text line onto the 4th ("first time coming out" → welcome)
+  db.prepare('INSERT INTO group_messages (from_email, body, reply_to, program_id) VALUES (?,?,?,?)')
+    .run(em(6), 'bring water, we run games back to back 💧', msgIds[3], pid);
+  // photo with a caption (bundled gym shot)
+  db.prepare('INSERT INTO group_messages (from_email, body, image, program_id) VALUES (?,?,?,?)')
+    .run(em(0), 'last week was a movie 🔥', '/gym.jpg', pid);
+  // sticker
+  db.prepare('INSERT INTO group_messages (from_email, body, image, program_id) VALUES (?,?,?,?)')
+    .run(em(5), '', '/stickers/gameon.svg', pid);
+  // voice note (3s bundled clip)
+  db.prepare('INSERT INTO group_messages (from_email, body, audio, audio_dur, program_id) VALUES (?,?,?,?,?)')
+    .run(em(2), '', '/demo/voice.m4a', 3, pid);
+  // video (3s bundled clip, native player)
+  db.prepare('INSERT INTO group_messages (from_email, body, video, video_dur, program_id) VALUES (?,?,?,?,?)')
+    .run(em(8), '', '/demo/clip.mp4', 3, pid);
+  // pinned message (shows in the pinned bar at the top of the room)
+  db.prepare("INSERT INTO group_messages (from_email, body, pinned_at, pinned_by, program_id) VALUES (?,?,datetime('now'),?,?)")
+    .run(em(1), '📌 Doors open 6:45 — first 8 on the floor, everyone else waitlists. Bring both jersey colours.', req.userEmail, pid);
   audit(req.userEmail, 'admin', 'demo:seed', `${total} players on ${rd}`);
+  res.redirect(P(pid).paths.run);
+});
+// END QUEUE — simulate the run finishing: the roster archives away and check-in closes (what the
+// weekly rollover + autolock do for a live program; the static demo never schedules, so it's a
+// button). Chat is kept so the room still looks alive between cycles.
+app.post('/admin/demo/endqueue', requireAdmin, (req, res) => {
+  const pid = DEMO_PID, cfg = P(pid).config;
+  const rd = getSetting(cfg.keys.runDate);
+  if (rd) {
+    db.prepare('DELETE FROM checkins WHERE program_id = ?').run(pid);
+    db.prepare('INSERT OR REPLACE INTO run_state (run_date, program_id, is_open, cancelled) VALUES (?,?,0,0)').run(rd, pid);
+  }
+  audit(req.userEmail, 'admin', 'demo:endqueue', rd || '');
+  res.redirect(P(pid).paths.run);
+});
+// START QUEUE — simulate next week's queue opening: check-in opens and the AUTO-RENEWERS instantly
+// claim their guaranteed spots (auto_seated=1 rows — the same observable result seatRenewers
+// produces for a live program's members; demo players are synthetic so they can't flow through the
+// real membership join). 5 of 8 spots auto-fill, leaving room to show live joins/offers on top.
+app.post('/admin/demo/startqueue', requireAdmin, (req, res) => {
+  const pid = DEMO_PID, cfg = P(pid).config;
+  let rd = getSetting(cfg.keys.runDate);
+  if (!rd || rd < ymdLocal()) rd = programDefaultDate(pid);
+  setSetting(cfg.keys.runDate, rd);
+  db.prepare('INSERT OR REPLACE INTO run_state (run_date, program_id, is_open, cancelled) VALUES (?,?,1,0)').run(rd, pid);
+  const AUTO_RENEWERS = 5; // the subset with auto-renew ON
+  const ins = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, program_id, sort_order, auto_seated) VALUES (?,?,?,?,?,1)');
+  for (let i = 0; i < AUTO_RENEWERS; i++) ins.run(rd, `demo-${i + 1}@demo.local`, DEMO_NAMES[i], pid, i);
+  audit(req.userEmail, 'admin', 'demo:startqueue', `${rd} +${AUTO_RENEWERS} auto`);
   res.redirect(P(pid).paths.run);
 });
 // Tear the demo down — remove every synthetic row + its run state so nothing lingers.

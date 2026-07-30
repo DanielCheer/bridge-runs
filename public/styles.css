@@ -236,8 +236,10 @@ a.score{cursor:pointer}
 .bdg.core{background:rgba(34,97,90,.09);color:var(--teal);border:1px solid rgba(34,97,90,.3)}
 .bdg.guest{color:var(--muted);border:1px solid rgba(34,35,29,.16)}
 .bdg.reg{color:var(--muted);border:1px solid rgba(34,35,29,.14)}
-/* Safeguarding: loud red "Minor" chip (under 18). Sits before the role badge. */
+/* Safeguarding: loud red "Minor" chip (under 18) — used on PROFILES (visible to everyone). */
 .bdg.minor{background:#c62828;color:#fff;box-shadow:0 2px 8px rgba(198,40,40,.45);margin-right:6px}
+/* In lists, minors get a small red asterisk after the name (awareness, no clutter). */
+.minast{color:#c62828;font-weight:800;margin-left:2px}
 
 /* ---------- waitlist line + court notes ---------- */
 .wait{font-family:var(--body);font-size:12px;color:var(--muted);padding:1px 8px;margin:2px 0}

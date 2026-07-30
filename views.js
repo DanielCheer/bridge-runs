@@ -620,15 +620,13 @@ const GROUP_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-wi
 // role — shown IN ADDITION to it — so the community can see it at a glance. The under-18
 // flag is computed server-side (isMinor) and passed in; the view never guesses age.
 const MINOR_BADGE = '<span class="bdg minor" title="Under 18">⚠ Minor</span>';
+// In LISTS (rosters, who's-going, chat members) minors get just a small red asterisk after the
+// name — everyone sees it for awareness. The full "Minor" tag + all other roles live on the profile.
+const MINOR_STAR = '<span class="minast" title="Under 18" aria-label="under 18">*</span>';
 
-// Role → badge markup (loudest first). p carries host/team/regular/guest flags, plus an
-// optional `minor` flag that PREPENDS the red Minor chip before the (single) role badge.
-const roleBadge = (p) => (p.minor ? MINOR_BADGE : '')
-  + (p.host ? '<span class="bdg host">★ Host</span>'
-  : p.team ? '<span class="bdg team">◆ Team</span>'
-  : p.regular ? '<span class="bdg core">★ Pillar</span>'
-  : p.guest ? '<span class="bdg guest">Guest</span>'
-  : '<span class="bdg reg">Regular</span>');
+// Role badges live ONLY on profiles now, and only an ADMIN viewer sees them (owner rule:
+// lists stay clean; roles aren't public). The red Minor tag is the one exception — every
+// viewer sees it on a profile (awareness), and lists show the MINOR_STAR asterisk.
 
 // Bottom tab bar — Check-in / Roster / Profile. Shown to every signed-in
 // approved player (admins too) on the player-facing pages. Operator pages keep
@@ -2172,11 +2170,11 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
   const wgBumpForm = (p) => `<form method="POST" action="/checkin/promote" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn sm" type="submit" title="Move into the run">Bump in</button></form>`;
   // Tapping a real player's avatar/name opens their profile; guests (no account) aren't linked.
   const wgNameLink = (p, inner) => (p.applicant_id && !/@guest\.local$/.test(p.email)) ? `<a class="lrlink" href="/u/${p.applicant_id}" onclick="if(window.pvOpen){pvOpen(${p.applicant_id});return false;}">${inner}</a>` : inner;
-  const wgRow = (p, n) => `<div class="lr"><span class="ln">${n}</span>${wgNameLink(p, `<span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''}${p.confirmed_at ? ' <span class="tag reg" title="Confirmed">✓</span>' : ''}</span>`)}${roleBadge(p)}${canOperate ? wgRemoveForm(p) : ''}</div>`;
+  const wgRow = (p, n) => `<div class="lr"><span class="ln">${n}</span>${wgNameLink(p, `<span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.minor ? MINOR_STAR : ''}${p.email === email ? ' <span class="tag">You</span>' : ''}${p.confirmed_at ? ' <span class="tag reg" title="Confirmed">✓</span>' : ''}</span>`)}${canOperate ? wgRemoveForm(p) : ''}</div>`;
   // Held offer row — the spot is taken (counts toward the floor) but the person hasn't
   // confirmed yet, so it's shown as "claiming" rather than as a settled floor player.
-  const wgOfferRow = (p) => `<div class="lr"><span class="ln">·</span>${wgNameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.minor ? ' ' + MINOR_BADGE : ''}${p.email === email ? ' <span class="tag">You</span>' : ''} <span class="tag">⏳ Claiming</span></span>`)}${canOperate ? wgRemoveForm(p) : ''}</div>`;
-  const wgWaitRow = (p, i) => `<div class="lr"><span class="ln">W${i}</span>${wgNameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.minor ? ' ' + MINOR_BADGE : ''}</span>`)}${canOperate ? wgBumpForm(p) + wgRemoveForm(p) : ''}</div>`;
+  const wgOfferRow = (p) => `<div class="lr"><span class="ln">·</span>${wgNameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.minor ? MINOR_STAR : ''}${p.email === email ? ' <span class="tag">You</span>' : ''} <span class="tag">⏳ Claiming</span></span>`)}${canOperate ? wgRemoveForm(p) : ''}</div>`;
+  const wgWaitRow = (p, i) => `<div class="lr"><span class="ln">W${i}</span>${wgNameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.minor ? MINOR_STAR : ''}</span>`)}${canOperate ? wgBumpForm(p) + wgRemoveForm(p) : ''}</div>`;
   const wgSheet = canSeeRoster ? `
     <div id="wgwrap" class="wgwrap">
       <div class="wgscrim" onclick="wgClose()"></div>
@@ -2374,15 +2372,12 @@ const fmtMonthYear = (s) => {
 // bottom tab bar. Mark-read happens in the GET /chat route.
 export function chatPage({ me, chat, runDate = '', hours = '8:30–10:30 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
   const members = chat.members || [];
-  // Member row → tappable link to their profile. Role flags map to the shared roleBadge.
-  const memRow = (p) => {
-    const flags = { host: !!p.is_host, team: !!p.is_team, regular: !!p.is_regular };
-    return `<a class="lr" href="/u/${p.id}">
+  // Member row → tappable link to their profile. No role badges in lists (roles are
+  // admin-only, on profiles); a minor gets the red asterisk for awareness.
+  const memRow = (p) => `<a class="lr" href="/u/${p.id}">
       <span class="lav">${avatarInner(p.email, p.full_name)}</span>
-      <span class="lnm">${esc(p.full_name)}${p.email === me ? ' <span class="tag">You</span>' : ''}</span>
-      ${roleBadge(flags)}
+      <span class="lnm">${esc(p.full_name)}${p.minor ? MINOR_STAR : ''}${p.email === me ? ' <span class="tag">You</span>' : ''}</span>
     </a>`;
-  };
   // Members overlay — reuses the who's-going bottom-sheet (.wgwrap/.wgsheet/.wgscrim).
   // Its own memOpen/memClose so the chat page's #thread refresh never disturbs it.
   const membersSheet = `
@@ -2427,14 +2422,10 @@ export function chatPage({ me, chat, runDate = '', hours = '8:30–10:30 PM', dm
 export function runChatPage({ me, chat, program = 2, theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒', base = '/pickleball/chat', pollPage = 'pkchat', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
   const members = chat.members || [];
   const low = sport.toLowerCase();
-  const memRow = (p) => {
-    const flags = { host: !!p.is_host, team: !!p.is_team, regular: !!p.is_regular };
-    return `<a class="lr" href="/u/${p.id}">
+  const memRow = (p) => `<a class="lr" href="/u/${p.id}">
       <span class="lav">${avatarInner(p.email, p.full_name)}</span>
-      <span class="lnm">${esc(p.full_name)}${p.email === me ? ' <span class="tag">You</span>' : ''}</span>
-      ${roleBadge(flags)}
+      <span class="lnm">${esc(p.full_name)}${p.minor ? MINOR_STAR : ''}${p.email === me ? ' <span class="tag">You</span>' : ''}</span>
     </a>`;
-  };
   const membersSheet = `
     <div id="memwrap" class="wgwrap">
       <div class="wgscrim" onclick="memClose()"></div>
@@ -2471,8 +2462,9 @@ export function runChatPage({ me, chat, program = 2, theme = 'pk', sport = 'Pick
 // ---------- PROFILE (view another player) ----------
 // Compact profile card — served as a fragment for the quick-look popup (tap a name in the
 // who's-going sheet). Just the essentials + a Message / Full-profile jump; no page chrome.
-export function profileCard({ p, stats, canContact = false, canDM = true, isSelf = false, minor = false }) {
-  const rb = (minor ? MINOR_BADGE : '') + (p.is_host ? '<span class="bdg host">★ Host</span>' : p.is_team ? '<span class="bdg team">◆ Team</span>' : p.is_regular ? '<span class="bdg core">★ Pillar</span>' : '<span class="bdg reg">Regular</span>');
+export function profileCard({ p, stats, canContact = false, canDM = true, isSelf = false, minor = false, showRoles = false }) {
+  // Minor tag: EVERYONE sees it (awareness). Role badges: ADMIN viewers only.
+  const rb = (minor ? MINOR_BADGE : '') + (showRoles ? (p.is_host ? '<span class="bdg host">★ Host</span>' : p.is_team ? '<span class="bdg team">◆ Team</span>' : p.is_regular ? '<span class="bdg core">★ Pillar</span>' : '<span class="bdg reg">Regular</span>') : '');
   const positions = (p.position || '').split(',').filter(Boolean).join(' · ');
   const memberSince = stats.first ? fmtMonthYear(stats.first) : null;
   const row = (k, v) => `<div class="pcrow"><span class="pck">${esc(k)}</span><span class="pcv">${v}</span></div>`;
@@ -2485,12 +2477,13 @@ export function profileCard({ p, stats, canContact = false, canDM = true, isSelf
     <div class="pcbtns">${isSelf ? `<a class="btn ghost sm" href="/profile">Edit profile</a>` : (canDM ? `<a class="btn primary sm" href="/messages/${p.id}">Message</a>` : '')}<a class="btn ghost sm" href="/u/${p.id}">Full profile →</a></div>`;
 }
 
-export function profilePage({ p, stats, isSelf = false, canContact = false, canDM = true, rel = 'none', following = false, runDate = '', hours = '8:30–10:30 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null, back = '/chat', minor = false }) {
+export function profilePage({ p, stats, isSelf = false, canContact = false, canDM = true, rel = 'none', following = false, runDate = '', hours = '8:30–10:30 PM', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null, back = '/chat', minor = false, showRoles = false }) {
+  // Minor tag: EVERYONE sees it (awareness). Role badges: ADMIN viewers only.
   const badges = [
     minor ? MINOR_BADGE : '',
-    p.is_host ? '<span class="bdg host">★ Host</span>' : '',
-    p.is_team ? '<span class="bdg team">◆ Team</span>' : (p.is_regular ? '<span class="bdg core">★ Pillar</span>' : ''),
-    (!p.is_host && !p.is_team && !p.is_regular) ? '<span class="bdg reg">Regular</span>' : '',
+    showRoles && p.is_host ? '<span class="bdg host">★ Host</span>' : '',
+    showRoles ? (p.is_team ? '<span class="bdg team">◆ Team</span>' : (p.is_regular ? '<span class="bdg core">★ Pillar</span>' : '')) : '',
+    showRoles && !p.is_host && !p.is_team && !p.is_regular ? '<span class="bdg reg">Regular</span>' : '',
     isSelf ? '<span class="tag">YOU</span>' : '',
   ].join('');
   const hostcall = p.is_host
@@ -2784,13 +2777,14 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
   const pastCard = (r) => {
     const [, ball] = sportOf(r);
     const d = r.runDate ? new Date(r.runDate + 'T12:00:00') : null;
-    return `<div class="jc locked" style="--sport:#a29c8f;--wl:47%;--wt:45%;--rot:-6deg">
+    // Opens the read-only "who went" roster for that run — a past run is viewable, just done.
+    return `<a class="jc locked" href="/runs/past/${r.programId}/${esc(r.runDate)}" style="--sport:#a29c8f;--wl:47%;--wt:45%;--rot:-6deg">
       <span class="jc-date"><span class="jc-dow">${d ? DOW3[d.getDay()] : '—'}</span><span class="jc-num">${d ? d.getDate() : ''}</span><span class="jc-mon">${d ? MON3[d.getMonth()] : ''}</span></span>
       <span class="jc-body"><span class="jc-wm" aria-hidden="true">${ball}</span>
         <span class="jc-r1"><span class="jc-name">${esc(r.name)}</span></span>
         <span class="jc-time">${d ? `${DOW3[d.getDay()]} · ${MON3[d.getMonth()]} ${d.getDate()}` : ''}</span>
         <span class="jc-pills"><span class="jc-pill you">Attended ✓</span></span>
-      </span></div>`;
+      </span></a>`;
   };
   const applyBanner = canJoin ? '' : `<div class="notice" style="margin:12px 0 0">${status === 'pending'
       ? `⏳ <b>Application in review</b> — you’ll be able to check in here once the organizers approve you.`
@@ -2917,6 +2911,28 @@ export function runJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, 
 }
 export function pkJoinPage(state) { return runJoinPage(state); }
 
+// Past run — read-only "who went" roster (opened from the hub's Past tab). Looks like a run
+// page but it's done: no actions, just the archived attendance list. Names link to profiles
+// where an account exists; minors carry the red asterisk like every list.
+export function pastRunPage({ name = '', emoji = '', runDate = '', rows = [], dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null }) {
+  const d = runDate ? new Date(runDate + 'T12:00:00') : null;
+  const when = d ? d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }) : '';
+  const row = (p, i) => {
+    const inner = `<span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.minor ? MINOR_STAR : ''}</span>`;
+    return `<div class="lr"><span class="ln">${i + 1}</span>${p.applicant_id ? `<a class="lrlink" href="/u/${p.applicant_id}">${inner}</a>` : inner}</div>`;
+  };
+  return HEAD(`${name} — past run`, 'has-tabs') + header(`<b>${esc(name.toUpperCase())}</b>Past run`, '', ann, '') + `
+    ${backToRuns}
+    <div class="rule"></div>
+    <div class="phead"><h1>${esc(name)} ${emoji}</h1></div>
+    <div class="card rail" style="margin-top:12px">
+      <span class="eyebrow">Past run · ${esc(when)}</span>
+      <h3 style="margin:4px 0 10px">Who went · ${rows.length}</h3>
+      ${rows.length ? rows.map(row).join('') : '<p class="lead" style="margin:0">No attendance was recorded for this run.</p>'}
+    </div>
+  ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: chatProgram }));
+}
+
 // Pickleball run — a SEPARATE, hidden run on its own pk_* tables. Dedicated view (reuses the
 // shell + avatar + list styles); does not touch the basketball checkinPage. Native POST forms.
 // Program-generic run page. Defaults reproduce PICKLEBALL exactly (so pickleballPage below is a
@@ -2931,7 +2947,6 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
   // Tappable name → profile popup (reuses the shared pvOpen + /u/:id/card); guests (no
   // applicant_id) stay plain text. Role badge mirrors the basketball roster.
   const nameLink = (p, inner) => (p.applicant_id && !/@guest\.local$/.test(p.email)) ? `<a class="lrlink" href="/u/${p.applicant_id}" onclick="if(window.pvOpen){pvOpen(${p.applicant_id});return false;}">${inner}</a>` : inner;
-  const pkRole = (p) => roleBadge({ host: !!p.is_host, team: !!p.is_team, guest: /@guest\.local$/.test(p.email), minor: !!p.minor }); // no core tier in pickleball; minor prepends a red chip
   // Auto-renew penalty badge (Phase 5.5, operators only): an amber ⏸/⚠ chip + a one-tap ✓ Forgive for
   // any floor player carrying strikes or a pause. penaltyState is {} for members + for programs that
   // never enabled the penalty → zero bytes there (pk/basketball stay byte-identical).
@@ -2941,8 +2956,8 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
     const ttl = paused ? `Auto-renew paused until ${esc(pi.until)} after no-shows — ✓ to forgive` : `${pi.strikes} auto-renew no-show strike${pi.strikes === 1 ? '' : 's'} — ✓ to forgive`;
     return `<span class="tag" title="${ttl}" style="margin-left:4px;background:#b3541e;color:#fff">${paused ? '⏸ paused' : '⚠ ' + pi.strikes}</span><form method="POST" action="${runBase}/penalty/clear" class="swapform" style="display:inline;margin:0 0 0 4px"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn ghost sm" type="submit" title="Forgive — clear strikes/pause" style="padding:1px 7px">✓</button></form>`;
   };
-  const rowFloor = (p, n) => `<div class="lr"><span class="ln">${n}</span>${nameLink(p, `<span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.email === email ? ' <span class="tag">You</span>' : ''}${p.confirmed_at ? ' <span class="tag reg" title="Confirmed coming">✓</span>' : ''}</span>`)}${pkRole(p)}${canOperate ? penBadge(p) + rmForm(p) : ''}</div>`;
-  const rowWait = (p, i) => `<div class="lr"><span class="ln">W${i}</span>${nameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.minor ? ' ' + MINOR_BADGE : ''}</span>`)}${canOperate ? `<form method="POST" action="${runBase}/bump" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn sm" type="submit">Bump in</button></form>${rmForm(p)}` : ''}</div>`;
+  const rowFloor = (p, n) => `<div class="lr"><span class="ln">${n}</span>${nameLink(p, `<span class="lav">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.minor ? MINOR_STAR : ''}${p.email === email ? ' <span class="tag">You</span>' : ''}${p.confirmed_at ? ' <span class="tag reg" title="Confirmed coming">✓</span>' : ''}</span>`)}${canOperate ? penBadge(p) + rmForm(p) : ''}</div>`;
+  const rowWait = (p, i) => `<div class="lr"><span class="ln">W${i}</span>${nameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.minor ? MINOR_STAR : ''}</span>`)}${canOperate ? `<form method="POST" action="${runBase}/bump" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn sm" type="submit">Bump in</button></form>${rmForm(p)}` : ''}</div>`;
   // Offer-window programs only: a waitlister who's been offered a freed floor spot (holding it until
   // they claim or it expires). offeredPlayers is empty for simple programs, so this never renders.
   // In DEMO mode the operator gets a one-tap "✓ Claim" (a real player would tap their emailed link) so
@@ -2950,7 +2965,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
   const demoClaimForm = (p) => (demoMode && canOperate && p.claim_token)
     ? `<form method="POST" action="${runBase}/claim/${encodeURIComponent(p.claim_token)}" style="margin:0"><button class="btn primary sm" type="submit" title="Complete the claim (demo)">✓ Claim</button></form>`
     : '';
-  const rowOffer = (p) => `<div class="lr"><span class="ln">·</span>${nameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.minor ? ' ' + MINOR_BADGE : ''}${p.email === email ? ' <span class="tag">You</span>' : ''} <span class="tag">⏳ Claiming</span></span>`)}${canOperate ? demoClaimForm(p) + rmForm(p) : ''}</div>`;
+  const rowOffer = (p) => `<div class="lr"><span class="ln">·</span>${nameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.minor ? MINOR_STAR : ''}${p.email === email ? ' <span class="tag">You</span>' : ''} <span class="tag">⏳ Claiming</span></span>`)}${canOperate ? demoClaimForm(p) + rmForm(p) : ''}</div>`;
   let action = '';
   if (cancelled) action = `<button class="btn" type="button" disabled>Run cancelled</button>`;
   else if (myState === 'in') action = `<form method="POST" action="${runBase}/leave"><button class="btn ghost" type="submit">Sit out</button></form>`;
@@ -3084,7 +3099,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
       ${canOperate && !demoMode ? `<a class="bannedit" href="${runBase}/banner" aria-label="Change banner photo">🖼 Change</a>` : ''}
     </div>
     ${announcement ? `<div class="notice" style="margin-top:10px;display:flex;align-items:flex-start;gap:8px;justify-content:space-between"><span>📣 <b>Announcement</b> · ${esc(announcement.body)}${announcement.author ? `<span style="color:var(--muted)"> — ${esc(announcement.author)}</span>` : ''}</span>${canOperate ? `<form method="POST" action="${runBase}/announce/retract" class="swapform" style="margin:0;flex-shrink:0"><button class="btn ghost sm" type="submit" title="Retract this announcement">Retract</button></form>` : ''}</div>` : ''}
-    ${hero}${demoMode && canOperate ? `<div class="notice" style="margin-top:10px;background:#fff4e5;border-color:#e0b070">🎬 <b>Demo mode.</b> Seed a full floor + waitlist, then pull a floor player (Remove in "Who's going") to fire a real auto-offer — the top waitlister moves to <b>⏳ Claiming</b>; tap <b>✓ Claim</b> to slide them onto the floor. Nothing here touches live data.<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><form method="POST" action="/admin/demo/seed" class="swapform" style="margin:0"><button class="btn primary sm" type="submit">${going + waiting ? '↻ Reset' : '▶ Seed'} full run</button></form><form method="POST" action="/admin/demo/clear" class="swapform" style="margin:0" onsubmit="return confirm('Clear the demo run?')"><button class="btn ghost sm" type="submit">Clear</button></form></div></div>` : ''}
+    ${hero}${demoMode && canOperate ? `<div class="notice" style="margin-top:10px;background:#fff4e5;border-color:#e0b070">🎬 <b>Demo mode.</b> Seed a full floor + waitlist, then pull a floor player (Remove in "Who's going") to fire a real auto-offer — the top waitlister moves to <b>⏳ Claiming</b>; tap <b>✓ Claim</b> to slide them onto the floor. <b>End queue</b> = run's over (roster archives, check-in closes); <b>Start queue</b> = next week opens and the auto-renewers instantly claim their guaranteed spots. Nothing here touches live data.<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><form method="POST" action="/admin/demo/seed" class="swapform" style="margin:0"><button class="btn primary sm" type="submit">${going + waiting ? '↻ Reset' : '▶ Seed'} full run</button></form><form method="POST" action="/admin/demo/endqueue" class="swapform" style="margin:0"><button class="btn sm" type="submit">⏹ End queue</button></form><form method="POST" action="/admin/demo/startqueue" class="swapform" style="margin:0"><button class="btn sm" type="submit">▶ Start queue</button></form><form method="POST" action="/admin/demo/clear" class="swapform" style="margin:0" onsubmit="return confirm('Clear the demo run?')"><button class="btn ghost sm" type="submit">Clear</button></form></div></div>` : ''}
     ${(action || runToggle) ? `<div class="controls">${action}${runToggle}</div>` : ''}
     ${myState === 'in' && !cancelled ? (myConfirmed
       ? `<div class="notice good" style="margin-top:10px">✓ <b>You're confirmed</b> for this run — see you there!</div>`
@@ -3210,7 +3225,7 @@ function inboxRows(me, threads) {
 }
 
 // ---------- PROFILE (own editable tab) ----------
-export function profileTabPage({ a, stats, saved = false, error = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, canOperate = false, announcementLog = [], iAmHost = false, threads = [], photoMsg = '', ann = null, friendCount = 0, friendReqIn = 0, followerCount = 0, minor = false }) {
+export function profileTabPage({ a, stats, saved = false, error = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, canOperate = false, announcementLog = [], iAmHost = false, threads = [], photoMsg = '', ann = null, friendCount = 0, friendReqIn = 0, followerCount = 0, minor = false, showRoles = false }) {
   // The own-profile tab is a chromeless editor (its own .bar, no masthead), so the
   // global announcements bell lives in the .bar rather than the .mast here. Same
   // button + panel + JS as every other page (one shared affordance, one live dot).
@@ -3276,7 +3291,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
       <div class="idrow">
         <label class="pic" for="photoinput" title="Change photo" aria-label="Change profile photo">${avatarInner(a.email, a.full_name)}<span class="cam">✎</span></label>
         <div class="idfield">
-          <div class="idname">${esc(a.full_name)}${a.is_host ? '<span class="hostpill">★ Host</span>' : ''}${minor ? ' ' + MINOR_BADGE : ''}</div>
+          <div class="idname">${esc(a.full_name)}${showRoles && a.is_host ? '<span class="hostpill">★ Host</span>' : ''}${minor ? ' ' + MINOR_BADGE : ''}</div>
           <div class="phactions">${hasAvatar ? '<button type="submit" form="photoremove" class="phbtn">Remove photo</button>' : '<span class="phsoon">Tap photo to change</span>'}</div>
         </div>
       </div>
