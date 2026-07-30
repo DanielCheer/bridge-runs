@@ -707,10 +707,7 @@ textarea#phones{width:100%;background:#fff;border:1px solid var(--line);border-r
 .pcstats>div{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 6px;text-align:center}
 .pcstats b{display:block;font-family:var(--anton);font-size:21px;line-height:1}
 .pcstats span{font-family:var(--head);font-weight:600;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
-.pcrow{display:flex;justify-content:space-between;gap:12px;padding:9px 2px;border-top:1px solid var(--line);font-size:14px}
-.pck{font-family:var(--head);font-weight:600;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);flex:none}
-.pcv{text-align:right;min-width:0;word-break:break-word}
-.pcbtns{display:flex;gap:8px;margin-top:16px}
+
 .pcload{padding:26px;text-align:center;color:var(--muted)}
 
 /* ================= PHASE 2 — in-app messaging ================= */

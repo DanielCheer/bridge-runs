@@ -688,9 +688,19 @@ function rekeyEmailTx(oldEmail, newEmail) {
     // party_members rides the EMAIL_KEYED_TABLES loop above.
     {
       const tgtLed = db.prepare('SELECT id FROM parties WHERE leader_email=?').all(newEmail).map(r => r.id);
-      if (tgtLed.length) {
-        db.prepare(`DELETE FROM party_members WHERE party_id IN (${tgtLed.map(() => '?').join(',')})`).run(...tgtLed);
-        db.prepare('DELETE FROM parties WHERE leader_email=?').run(newEmail);
+      const oldLeads = !!db.prepare('SELECT 1 FROM parties WHERE leader_email=?').get(oldEmail);
+      for (const pid of tgtLed) {
+        // SAME-PARTY MERGE: if the old identity's only tie to a target-led party is MEMBERSHIP in
+        // it (the row the loop above just carried), the person is consolidating into their own
+        // leader seat — drop the self-membership, KEEP the party. A genuine two-party conflict
+        // (old also leads one) keeps the doctrine: the migrating person's party wins → dissolve.
+        const selfRow = db.prepare('SELECT 1 FROM party_members WHERE party_id=? AND email=?').get(pid, newEmail);
+        if (selfRow && !oldLeads) {
+          db.prepare('DELETE FROM party_members WHERE party_id=? AND email=?').run(pid, newEmail);
+        } else {
+          db.prepare('DELETE FROM party_members WHERE party_id=?').run(pid);
+          db.prepare('DELETE FROM parties WHERE id=?').run(pid);
+        }
       }
       db.prepare('UPDATE parties SET leader_email=? WHERE leader_email=?').run(newEmail, oldEmail);
     }

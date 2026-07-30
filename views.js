@@ -2537,13 +2537,16 @@ export function demoProfileCard({ name = '', idx = 1, minor = false }) {
 // avatar + name, then stacked action rows — Send a Message (primary), View Profile, Follow
 // toggle, Block. Minor tag for every viewer; role badges admin-only. Contact info stays on the
 // full profile (operator rule) — the card is actions, not data.
-export function profileCard({ p, stats, canContact = false, canDM = true, isSelf = false, minor = false, showRoles = false, following = false, blocked = false }) {
+export function profileCard({ p, stats, canDM = true, isSelf = false, minor = false, showRoles = false, following = false, blocked = false, restricted = false }) {
   const rb = (minor ? MINOR_BADGE : '') + (showRoles ? (p.is_host ? '<span class="bdg host">★ Host</span>' : p.is_team ? '<span class="bdg team">◆ Team</span>' : p.is_regular ? '<span class="bdg core">★ Pillar</span>' : '<span class="bdg reg">Regular</span>') : '');
   const memberSince = stats.first ? fmtMonthYear(stats.first) : null;
   const chev = '<span class="pchev">›</span>';
   const post = (path) => `fetch('${path}',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'fetch'},body:'id=${p.id}',credentials:'same-origin'})`;
   const actions = isSelf
     ? `<a class="pact" href="/profile"><span class="pic">👤</span>Edit profile${chev}</a>`
+    : restricted
+    // They blocked the viewer — no phantom Follow/Block affordances; View Profile only.
+    ? `<a class="pact" href="/u/${p.id}"><span class="pic">👤</span>View Profile${chev}</a>`
     : [
       canDM ? `<a class="pact primary" href="/messages/${p.id}"><span class="pic">💬</span>Send a Message${chev}</a>` : '',
       `<a class="pact" href="/u/${p.id}"><span class="pic">👤</span>View Profile${chev}</a>`,
@@ -2680,7 +2683,7 @@ export function friendsPage({ q = '', results = [], blocked = [], followers = []
     let inner;
     if (pd.party) {
       const p2 = pd.party;
-      const rows = p2.members.map(m => `<div class="lr" style="gap:8px"><span style="flex:1">${esc(m.name)}${m.minor ? MINOR_STAR : ''}${m.status === 'leader' ? ' <span class="tag">Leader</span>' : ''}${m.status === 'invited' ? ' <span class="tag" style="opacity:.55">Invited</span>' : ''}</span></div>`).join('');
+      const rows = p2.members.map(m => `<div class="lr" style="gap:8px"><span style="flex:1">${esc(m.name)}${m.minor ? MINOR_STAR : ''}${m.status === 'leader' ? ' <span class="tag">Leader</span>' : ''}${m.status === 'invited' ? ' <span class="tag" style="opacity:.55">Invited</span>' : ''}</span>${p2.isLeader && m.status !== 'leader' ? f('remove', { id: m.id }, '×', 'ghost sm') : ''}</div>`).join('');
       const picker = (p2.isLeader && pd.invitable.length)
         ? `<details class="frdetails" style="margin-top:8px"><summary>＋ Invite to the party</summary><div style="margin-top:6px">${pd.invitable.map(fr => `<div class="lr" style="gap:8px"><span style="flex:1">${esc(fr.name)}</span>${f('invite', { id: fr.id }, '＋ Invite', 'ghost sm')}</div>`).join('')}</div></details>`
         : (p2.isLeader ? `<p class="tally-note" style="color:var(--muted);margin:8px 0 0">Follow more players to invite them.</p>` : '');
@@ -3041,7 +3044,7 @@ export function pastRunPage({ name = '', emoji = '', runDate = '', rows = [], dm
 // pass-through wrapper and the golden master stays byte-identical); a 3rd program calls runPage
 // with its own runBase / theme / sport / etc. NOTE: offer-window UI (offered "claiming" rows) is
 // NOT rendered yet — volleyball (offerWindow:true) needs a follow-up increment for that.
-export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM', startLabel = '6 PM', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], offeredPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, myConfirmed = false, confirmBy = '', iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null,
+export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM', startLabel = '6 PM', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], offeredPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, myConfirmed = false, confirmBy = '', partyMsg = '', iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null,
   runBase = '/pickleball', programId = 2, theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒', dayName = 'Tuesday', pollKey = 'pickleball',
   teamsCfg = null, teamRows = [], teamsOpen = false, penaltyState = {}, partyData = null, demoMode = false }) {
   const full = going >= cap, totalFull = (going + waiting) >= (cap + waitlistCap);
@@ -3198,7 +3201,10 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
     } else {
       mine = `<div class="clab">Queue with friends</div><p class="tally-note" style="color:var(--muted);margin:6px 0">Create a party on the <a href="/friends">Friends tab</a> — then check in together here with one tap.</p>`;
     }
-    return `<div class="infosec teamspanel" style="margin-top:20px"><div class="card">${mine}</div></div>`;
+    const notice = partyMsg === 'full'
+      ? `<div class="notice warn" style="margin-top:10px">Your whole party doesn't fit in what's left of this run — the group seats together or not at all, so nobody was added.</div>`
+      : partyMsg === 'big' ? `<div class="notice warn" style="margin-top:10px">Your party is bigger than this run's group limit — trim it on the Friends tab.</div>` : '';
+    return `${notice}<div class="infosec teamspanel" style="margin-top:20px"><div class="card">${mine}</div></div>`;
   })();
   return HEAD(`${sport} — The Bridge`, `has-tabs ${theme}`) + header(`<b>${sport.toUpperCase()}</b>${esc(email)}`, wdayShort(runDate), ann, hours) + `
     ${backToRuns}

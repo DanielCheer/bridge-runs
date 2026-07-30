@@ -2254,7 +2254,8 @@ app.get('/u/:id/card', requireLogin, (req, res) => {
   if (!p || (p.status !== 'approved' && !gate.viewerIsAdmin)) return res.status(404).send('');
   const canContact = gate.viewerIsAdmin || !!(gate.a && gate.a.is_team);
   const canDM = canMessage(req.userEmail, gate.a, p);   // hide Message when the server would block it (block / minor)
-  res.send(profileCard({ p, stats: attendanceStats(p.email), canContact, canDM, isSelf: p.email === req.userEmail, minor: isMinor(p), showRoles: gate.viewerIsAdmin, following: isFollowing(req.userEmail, p.email), blocked: blockedPair(req.userEmail, p.email) }));
+  const myBlock = iBlocked(req.userEmail, p.email);   // only MY OWN block renders Unblock — a reverse block must not show a phantom row
+  res.send(profileCard({ p, stats: attendanceStats(p.email), canDM, isSelf: p.email === req.userEmail, minor: isMinor(p), showRoles: gate.viewerIsAdmin, following: isFollowing(req.userEmail, p.email), blocked: myBlock, restricted: blockedPair(req.userEmail, p.email) && !myBlock }));
 });
 
 app.get('/u/:id', requireLogin, (req, res) => {
@@ -5429,7 +5430,8 @@ function runGetPage(programId, req, res) {
     runBase: base, programId, theme: cfg.theme, sport: prog.displayName, sportEmoji: prog.emoji, dayName: DAY_NAMES[cfg.dow], pollKey: prog.key,
     teamsCfg: teamsFeature(programId), teamRows: teamsFeature(programId) ? runTeamsFor(programId, rd) : [], teamsOpen: teamsFeature(programId) ? teamsOpen(programId, rd) : false,
     penaltyState: g.canOperate ? penaltyStateFor(programId) : {},   // operator-only: {email: {strikes, until}} for the roster badge + forgive button
-    partyData: partyPanelFor(programId, rd, req.userEmail),         // queue-with-friends panel (null unless config.features.groupQueue)
+    partyData: cfg.static ? null : partyPanelFor(programId, rd, req.userEmail),   // queue-with-friends card (null unless groupQueue; the STATIC demo must never surface the admin's REAL party)
+    partyMsg: req.query.partyfull ? 'full' : (req.query.partybig ? 'big' : ''),   // party check-in outcome notice (P3-4: the redirect params were silent)
     demoMode: !!cfg.static,                                         // demo run → control strip + per-offer claim button (operator only)
   }));
 }
@@ -5891,6 +5893,16 @@ function dropSharedPartyMemberships(a, b) {
       resyncPartyGroupIds(party.id);
     }
   }
+  // PERSISTENT party too (P2-1): a blocked pair must not stay in one party — else next week's
+  // one-tap check-in re-seats them together (the block invariant only ran at invite/accept).
+  // Same rule: keep the leader of the pair, drop the other's membership row.
+  for (const pp of db.prepare(`SELECT p.id, p.leader_email FROM parties p WHERE
+      (lower(p.leader_email) IN (?, ?) OR EXISTS (SELECT 1 FROM party_members m WHERE m.party_id = p.id AND m.email IN (?, ?)))`).all(a, b, a, b)) {
+    const all = persistentPartyActive(pp);
+    if (!(all.includes(a) && all.includes(b))) continue;
+    const drop = lc(pp.leader_email) === a ? b : a;
+    db.prepare('DELETE FROM party_members WHERE party_id=? AND email=?').run(pp.id, drop);
+  }
 }
 // A member who leaves / is pulled off the floor drops out of their party too (status→declined), so
 // a later "check in my group" can't silently re-seat them (P2-2). Leaders are left alone — they
@@ -5931,11 +5943,13 @@ function partyCap() { let m = 0; for (const p of PROGRAMS.values()) { const g = 
 function friendsPartyDataFor(me) {
   me = lc(me);
   const maxSize = partyCap();
-  const invites = stmtPartyInvitesFor.all(me).map(r => {
+  const p = myPersistentParty(me);
+  // Invites only render while uncommitted — once in a party, accept would refuse anyway (one
+  // party per person), so showing them is a dead button.
+  const invites = p ? [] : stmtPartyInvitesFor.all(me).map(r => {
     const ldr = peopleByEmails([r.leader_email]).get(lc(r.leader_email));
     return { partyId: r.party_id, name: r.name || '', leaderName: ldr?.full_name || r.leader_email };
   });
-  const p = myPersistentParty(me);
   let party = null, invitable = [];
   if (p) {
     const rows = [{ email: lc(p.leader_email), status: 'leader' }, ...stmtPartyMemberRows.all(p.id).map(m => ({ email: lc(m.email), status: m.status }))];
@@ -5998,12 +6012,24 @@ app.post('/friends/party/accept', requireLogin, (req, res) => {
 });
 app.post('/friends/party/decline', requireLogin, (req, res) => {
   const gate = requirePlayer(req, res); if (!gate) return;
+  if (!gate.a) return res.redirect('/friends');
   const me = lc(req.userEmail), pid = Number(req.body.party) || 0;
   db.prepare("DELETE FROM party_members WHERE party_id=? AND email=? AND status='invited'").run(pid, me);   // decline = delete → re-invitable
   res.redirect('/friends');
 });
+// Leader revokes an invite / removes a member — otherwise a stale invite pins a party slot
+// forever (P3-3). Leader-only; target resolved server-side from the applicant id.
+app.post('/friends/party/remove', requireLogin, (req, res) => {
+  const gate = requirePlayer(req, res); if (!gate) return;
+  const me = lc(req.userEmail);
+  const p = stmtPartyLedBy.get(me); if (!p) return res.redirect('/friends');
+  const t = stmtApplicantById.get(Number(req.body.id) || 0);
+  if (t && lc(t.email) !== me) db.prepare('DELETE FROM party_members WHERE party_id=? AND email=?').run(p.id, lc(t.email));
+  res.redirect('/friends');
+});
 app.post('/friends/party/leave', requireLogin, (req, res) => {
   const gate = requirePlayer(req, res); if (!gate) return;
+  if (!gate.a) return res.redirect('/friends');
   const me = lc(req.userEmail);
   const p = myPersistentParty(me); if (!p) return res.redirect('/friends');
   if (lc(p.leader_email) === me) {   // leader → disband. Already-seated checkins stay (they're in for this week).
@@ -6038,7 +6064,10 @@ function runPartyCheckin(programId, req, res) {
     ? db.prepare("SELECT email FROM signup_group_members WHERE group_id=? AND status='declined'").all(runGroup.id).map(r => lc(r.email))
     : []);
   const seatable = emails.filter(e => !declined.has(e)).map(e => applicantByEmail(e))
-    .filter(a => a && a.status === 'approved' && a.waiver_ok && !a.suspended && !/@guest\.local$/.test(a.email));
+    .filter(a => a && a.status === 'approved' && a.waiver_ok && !a.suspended && !/@guest\.local$/.test(a.email))
+    // Belt-and-suspenders on the block invariant (P2-1): never seat someone alongside a party
+    // member either of them has blocked, even if a stale membership survived.
+    .filter(a => !emails.some(e => e !== lc(a.email) && blockedPair(a.email, e)));
   const optRow = db.prepare('SELECT 1 FROM regular_optout WHERE run_date=? AND email=? AND program_id=?');
   const { rows } = partitionFor(programId, rd);
   const already = new Set(rows.map(r => lc(r.email)));
