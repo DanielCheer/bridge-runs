@@ -2837,6 +2837,7 @@ app.get('/friends', requireLogin, (req, res) => {
   const cc = chatCountsFor(chatProgram || 1, gate.a.email, gate.a.id);
   res.send(friendsPage({
     q, results: searchResultsFor(me, q), blocked, followers, following, games: friendsGamesFor(me),
+    party: friendsPartyDataFor(me),
     dmUnread: unreadCount(gate.a.email), groupUnread: cc.group, groupMention: cc.gm,
     chatProgram, ann: annPanel(gate.a.email),
   }));
@@ -4313,6 +4314,13 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
       db.prepare(`DELETE FROM signup_group_members WHERE group_id IN (${gph})`).run(...ledGroups);
       db.prepare('DELETE FROM signup_groups WHERE leader_email = ?').run(a.email);
     }
+    // Persistent parties (Friends-tab layer): same shape — drop memberships, dissolve led parties.
+    db.prepare('DELETE FROM party_members WHERE email = ?').run(a.email);
+    const ledParties = db.prepare('SELECT id FROM parties WHERE leader_email = ?').all(a.email).map(r => r.id);
+    if (ledParties.length) {
+      db.prepare(`DELETE FROM party_members WHERE party_id IN (${ledParties.map(() => '?').join(',')})`).run(...ledParties);
+      db.prepare('DELETE FROM parties WHERE leader_email = ?').run(a.email);
+    }
     refreshAvatarMap(); // drop them from the email→photo registry
     audit(req.userEmail, 'admin', 'people:delete', a.email);
   }
@@ -5716,7 +5724,9 @@ const PROGRAM_DEFS = {
       autoRenew: { from: 'members' },   // any opt-in member (program_membership.auto_renew) renews; team seated first, then non-team fill
       // autoRenewPenalty: { strikes: 3, pauseWeeks: 2 },   // DARK — add to enable no-show strikes (engine + keys.arassess ready)
       mentionTag: 'pkmention', chatSeqKey: 'pk_chat_seq',
-      features: { teams: false, groupQueue: false },
+      // groupQueue ON: parties can check into pickleball ("a party can join any run"). Simple
+      // model + packParties reduction-proof — with no group_ids the roster is byte-identical.
+      features: { teams: false, groupQueue: { maxSize: 4 } },
     },
     unread: genericUnread(2),
     hubCard: genericHubCard(2),
@@ -5823,9 +5833,6 @@ const stmtMyParty = db.prepare(`SELECT g.* FROM signup_groups g WHERE g.program_
       ELSE 2 END, g.id ASC LIMIT 1`);
 const stmtPartyJoinedMembers = db.prepare("SELECT email FROM signup_group_members WHERE group_id=? AND status='joined'");
 const stmtPartyActiveMembers = db.prepare("SELECT email FROM signup_group_members WHERE group_id=? AND status IN ('invited','joined')");
-const stmtPartyJoinedOf = db.prepare(`SELECT sg.* FROM signup_groups sg JOIN signup_group_members m ON m.group_id = sg.id
-         WHERE sg.program_id=? AND sg.run_date=? AND m.email=? AND m.status='joined' LIMIT 1`);
-const stmtPartyPanelMembers = db.prepare("SELECT email, status FROM signup_group_members WHERE group_id=? AND status<>'declined' ORDER BY created_at");
 // The party `email` belongs to for this run (leads it, or is an invited/joined member).
 function myParty(programId, rd, email) {
   email = lc(email);
@@ -5889,150 +5896,195 @@ function setPartyDeclinedFor(programId, rd, email) {
 }
 // Invite someone I follow into my party for this run (I lead it; created lazily). Follow-only +
 // block invariant + party-size cap. Returns silently on any violation (swap re-renders the page).
-function runPartyInvite(programId, req, res) {
-  const base = P(programId).paths.run;
-  const g = programGate(programId, req, res); if (!g || !g.a) return res.redirect(base);
-  if (!groupQueueFeature(programId)) return res.redirect(base);
-  const rd = programRunDate(programId), me = lc(req.userEmail);
-  const t = db.prepare('SELECT email, status FROM applicants WHERE id=?').get(Number(req.body.id) || 0);
-  if (!t || t.status !== 'approved' || /@guest\.local$/.test(t.email)) return res.redirect(base);
+// ---------- PERSISTENT PARTIES (Friends-tab layer) ----------
+// A party is created ONCE on the Friends tab, invites/accepts happen there, and "Check in as
+// party" on any group-queue run INSTANTIATES the per-run signup_groups machinery from it — so
+// packParties atomic seating, party-aware team fill, dots, sweeps all work unchanged downstream.
+// One party per person (as leader or joined member). Party check-in = "we're coming": every
+// seated member gets confirmed_at (owner rule — no separate confirm step, sweep-shielded).
+const stmtPartyLedBy = db.prepare('SELECT * FROM parties WHERE leader_email=?');
+const stmtPartyRow = db.prepare('SELECT * FROM parties WHERE id=?');
+const stmtPartyJoinedIn = db.prepare(`SELECT p.* FROM parties p JOIN party_members m ON m.party_id=p.id
+    WHERE m.email=? AND m.status='joined' LIMIT 1`);
+const stmtPartyInvitesFor = db.prepare(`SELECT m.party_id, p.leader_email, p.name FROM party_members m
+    JOIN parties p ON p.id=m.party_id WHERE m.email=? AND m.status='invited'`);
+const stmtPartyMemberRows = db.prepare('SELECT email, status FROM party_members WHERE party_id=? ORDER BY created_at');
+const stmtPartyJoinedRows = db.prepare("SELECT email FROM party_members WHERE party_id=? AND status='joined' ORDER BY created_at");
+const stmtRunCheckedIn = db.prepare('SELECT email FROM checkins WHERE program_id=? AND run_date=?');
+function myPersistentParty(email) { email = lc(email); return stmtPartyLedBy.get(email) || stmtPartyJoinedIn.get(email); }
+function persistentPartyEmails(p) { return [lc(p.leader_email), ...stmtPartyJoinedRows.all(p.id).map(r => lc(r.email))]; }          // leader + joined
+function persistentPartyActive(p) { return [lc(p.leader_email), ...stmtPartyMemberRows.all(p.id).map(r => lc(r.email))]; }          // + invited (block/size checks)
+// The cross-program size cap = the largest groupQueue maxSize any program allows (config-derived).
+function partyCap() { let m = 0; for (const p of PROGRAMS.values()) { const g = groupQueueFeature(p.id); if (g) m = Math.max(m, g.maxSize || 4); } return m || 4; }
+
+// Friends-tab party data: my party (members + statuses), invites to me, and (leader-only) who I
+// can still invite — people I FOLLOW, minus blocked pairs and people already committed elsewhere.
+function friendsPartyDataFor(me) {
+  me = lc(me);
+  const maxSize = partyCap();
+  const invites = stmtPartyInvitesFor.all(me).map(r => {
+    const ldr = peopleByEmails([r.leader_email]).get(lc(r.leader_email));
+    return { partyId: r.party_id, name: r.name || '', leaderName: ldr?.full_name || r.leader_email };
+  });
+  const p = myPersistentParty(me);
+  let party = null, invitable = [];
+  if (p) {
+    const rows = [{ email: lc(p.leader_email), status: 'leader' }, ...stmtPartyMemberRows.all(p.id).map(m => ({ email: lc(m.email), status: m.status }))];
+    const dir = peopleByEmails(rows.map(r => r.email));
+    party = {
+      id: p.id, name: p.name || '', isLeader: lc(p.leader_email) === me,
+      members: rows.map(m => { const a = dir.get(m.email); return { id: a?.id || 0, name: a?.full_name || m.email, minor: isMinor(a), status: m.status }; }),
+    };
+    if (party.isLeader && rows.length < maxSize) {
+      const inP = new Set(rows.map(r => r.email));
+      invitable = [...peopleByEmails(followingOf(me)).values()]
+        .filter(x => x.status === 'approved' && !/@guest\.local$/.test(x.email) && !inP.has(lc(x.email)) && !blockedPair(me, x.email) && !myPersistentParty(x.email))
+        .map(x => ({ id: x.id, name: x.full_name })).sort((a, b) => a.name.localeCompare(b.name));
+    }
+  }
+  return { maxSize, party, invites, invitable };
+}
+
+// Friends-tab party routes. Every mutation keys on req.userEmail (IDOR-safe: the party is resolved
+// via leader_email=me or the (party_id, me) member row; invitees resolve from applicant id server-
+// side). Violations redirect silently back to /friends (socialRoute pattern); forms are .swapform.
+app.post('/friends/party/create', requireLogin, (req, res) => {
+  const gate = requirePlayer(req, res); if (!gate) return;
+  if (!gate.a) return res.redirect('/friends');
+  const me = lc(req.userEmail);
+  if (!myPersistentParty(me)) {   // one party per person
+    const name = String(req.body.name || '').trim().slice(0, 40);
+    db.prepare('INSERT INTO parties (name, leader_email) VALUES (?,?)').run(name, me);
+    audit(me, 'player', 'party:create', name);
+  }
+  res.redirect('/friends');
+});
+app.post('/friends/party/invite', requireLogin, (req, res) => {
+  const gate = requirePlayer(req, res); if (!gate) return;
+  if (!gate.a) return res.redirect('/friends');
+  const me = lc(req.userEmail);
+  if (rateLimited('party-invite', me, 30, 10 * 60 * 1000)) return res.redirect('/friends');
+  const p = stmtPartyLedBy.get(me); if (!p) return res.redirect('/friends');   // the leader invites
+  const t = stmtApplicantById.get(Number(req.body.id) || 0);
+  if (!t || t.status !== 'approved' || /@guest\.local$/.test(t.email)) return res.redirect('/friends');
   const them = lc(t.email);
-  if (them === me || !isFollowing(me, them) || blockedPair(me, them)) return res.redirect(base); // invite people you follow
-  let party = stmtPartyByLeader.get(programId, rd, me);
-  if (!party) {
-    const info = db.prepare('INSERT INTO signup_groups (program_id, run_date, leader_email) VALUES (?,?,?)').run(programId, rd, me);
-    party = stmtPartyById.get(info.lastInsertRowid);
-  }
-  if (partyAllEmails(party.id).some(e => e !== them && blockedPair(them, e))) return res.redirect(base); // block invariant
-  const maxSize = groupQueueFeature(programId).maxSize || 4;
-  if (partyAllEmails(party.id).length >= maxSize) return res.redirect(base + '?partyfull=1');
-  db.prepare("INSERT OR IGNORE INTO signup_group_members (group_id, email, status) VALUES (?,?,'invited')").run(party.id, them);
-  res.redirect(base);
-}
-function runPartyAccept(programId, req, res) {
-  const base = P(programId).paths.run, me = lc(req.userEmail);
-  const g = programGate(programId, req, res); if (!g) return res.redirect(base);
-  if (!groupQueueFeature(programId)) return res.redirect(base);
-  const rd = programRunDate(programId), gid = Number(req.body.group) || 0;
-  const party = stmtPartyById.get(gid);
-  if (!party || party.program_id !== programId || party.run_date !== rd) return res.redirect(base);
-  const inv = db.prepare('SELECT status FROM signup_group_members WHERE group_id=? AND email=?').get(gid, me);
-  if (!inv) return res.redirect(base);
-  if (partyAllEmails(gid).some(e => e !== me && blockedPair(me, e))) return res.redirect(base); // block invariant
-  // P2-3: one committed party per run. If I already LEAD or have JOINED a different party this run,
-  // refuse — else group_id would flap between them by last-mutator.
-  const other = db.prepare(`SELECT g.id FROM signup_groups g WHERE g.program_id=? AND g.run_date=? AND g.id<>?
-    AND (g.leader_email=? OR EXISTS (SELECT 1 FROM signup_group_members m WHERE m.group_id=g.id AND m.email=? AND m.status='joined')) LIMIT 1`)
-    .get(programId, rd, gid, me, me);
-  if (other) return res.redirect(base + '?inparty=1');
-  db.prepare("UPDATE signup_group_members SET status='joined' WHERE group_id=? AND email=?").run(gid, me);
-  resyncPartyGroupIds(gid);
-  res.redirect(base);
-}
-function runPartyDecline(programId, req, res) {
-  const base = P(programId).paths.run, me = lc(req.userEmail);
-  const g = programGate(programId, req, res); if (!g) return res.redirect(base);
-  if (!groupQueueFeature(programId)) return res.redirect(base);
-  const rd = programRunDate(programId), gid = Number(req.body.group) || 0;
-  const party = stmtPartyById.get(gid);
-  if (!party || party.program_id !== programId || party.run_date !== rd) return res.redirect(base); // scope group→(program,run_date) like accept (P3-2)
-  db.prepare("UPDATE signup_group_members SET status='declined' WHERE group_id=? AND email=?").run(gid, me);
-  resyncPartyGroupIds(gid);
-  res.redirect(base);
-}
-// Leave my party. Leader → disband (drop the party + clear every member's group pointer); member → drop out.
-function runPartyLeave(programId, req, res) {
-  const base = P(programId).paths.run, me = lc(req.userEmail);
-  const g = programGate(programId, req, res); if (!g) return res.redirect(base);
-  if (!groupQueueFeature(programId)) return res.redirect(base);
-  const rd = programRunDate(programId);
-  const party = myParty(programId, rd, me);
-  if (!party) return res.redirect(base);
-  if (lc(party.leader_email) === me) {
-    db.prepare('UPDATE checkins SET group_id=NULL WHERE group_id=?').run(party.id);
-    db.prepare('DELETE FROM signup_group_members WHERE group_id=?').run(party.id);
-    db.prepare('DELETE FROM signup_groups WHERE id=?').run(party.id);
+  if (them === me || !isFollowing(me, them) || blockedPair(me, them)) return res.redirect('/friends');   // invite people you follow
+  if (myPersistentParty(them)) return res.redirect('/friends');                                          // they're committed elsewhere
+  const active = persistentPartyActive(p);
+  if (active.some(e => e !== them && blockedPair(them, e))) return res.redirect('/friends');             // block invariant
+  if (active.length >= partyCap()) return res.redirect('/friends');                                      // size cap
+  db.prepare("INSERT OR IGNORE INTO party_members (party_id, email, status) VALUES (?,?,'invited')").run(p.id, them);
+  res.redirect('/friends');
+});
+app.post('/friends/party/accept', requireLogin, (req, res) => {
+  const gate = requirePlayer(req, res); if (!gate) return;
+  if (!gate.a) return res.redirect('/friends');
+  const me = lc(req.userEmail), pid = Number(req.body.party) || 0;
+  const inv = db.prepare("SELECT 1 FROM party_members WHERE party_id=? AND email=? AND status='invited'").get(pid, me);
+  if (!inv || myPersistentParty(me)) return res.redirect('/friends');   // must hold the invite; one party per person
+  const row = stmtPartyRow.get(pid); if (!row) return res.redirect('/friends');
+  if (persistentPartyActive(row).some(e => e !== me && blockedPair(me, e))) return res.redirect('/friends');   // block invariant
+  db.prepare("UPDATE party_members SET status='joined' WHERE party_id=? AND email=?").run(pid, me);
+  res.redirect('/friends');
+});
+app.post('/friends/party/decline', requireLogin, (req, res) => {
+  const gate = requirePlayer(req, res); if (!gate) return;
+  const me = lc(req.userEmail), pid = Number(req.body.party) || 0;
+  db.prepare("DELETE FROM party_members WHERE party_id=? AND email=? AND status='invited'").run(pid, me);   // decline = delete → re-invitable
+  res.redirect('/friends');
+});
+app.post('/friends/party/leave', requireLogin, (req, res) => {
+  const gate = requirePlayer(req, res); if (!gate) return;
+  const me = lc(req.userEmail);
+  const p = myPersistentParty(me); if (!p) return res.redirect('/friends');
+  if (lc(p.leader_email) === me) {   // leader → disband. Already-seated checkins stay (they're in for this week).
+    db.prepare('DELETE FROM party_members WHERE party_id=?').run(p.id);
+    db.prepare('DELETE FROM parties WHERE id=?').run(p.id);
+    audit(me, 'player', 'party:disband', String(p.id));
   } else {
-    db.prepare('DELETE FROM signup_group_members WHERE group_id=? AND email=?').run(party.id, me);
-    resyncPartyGroupIds(party.id);
+    db.prepare('DELETE FROM party_members WHERE party_id=? AND email=?').run(p.id, me);
   }
-  res.redirect(base);
-}
-// Check the WHOLE joined party in together (atomic: all fit in the roster or none are added). The
-// partition then seats them together (packParties). Stamps group_id on new + pre-existing checkins.
+  res.redirect('/friends');
+});
+
+// Check the WHOLE party in together (atomic: all fit in the roster or none are added). Any JOINED
+// member can trigger it ("if they check in with the party they are assumed to be coming"). The
+// persistent party is INSTANTIATED as this run's signup_group; packParties seats them as one.
 function runPartyCheckin(programId, req, res) {
   const base = P(programId).paths.run, cfg = P(programId).config;
   const g = programGate(programId, req, res); if (!g || !g.a) return res.redirect(base);
-  if (!groupQueueFeature(programId)) return res.redirect(base);
+  const gq = groupQueueFeature(programId); if (!gq) return res.redirect(base);
   ensureWeekFor(programId);
   const rd = programRunDate(programId);
   if (runCancelledFor(programId, rd) || !runOpenFor(programId, rd)) return res.redirect(base);
-  const party = myParty(programId, rd, req.userEmail);
-  if (!party) return res.redirect(base);
-  if (!partyJoinedEmails(party.id).includes(lc(req.userEmail))) return res.redirect(base); // only a committed member checks the group in
-  const seatable = partyJoinedEmails(party.id).map(e => applicantByEmail(e))
-    .filter(a => a && a.status === 'approved' && a.waiver_ok && !a.suspended && !/@guest\.local$/.test(a.email));
   const me = lc(req.userEmail);
+  const p = myPersistentParty(me);
+  if (!p) return res.redirect(base);
+  const emails = persistentPartyEmails(p);
+  if (!emails.includes(me)) return res.redirect(base);                            // invited-but-not-joined can't seat the party
+  if (emails.length > (gq.maxSize || 4)) return res.redirect(base + '?partybig=1'); // party exceeds THIS run's group cap
+  // Per-run declined members (operator-removed this run, P2-2) must NOT be re-seated by a re-tap.
+  const runGroup = stmtPartyByLeader.get(programId, rd, lc(p.leader_email));
+  const declined = new Set(runGroup
+    ? db.prepare("SELECT email FROM signup_group_members WHERE group_id=? AND status='declined'").all(runGroup.id).map(r => lc(r.email))
+    : []);
+  const seatable = emails.filter(e => !declined.has(e)).map(e => applicantByEmail(e))
+    .filter(a => a && a.status === 'approved' && a.waiver_ok && !a.suspended && !/@guest\.local$/.test(a.email));
   const optRow = db.prepare('SELECT 1 FROM regular_optout WHERE run_date=? AND email=? AND program_id=?');
   const { rows } = partitionFor(programId, rd);
   const already = new Set(rows.map(r => lc(r.email)));
-  // Skip members already checked in, and RESPECT a member's sit-out (regular_optout) instead of
-  // silently deleting it (P2-2) — except for me, the tapper, who is actively opting back in.
+  // Skip members already checked in, and RESPECT a member's sit-out (regular_optout) — except for
+  // me, the tapper, who is actively opting back in (P2-2).
   const toAdd = seatable.filter(a => !already.has(lc(a.email)) && (lc(a.email) === me || !optRow.get(rd, a.email, programId)));
   if (rows.length + toAdd.length > cfg.cap + cfg.waitlist) return res.redirect(base + '?partyfull=1'); // atomic: whole party or none
-  const ins = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, program_id, group_id) VALUES (?,?,?,?,?)');
   db.exec('BEGIN'); // whole party seats or none — a mid-loop throw must not leave a PARTIAL party (P3-3)
   try {
+    // Instantiate (or reuse) this run's signup_group from the persistent party.
+    let run = runGroup;
+    if (!run) {
+      const info = db.prepare('INSERT INTO signup_groups (program_id, run_date, leader_email) VALUES (?,?,?)').run(programId, rd, lc(p.leader_email));
+      run = stmtPartyById.get(info.lastInsertRowid);
+    }
+    for (const e of emails) if (e !== lc(p.leader_email)) {
+      db.prepare(`INSERT INTO signup_group_members (group_id, email, status) VALUES (?,?,'joined')
+        ON CONFLICT(group_id, email) DO UPDATE SET status = CASE WHEN status='declined' THEN status ELSE 'joined' END`).run(run.id, e);
+    }
     for (const a of toAdd) {
       joinProgramMembership(programId, a.email);
       if (lc(a.email) === me) db.prepare('DELETE FROM regular_optout WHERE run_date=? AND email=? AND program_id=?').run(rd, a.email, programId); // tapper opts back in
-      ins.run(rd, a.email, a.full_name, programId, party.id);
+      db.prepare("INSERT OR IGNORE INTO checkins (run_date, email, name, program_id, group_id, confirmed_at) VALUES (?,?,?,?,?,datetime('now'))")
+        .run(rd, a.email, a.full_name, programId, run.id);
     }
-    resyncPartyGroupIds(party.id);
+    resyncPartyGroupIds(run.id);
+    // Party check-in = "we're coming" (owner rule): confirm pre-existing solo checkins of the
+    // party's joined members too, so nobody in the party is swept at the cutoff.
+    const joined = partyJoinedEmails(run.id).filter(e => !declined.has(e));
+    if (joined.length) db.prepare(`UPDATE checkins SET confirmed_at = datetime('now')
+      WHERE program_id=? AND run_date=? AND confirmed_at IS NULL AND email IN (${joined.map(() => '?').join(',')})`).run(programId, rd, ...joined);
     db.exec('COMMIT');
+    audit(me, 'player', `${cfg.logTag}:partycheckin`, `${run.id} +${toAdd.length}`);
   } catch (e) { db.exec('ROLLBACK'); console.error(`[${cfg.logTag}-party] group check-in FAILED: ${e.message}`); }
   res.redirect(base);
 }
 
-// Party panel data for the run page (null unless groupQueue is on). Shows my party (members +
-// who's checked in), pending invites to me, and people I follow I can still invite. Leader-only invites.
+// Run-page party card data (null unless groupQueue is on → bball stays byte-identical). The card
+// is a simple status + one-tap check-in; creating/managing the party lives on the Friends tab.
 function partyPanelFor(programId, rd, email) {
-  if (!groupQueueFeature(programId)) return null;
+  const gq = groupQueueFeature(programId); if (!gq) return null;
   email = lc(email);
-  const maxSize = groupQueueFeature(programId).maxSize || 4;
-  const checkedIn = new Set(db.prepare('SELECT email FROM checkins WHERE program_id=? AND run_date=?').all(programId, rd).map(r => lc(r.email)));
-  // "My party" for the panel = one I LEAD or have JOINED (a pending invite is NOT my party — it shows
-  // in the invites list so the Accept/Decline buttons render). myParty (incl. invited) is for actions.
-  const g = stmtPartyByLeader.get(programId, rd, email)
-    || stmtPartyJoinedOf.get(programId, rd, email);
-  let party = null;
-  if (g) {
-    const isLeader = lc(g.leader_email) === email;
-    const memberRows = stmtPartyPanelMembers.all(g.id);
-    const list = [{ email: lc(g.leader_email), status: 'leader' }, ...memberRows];
-    const dir = peopleByEmails(list.map(m => m.email));
-    party = {
-      id: g.id, isLeader, myStatus: isLeader ? 'leader' : (memberRows.find(m => m.email === email)?.status || 'none'),
-      members: list.map(m => { const p = dir.get(lc(m.email)); return { id: p?.id || 0, email: lc(m.email), name: p?.full_name || m.email, minor: isMinor(p), status: m.status, checkedIn: checkedIn.has(lc(m.email)) }; }),
-    };
-  }
-  const invArgs = g ? [email, programId, rd, g.id] : [email, programId, rd];
-  const invRows = db.prepare(`SELECT m.group_id, sg.leader_email FROM signup_group_members m
-    JOIN signup_groups sg ON sg.id = m.group_id
-    WHERE m.email=? AND m.status='invited' AND sg.program_id=? AND sg.run_date=?${g ? ' AND sg.id<>?' : ''}`).all(...invArgs);
-  const invDir = peopleByEmails(invRows.map(r => r.leader_email));
-  const invites = invRows.map(r => ({ groupId: r.group_id, leaderName: invDir.get(lc(r.leader_email))?.full_name || r.leader_email }));
-  let invitable = [];
-  if (!g || lc(g.leader_email) === email) {   // only a (potential) leader invites
-    const inParty = new Set(party ? party.members.map(m => lc(m.email)) : [email]);
-    inParty.add(email);
-    // People you FOLLOW — matches the invite route's isFollowing gate. (The app is follow-only now;
-    // friendsOf = mutual-friend edges is dead, so it returned an empty invitable list — P3-4.)
-    invitable = [...peopleByEmails(followingOf(email)).values()]
-      .filter(p => p.status === 'approved' && !/@guest\.local$/.test(p.email) && !inParty.has(lc(p.email)) && !blockedPair(email, p.email))
-      .map(p => ({ id: p.id, name: p.full_name })).sort((a, b) => a.name.localeCompare(b.name));
-  }
-  return { maxSize, party, invites, invitable };
+  const maxSize = gq.maxSize || 4;
+  const p = myPersistentParty(email);
+  if (!p) return { maxSize, party: null };   // renders the "create one on the Friends tab" hint
+  const emails = persistentPartyEmails(p);
+  const checkedIn = new Set(stmtRunCheckedIn.all(programId, rd).map(r => lc(r.email)));
+  const dir = peopleByEmails(emails);
+  return {
+    maxSize,
+    party: {
+      name: p.name || '', isLeader: lc(p.leader_email) === email, tooBig: emails.length > maxSize,
+      members: emails.map(em => { const a = dir.get(em); return { id: a?.id || 0, name: a?.full_name || em, minor: isMinor(a), checkedIn: checkedIn.has(em) }; }),
+    },
+  };
 }
 
 const stmtProgActiveById = db.prepare('SELECT active FROM program WHERE id = ?');
@@ -6085,10 +6137,8 @@ function mountRunProgram(app, program) {
   app.post(`${b}/team/fill`, requireLogin, (req, res) => runTeamFill(id, req, res));
   app.post(`${b}/penalty/clear`, requireLogin, (req, res) => runPenaltyClear(id, req, res));  // operator: forgive an auto-renew strike/pause
   // Queue-with-friends (registered for every program; the handlers no-op unless config.features.groupQueue).
-  app.post(`${b}/party/invite`, requireLogin, (req, res) => runPartyInvite(id, req, res));
-  app.post(`${b}/party/accept`, requireLogin, (req, res) => runPartyAccept(id, req, res));
-  app.post(`${b}/party/decline`, requireLogin, (req, res) => runPartyDecline(id, req, res));
-  app.post(`${b}/party/leave`, requireLogin, (req, res) => runPartyLeave(id, req, res));
+  // Parties are created/managed on the FRIENDS tab now (/friends/party/*); the run keeps only
+  // the one-tap group check-in (any joined member seats the whole party — assumed coming).
   app.post(`${b}/party/checkin`, requireLogin, (req, res) => runPartyCheckin(id, req, res));
 }
 function buildPrograms() {

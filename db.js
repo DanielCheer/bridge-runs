@@ -573,6 +573,29 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_sgm_email ON signup_group_members(email);
 `);
 
+// --- Persistent parties (2026-07) — the FRIENDS-TAB layer above the per-run signup_groups. ---
+// A party is created once (Friends tab), members are invited/joined there, and "Check in as
+// party" on a run INSTANTIATES the per-run signup_groups machinery from it (atomic seating,
+// team fill, dots all unchanged). One party per person (as leader or joined member). Decline =
+// DELETE the invite row (re-invitable); the per-run 'declined' state lives in signup_group_members.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS parties (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT NOT NULL DEFAULT '',
+    leader_email TEXT NOT NULL,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_parties_leader ON parties(leader_email);
+  CREATE TABLE IF NOT EXISTS party_members (
+    party_id   INTEGER NOT NULL,
+    email      TEXT NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'invited',   -- 'invited' | 'joined'
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (party_id, email)
+  );
+  CREATE INDEX IF NOT EXISTS idx_party_members_email ON party_members(email);
+`);
+
 // Prune stale magic-link tokens on startup. A token is dead once it's been used
 // OR has expired — keeping them forever just grows the table unbounded (a fresh
 // row is written on every /login). Unused-and-still-valid tokens are preserved
@@ -612,7 +635,7 @@ function transact(fn) {
 // keeps their own: drop whatever the target address left behind, then carry. Internal constants
 // — never user input — so interpolating them into SQL is safe.
 const EMAIL_KEYED_TABLES = ['announcement_reads', 'announcement_dismissals', 'regular_optout',
-  'group_reads', 'program_membership', 'team_assignments', 'signup_group_members'];
+  'group_reads', 'program_membership', 'team_assignments', 'signup_group_members', 'party_members'];
 
 // Carry every per-user row from oldEmail to newEmail. Assumes the CALLER already opened a
 // transaction, so the `applicants` row update commits atomically with this cascade — a
@@ -660,6 +683,17 @@ function rekeyEmailTx(oldEmail, newEmail) {
     // the loop above; a straight UPDATE (id is the PK, leader_email non-unique → no collision).
     // The party's MEMBER rows ride the loop via 'signup_group_members'.
     db.prepare('UPDATE signup_groups SET leader_email=? WHERE leader_email=?').run(newEmail, oldEmail);
+    // parties (persistent, Friends-tab layer): ONE-PARTY-PER-PERSON invariant — the migrating
+    // person's party wins; dissolve any party the TARGET address led, then carry leadership.
+    // party_members rides the EMAIL_KEYED_TABLES loop above.
+    {
+      const tgtLed = db.prepare('SELECT id FROM parties WHERE leader_email=?').all(newEmail).map(r => r.id);
+      if (tgtLed.length) {
+        db.prepare(`DELETE FROM party_members WHERE party_id IN (${tgtLed.map(() => '?').join(',')})`).run(...tgtLed);
+        db.prepare('DELETE FROM parties WHERE leader_email=?').run(newEmail);
+      }
+      db.prepare('UPDATE parties SET leader_email=? WHERE leader_email=?').run(newEmail, oldEmail);
+    }
     db.prepare('UPDATE announcements         SET author=?      WHERE author=?').run(newEmail, oldEmail); // "posted by" resolves to their name
     // Old-address sign-in tokens are INVALIDATED, not carried — they were emailed to an
     // address the person may no longer control, so a lingering valid link/code is a risk.

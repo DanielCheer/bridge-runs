@@ -2612,7 +2612,7 @@ export function friendsSearchFragment(results = []) {
   return `<div class="mlist">${results.map(r =>
     frPersonRow(r, r.blocked ? '<span class="frchip">Blocked</span>' : followBtn(r.id, r.following, '/friends'))).join('')}</div>`;
 }
-export function friendsPage({ q = '', results = [], blocked = [], followers = [], following = [], games = [], dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null }) {
+export function friendsPage({ q = '', results = [], blocked = [], followers = [], following = [], games = [], party = null, dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null }) {
   const BACK = '/friends';
   const dateLabel = rd => esc(new Date(rd + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }));
   const section = (title, count, inner) => `<div class="subhead frsub">${esc(title)}${count ? ` <span class="frn">${count}</span>` : ''}</div>${inner}`;
@@ -2622,6 +2622,29 @@ export function friendsPage({ q = '', results = [], blocked = [], followers = []
   const searchBlock = `
     <div class="frsearch"><input type="search" id="frq" value="${esc(q)}" placeholder="Search players by name…" autocomplete="off" autocapitalize="words" aria-label="Search players"></div>
     <div id="frresults">${q ? friendsSearchFragment(results) : ''}</div>`;
+
+  // Persistent party — created HERE, checked in with one tap on any group-queue run. pd.party
+  // null → invites (if any) + the create form; else the member card with leader controls.
+  const partyBlock = !party ? '' : (() => {
+    const pd = party;
+    const f = (action, fields, label, cls) => `<form class="swapform frbtn" method="POST" action="/friends/party/${action}" style="margin:0">${Object.entries(fields).map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(String(v))}">`).join('')}<button class="btn ${cls}" type="submit">${label}</button></form>`;
+    const invites = pd.invites.map(iv => `<div class="lr" style="gap:8px"><span style="flex:1"><b>${esc(iv.leaderName)}</b> invited you${iv.name ? ` to <b>${esc(iv.name)}</b>` : ' to their party'}</span>${f('accept', { party: iv.partyId }, '✓ Join', 'primary sm')}${f('decline', { party: iv.partyId }, 'Decline', 'ghost sm')}</div>`).join('');
+    let inner;
+    if (pd.party) {
+      const p2 = pd.party;
+      const rows = p2.members.map(m => `<div class="lr" style="gap:8px"><span style="flex:1">${esc(m.name)}${m.minor ? MINOR_STAR : ''}${m.status === 'leader' ? ' <span class="tag">Leader</span>' : ''}${m.status === 'invited' ? ' <span class="tag" style="opacity:.55">Invited</span>' : ''}</span></div>`).join('');
+      const picker = (p2.isLeader && pd.invitable.length)
+        ? `<details class="frdetails" style="margin-top:8px"><summary>＋ Invite to the party</summary><div style="margin-top:6px">${pd.invitable.map(fr => `<div class="lr" style="gap:8px"><span style="flex:1">${esc(fr.name)}</span>${f('invite', { id: fr.id }, '＋ Invite', 'ghost sm')}</div>`).join('')}</div></details>`
+        : (p2.isLeader ? `<p class="tally-note" style="color:var(--muted);margin:8px 0 0">Follow more players to invite them.</p>` : '');
+      inner = `${rows}${picker}<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">${f('leave', {}, p2.isLeader ? 'Disband party' : 'Leave party', 'ghost sm')}</div>
+        <p class="tally-note" style="color:var(--muted);margin:8px 0 0">Open any run and tap <b>“✓ Check in my party”</b> — you all land on the floor, or wait, together.</p>`;
+    } else {
+      inner = `<p class="tally-note" style="color:var(--muted);margin:0 0 8px">Create a party once — then check in together on any run with one tap.</p>
+        <form class="swapform" method="POST" action="/friends/party/create" style="display:flex;gap:8px;flex-wrap:wrap"><input name="name" maxlength="40" placeholder="Party name (optional)" style="flex:1;min-width:150px"><button class="btn primary sm" type="submit">＋ Create party</button></form>`;
+    }
+    const title = pd.party ? `Your party${pd.party.name ? ` · ${esc(pd.party.name)}` : ''} <span class="frn">${pd.party.members.length}/${pd.maxSize}</span>` : 'Party';
+    return `<div class="subhead frsub">${title}</div>${invites}${inner ? `<div class="card" style="margin-top:6px;padding:12px 14px">${inner}</div>` : ''}`;
+  })();
 
   const followersBlock = followers.length
     ? section('Followers', followers.length, `<div class="mlist">${followers.map(p => frPersonRow(p, followBtn(p.id, p.followsBack, BACK, true))).join('')}</div>`)
@@ -2650,6 +2673,7 @@ export function friendsPage({ q = '', results = [], blocked = [], followers = []
     <div class="frwrap">
       <div class="frtitle"><h1>Friends</h1></div>
       ${searchBlock}
+      ${partyBlock}
       ${followersBlock}
       ${gamesBlock}
       ${followingBlock}
@@ -3092,27 +3116,28 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
   // Queue-with-friends panel (Phase 6b) — renders only when partyData is present (config.features.groupQueue,
   // volleyball). Empty string otherwise → byte-identical for programs without it. Forms carry .swapform so
   // invite/accept/decline/check-in/leave swap in place. A party seats atomically (server side).
+  // Party card — parties are created/managed on the FRIENDS tab; this card is just status + the
+  // one-tap group check-in (any joined member seats the whole party, all confirmed on the spot).
   const partyPanel = !partyData ? '' : (() => {
     const pd = partyData;
-    const f = (action, fields, label, cls) => `<form class="swapform" method="POST" action="${runBase}/party/${action}" style="margin:0">${Object.entries(fields).map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(String(v))}">`).join('')}<button class="btn ${cls}" type="submit">${label}</button></form>`;
-    const picker = (label) => pd.invitable.length
-      ? `<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--muted)">${label}</summary><div style="margin-top:6px">${pd.invitable.map(fr => `<div style="display:flex;align-items:center;gap:8px;padding:3px 0"><span style="flex:1">${esc(fr.name)}</span>${f('invite', { id: fr.id }, '＋ Invite', 'ghost sm')}</div>`).join('')}</div></details>`
-      : `<p class="tally-note" style="color:var(--muted);margin:8px 0 0">Add friends on the Friends tab, then invite them here to queue together.</p>`;
-    const invites = pd.invites.map(iv => `<div style="display:flex;align-items:center;gap:8px;padding:6px 0">
-        <span style="flex:1"><b>${esc(iv.leaderName)}</b> invited you to their group</span>${f('accept', { group: iv.groupId }, '✓ Join', 'primary sm')}${f('decline', { group: iv.groupId }, 'Decline', 'ghost sm')}</div>`).join('');
     let mine;
     if (pd.party) {
       const p = pd.party;
       const rows = p.members.map(m => `<div style="display:flex;align-items:center;gap:6px;padding:3px 0">
-          <span style="flex:1">${esc(m.name)}${m.minor ? MINOR_STAR : ''}${m.status === 'leader' ? ' <span class="tag">Leader</span>' : ''}${m.status === 'invited' ? ' <span class="tag" style="opacity:.55">Invited</span>' : ''}</span>${m.checkedIn ? '<span class="tag" style="background:#2f7169;color:#fff">✓ In</span>' : ''}</div>`).join('');
-      const canInvite = p.isLeader && p.members.length < pd.maxSize;
-      const checkinBtn = isOpen && !cancelled ? f('checkin', {}, '✓ Check in my group', 'primary') : '';
-      const leaveBtn = f('leave', {}, p.isLeader ? 'Disband group' : 'Leave group', 'ghost sm');
-      mine = `<div class="clab">Your group <span style="color:var(--muted);font-weight:600">${p.members.length}/${pd.maxSize}</span></div>${rows}${canInvite ? picker('＋ Invite a friend') : ''}<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">${checkinBtn}${leaveBtn}</div>`;
+          <span style="flex:1">${esc(m.name)}${m.minor ? MINOR_STAR : ''}</span>${m.checkedIn ? '<span class="tag" style="background:#2f7169;color:#fff">✓ In</span>' : ''}</div>`).join('');
+      const allIn = p.members.every(m => m.checkedIn);
+      const checkinBtn = (isOpen && !cancelled && !allIn && !p.tooBig)
+        ? `<form class="swapform" method="POST" action="${runBase}/party/checkin" style="margin:0"><button class="btn primary" type="submit">✓ Check in my party (${p.members.length})</button></form>` : '';
+      const note = p.tooBig
+        ? `<p class="tally-note" style="color:var(--muted);margin:8px 0 0">Your party (${p.members.length}) is bigger than this run's group limit (${pd.maxSize}) — trim it on the Friends tab.</p>`
+        : (allIn ? `<p class="tally-note" style="color:var(--muted);margin:8px 0 0">Everyone's in — see you out there. 🎉</p>`
+        : `<p class="tally-note" style="color:var(--muted);margin:8px 0 0">One tap seats everyone together — floor or waitlist, as one. Checking in counts as confirming.</p>`);
+      mine = `<div class="clab">Your party${p.name ? ` · ${esc(p.name)}` : ''} <span style="color:var(--muted);font-weight:600">${p.members.length}/${pd.maxSize}</span></div>${rows}<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">${checkinBtn}</div>${note}
+        <p class="tally-note" style="margin:6px 0 0"><a href="/friends">Manage your party on the Friends tab →</a></p>`;
     } else {
-      mine = `<div class="clab">Queue with friends</div><p class="tally-note" style="color:var(--muted);margin:6px 0">Invite friends to check in together — your group lands on the floor, or waits, as one.</p>${picker('＋ Invite a friend to start a group')}`;
+      mine = `<div class="clab">Queue with friends</div><p class="tally-note" style="color:var(--muted);margin:6px 0">Create a party on the <a href="/friends">Friends tab</a> — then check in together here with one tap.</p>`;
     }
-    return `<div class="infosec teamspanel" style="margin-top:20px"><div class="card">${invites ? invites + '<div class="rule" style="margin:8px 0"></div>' : ''}${mine}</div></div>`;
+    return `<div class="infosec teamspanel" style="margin-top:20px"><div class="card">${mine}</div></div>`;
   })();
   return HEAD(`${sport} — The Bridge`, `has-tabs ${theme}`) + header(`<b>${sport.toUpperCase()}</b>${esc(email)}`, wdayShort(runDate), ann, hours) + `
     ${backToRuns}
