@@ -2187,12 +2187,16 @@ app.get('/poll', requireLogin, (req, res) => {
 // Run Chat is its own /chat tab. Old bookmarks/links land on check-in.
 app.get('/roster', requireLogin, (req, res) => res.redirect('/checkin'));
 
+// Shared by the profile popup, full profile, DM thread + DM send (hot member paths). node:sqlite
+// has no stmt cache, so hoist this once instead of re-preparing the same SQL on every call.
+const stmtApplicantById = db.prepare('SELECT * FROM applicants WHERE id = ?');
+
 // ---------- PROFILE (view another player) ----------
 // Compact profile card fragment for the who's-going quick-look popup (fetched by pvOpen).
 app.get('/u/:id/card', requireLogin, (req, res) => {
   const gate = requirePlayer(req, res);
   if (!gate) return;
-  const p = db.prepare('SELECT * FROM applicants WHERE id = ?').get(Number(req.params.id) || 0);
+  const p = stmtApplicantById.get(Number(req.params.id) || 0);
   if (!p || (p.status !== 'approved' && !gate.viewerIsAdmin)) return res.status(404).send('');
   const canContact = gate.viewerIsAdmin || !!(gate.a && gate.a.is_team);
   const canDM = canMessage(req.userEmail, gate.a, p);   // hide Message when the server would block it (block / minor)
@@ -2202,7 +2206,7 @@ app.get('/u/:id/card', requireLogin, (req, res) => {
 app.get('/u/:id', requireLogin, (req, res) => {
   const gate = requirePlayer(req, res);
   if (!gate) return;
-  const p = db.prepare('SELECT * FROM applicants WHERE id = ?').get(Number(req.params.id) || 0);
+  const p = stmtApplicantById.get(Number(req.params.id) || 0);
   if (!p || (p.status !== 'approved' && !gate.viewerIsAdmin)) return res.redirect('/checkin');
   // OWNER RULE: operators (admin/team) see full name + phone; regular players don't.
   const canContact = gate.viewerIsAdmin || !!(gate.a && gate.a.is_team);
@@ -2410,13 +2414,14 @@ function dmDec(stored) {
 // Inbox loader — grouped threads, newest first. One grouped query + two bulk lookups
 // (counterparts, last-message snippets); no per-row queries. Consumed by the host's
 // profile tab (the DM inbox lives there now — there is no standalone Messages tab).
-function loadInbox(me) {
-  const rows = db.prepare(`
+const stmtInboxThreads = db.prepare(`
     SELECT CASE WHEN from_email = ? THEN to_email ELSE from_email END AS other,
            MAX(id) AS last_id,
            SUM(CASE WHEN to_email = ? AND read_at IS NULL THEN 1 ELSE 0 END) AS unread
     FROM messages WHERE from_email = ? OR to_email = ?
-    GROUP BY other ORDER BY last_id DESC`).all(me, me, me, me);
+    GROUP BY other ORDER BY last_id DESC`);
+function loadInbox(me) {
+  const rows = stmtInboxThreads.all(me, me, me, me);
   if (!rows.length) return [];
   const others = rows.map(r => r.other);
   const ph = others.map(() => '?').join(',');
@@ -2474,25 +2479,25 @@ app.post('/messages/react', requireLogin, (req, res) => {
 // Thread — load counterpart, gate (canMessage OR pre-existing history, so a demoted
 // host's past threads stay readable), mark-read (the ONLY read event; GET side-effect
 // is intentional), then 3 bulk SELECTs → Maps (messages / reactions / reply parents).
+const stmtDmHasHistory = db.prepare('SELECT 1 FROM messages WHERE (from_email=? AND to_email=?) OR (from_email=? AND to_email=?) LIMIT 1');
+const stmtDmMarkRead = db.prepare("UPDATE messages SET read_at = datetime('now') WHERE to_email = ? AND from_email = ? AND read_at IS NULL");
+const stmtDmThread = db.prepare(`
+    SELECT * FROM (
+      SELECT * FROM messages WHERE (from_email=? AND to_email=?) OR (from_email=? AND to_email=?)
+      ORDER BY id DESC LIMIT 500
+    ) ORDER BY id ASC`);
 app.get('/messages/:id', requireLogin, (req, res) => {
   const gate = requirePlayer(req, res);
   if (!gate) return;
   if (!gate.a) return res.redirect('/status');
   const me = req.userEmail, a = gate.a;
-  const p = db.prepare('SELECT * FROM applicants WHERE id = ?').get(Number(req.params.id) || 0);
+  const p = stmtApplicantById.get(Number(req.params.id) || 0);
   if (!p) return res.redirect('/messages');
-  const hasHistory = !!db.prepare(
-    'SELECT 1 FROM messages WHERE (from_email=? AND to_email=?) OR (from_email=? AND to_email=?) LIMIT 1')
-    .get(me, p.email, p.email, me);
+  const hasHistory = !!stmtDmHasHistory.get(me, p.email, p.email, me);
   const canPost = canMessage(me, a, p);
   if (!canPost && !hasHistory) return res.redirect('/messages');
-  db.prepare("UPDATE messages SET read_at = datetime('now') WHERE to_email = ? AND from_email = ? AND read_at IS NULL")
-    .run(me, p.email);
-  const msgs = db.prepare(`
-    SELECT * FROM (
-      SELECT * FROM messages WHERE (from_email=? AND to_email=?) OR (from_email=? AND to_email=?)
-      ORDER BY id DESC LIMIT 500
-    ) ORDER BY id ASC`).all(me, p.email, p.email, me);
+  stmtDmMarkRead.run(me, p.email);   // intentional GET side-effect (mark thread read) — compile-site moved, execution unchanged
+  const msgs = stmtDmThread.all(me, p.email, p.email, me);
   for (const m of msgs) m.body = dmDec(m.body);        // decrypt at-rest DM bodies for the thread render
   const reactions = new Map();  // message_id -> [{emoji,count,mine}]
   const parents = new Map();    // parent id -> {from_email, body, image}
@@ -2530,7 +2535,7 @@ app.post('/messages/:id', requireLogin, (req, res) => {
     if (!gate.a) return res.redirect('/status');
     if (mutedOut(gate, res, { back: '/messages/' + (Number(req.params.id) || 0) })) return; // suspended = muted
     const me = req.userEmail, a = gate.a;
-    const p = db.prepare('SELECT * FROM applicants WHERE id = ?').get(Number(req.params.id) || 0);
+    const p = stmtApplicantById.get(Number(req.params.id) || 0);
     if (!p || !canMessage(me, a, p)) return res.redirect('/messages');
     const dest = '/messages/' + p.id;
     if (err) return res.redirect(dest + '?err=' + (err.code === 'LIMIT_FILE_SIZE' ? 'big' : 'bad'));
@@ -2588,6 +2593,11 @@ app.post('/messages/:id', requireLogin, (req, res) => {
 // admins (requirePlayer) and rate-limited. Searches ALL applicants by name (owner:
 // "anyone in the database"), prefix matches ranked first, top 8. Returns esc-safe JSON
 // [{id, name, avatar}] — name/avatar are data-only (client renders via textContent).
+const stmtMentionSearch = db.prepare(`
+    SELECT id, full_name, email, avatar FROM applicants
+    WHERE full_name LIKE ? ESCAPE '\\' AND status = 'approved' AND email NOT LIKE '%@guest.local'
+    ORDER BY (CASE WHEN full_name LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END), full_name COLLATE NOCASE
+    LIMIT 8`);
 app.get('/players/search', requireLogin, (req, res) => {
   const gate = requirePlayer(req, res);
   if (!gate) return;
@@ -2595,11 +2605,7 @@ app.get('/players/search', requireLogin, (req, res) => {
   const q = String(req.query.q || '').trim().slice(0, 60);
   // Escape LIKE wildcards so a literal % / _ / \ in the query can't widen the match.
   const like = q.replace(/[\\%_]/g, c => '\\' + c);
-  const rows = db.prepare(`
-    SELECT id, full_name, email, avatar FROM applicants
-    WHERE full_name LIKE ? ESCAPE '\\' AND status = 'approved' AND email NOT LIKE '%@guest.local'
-    ORDER BY (CASE WHEN full_name LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END), full_name COLLATE NOCASE
-    LIMIT 8`).all('%' + like + '%', like + '%');
+  const rows = stmtMentionSearch.all('%' + like + '%', like + '%');
   res.json(rows.map(r => ({ id: r.id, name: r.full_name, avatar: avatarUrlFor(r.email) || '' })));
 });
 
@@ -2740,15 +2746,16 @@ function friendsGamesFor(me) {
 
 // Directory search → renderable rows {id,name,email,following,blocked} (approved non-guest, not me).
 // Shared by the /friends page + the /friends/search typeahead fragment.
+const stmtDirectorySearch = db.prepare(`
+    SELECT id, full_name, email, status FROM applicants
+    WHERE (full_name LIKE ? ESCAPE '\\' OR email LIKE ? ESCAPE '\\') AND email <> ?
+    ORDER BY (CASE WHEN full_name LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END), full_name COLLATE NOCASE
+    LIMIT 25`);
 function searchResultsFor(me, q) {
   q = String(q || '').trim().slice(0, 60);
   if (!q) return [];
   const like = q.replace(/[\\%_]/g, c => '\\' + c);
-  const rows = db.prepare(`
-    SELECT id, full_name, email, status FROM applicants
-    WHERE (full_name LIKE ? ESCAPE '\\' OR email LIKE ? ESCAPE '\\') AND email <> ?
-    ORDER BY (CASE WHEN full_name LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END), full_name COLLATE NOCASE
-    LIMIT 25`).all('%' + like + '%', '%' + like + '%', lc(me), like + '%');
+  const rows = stmtDirectorySearch.all('%' + like + '%', '%' + like + '%', lc(me), like + '%');
   return rows.filter(r => r.status === 'approved' && !/@guest\.local$/.test(r.email))
     .map(r => ({ id: r.id, name: r.full_name, email: r.email, following: isFollowing(me, r.email), blocked: blockedPair(me, r.email) }));
 }
@@ -5533,28 +5540,33 @@ const PROGRAM_DEFS = {
 // never grows under seated members — it lands together in one action or waits together.
 const stmtPartyByLeader = db.prepare('SELECT * FROM signup_groups WHERE program_id=? AND run_date=? AND leader_email=?');
 const stmtPartyById     = db.prepare('SELECT * FROM signup_groups WHERE id=?');
+const stmtMyParty = db.prepare(`SELECT g.* FROM signup_groups g WHERE g.program_id=? AND g.run_date=?
+    AND (g.leader_email=? OR EXISTS (SELECT 1 FROM signup_group_members m
+      WHERE m.group_id=g.id AND m.email=? AND m.status IN ('invited','joined')))
+    ORDER BY CASE WHEN g.leader_email=? THEN 0
+      WHEN EXISTS (SELECT 1 FROM signup_group_members m WHERE m.group_id=g.id AND m.email=? AND m.status='joined') THEN 1
+      ELSE 2 END, g.id ASC LIMIT 1`);
+const stmtPartyJoinedMembers = db.prepare("SELECT email FROM signup_group_members WHERE group_id=? AND status='joined'");
+const stmtPartyActiveMembers = db.prepare("SELECT email FROM signup_group_members WHERE group_id=? AND status IN ('invited','joined')");
+const stmtPartyJoinedOf = db.prepare(`SELECT sg.* FROM signup_groups sg JOIN signup_group_members m ON m.group_id = sg.id
+         WHERE sg.program_id=? AND sg.run_date=? AND m.email=? AND m.status='joined' LIMIT 1`);
+const stmtPartyPanelMembers = db.prepare("SELECT email, status FROM signup_group_members WHERE group_id=? AND status<>'declined' ORDER BY created_at");
 // The party `email` belongs to for this run (leads it, or is an invited/joined member).
 function myParty(programId, rd, email) {
   email = lc(email);
   // Deterministic when the viewer touches more than one party this run: prefer the one they LEAD,
   // then one they've JOINED, then a pending INVITE — so leave/disband/check-in act on the party
   // they actually own, not an arbitrary inbound invite (P2-4).
-  return db.prepare(`SELECT g.* FROM signup_groups g WHERE g.program_id=? AND g.run_date=?
-    AND (g.leader_email=? OR EXISTS (SELECT 1 FROM signup_group_members m
-      WHERE m.group_id=g.id AND m.email=? AND m.status IN ('invited','joined')))
-    ORDER BY CASE WHEN g.leader_email=? THEN 0
-      WHEN EXISTS (SELECT 1 FROM signup_group_members m WHERE m.group_id=g.id AND m.email=? AND m.status='joined') THEN 1
-      ELSE 2 END, g.id ASC LIMIT 1`)
-    .get(programId, rd, email, email, email, email);
+  return stmtMyParty.get(programId, rd, email, email, email, email);
 }
 function partyJoinedEmails(groupId) { // leader (implicitly in) + accepted members
   const g = stmtPartyById.get(groupId); if (!g) return [];
-  const m = db.prepare("SELECT email FROM signup_group_members WHERE group_id=? AND status='joined'").all(groupId).map(r => r.email);
+  const m = stmtPartyJoinedMembers.all(groupId).map(r => r.email);
   return [lc(g.leader_email), ...m];
 }
 function partyAllEmails(groupId) { // leader + everyone still in play (for block checks + size cap)
   const g = stmtPartyById.get(groupId); if (!g) return [];
-  const m = db.prepare("SELECT email FROM signup_group_members WHERE group_id=? AND status IN ('invited','joined')").all(groupId).map(r => r.email);
+  const m = stmtPartyActiveMembers.all(groupId).map(r => r.email);
   return [lc(g.leader_email), ...m];
 }
 // Keep checkins.group_id in lockstep with a party's JOINED membership: stamp joined members who
@@ -5717,12 +5729,11 @@ function partyPanelFor(programId, rd, email) {
   // "My party" for the panel = one I LEAD or have JOINED (a pending invite is NOT my party — it shows
   // in the invites list so the Accept/Decline buttons render). myParty (incl. invited) is for actions.
   const g = stmtPartyByLeader.get(programId, rd, email)
-    || db.prepare(`SELECT sg.* FROM signup_groups sg JOIN signup_group_members m ON m.group_id = sg.id
-         WHERE sg.program_id=? AND sg.run_date=? AND m.email=? AND m.status='joined' LIMIT 1`).get(programId, rd, email);
+    || stmtPartyJoinedOf.get(programId, rd, email);
   let party = null;
   if (g) {
     const isLeader = lc(g.leader_email) === email;
-    const memberRows = db.prepare("SELECT email, status FROM signup_group_members WHERE group_id=? AND status<>'declined' ORDER BY created_at").all(g.id);
+    const memberRows = stmtPartyPanelMembers.all(g.id);
     const list = [{ email: lc(g.leader_email), status: 'leader' }, ...memberRows];
     const dir = peopleByEmails(list.map(m => m.email));
     party = {
