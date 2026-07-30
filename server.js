@@ -3521,14 +3521,20 @@ app.post('/admin/run/cancel', requireLogin, (req, res) => {
 // The run-day confirm/release ping is now AUTOMATIC at the 2 PM lock (see autoRunState) —
 // the old manual /checkin/confirmping route + host button were removed.
 
-// A floor player confirms they're coming (run-day ping response). Idempotent.
+// A floor player confirms they're coming (run-day ping response) — or UNDOES it (un=1, the
+// confirmed pill is a toggle: plans change). Idempotent both ways.
 app.post('/checkin/confirm', requireLogin, (req, res) => {
   const runDate = nextRunDate();
   // Only real floor players confirm — a waitlister shouldn't pre-mark ✓ and slide on later.
   const part = partitionRun(runDate);
   if (part.floorReal.some(p => p.email === req.userEmail)) {
-    db.prepare("UPDATE checkins SET confirmed_at = datetime('now') WHERE run_date = ? AND email = ? AND program_id = 1 AND confirmed_at IS NULL")
-      .run(runDate, req.userEmail);
+    if (req.body.un === '1') {
+      db.prepare('UPDATE checkins SET confirmed_at = NULL WHERE run_date = ? AND email = ? AND program_id = 1')
+        .run(runDate, req.userEmail);
+    } else {
+      db.prepare("UPDATE checkins SET confirmed_at = datetime('now') WHERE run_date = ? AND email = ? AND program_id = 1 AND confirmed_at IS NULL")
+        .run(runDate, req.userEmail);
+    }
   }
   res.redirect('/checkin');
 });
@@ -4513,6 +4519,7 @@ function teamsFeature(programId) { const f = P(programId).config.features; retur
 // off the FINAL roster. schedNow() honours the TEST_NOW seam.
 function teamsOpen(programId, rd) {
   if (!teamsFeature(programId)) return false;
+  if (P(programId).config.static) return true;   // the static demo never reaches its lock — teams always open there
   return schedNow() >= new Date(rd + 'T' + P(programId).config.lockTime + ':00').getTime();
 }
 // Assign/move `email` to team `n` (1..count) with a SIZE GUARD — the INSERT OR REPLACE only lands if
@@ -4571,19 +4578,42 @@ function runPenaltyClear(programId, req, res) {
   res.redirect(base);
 }
 // Operator: round-robin the UNASSIGNED floor players into the emptiest teams so a run never starts half-formed.
-function runTeamFill(programId, req, res) {
-  const base = P(programId).paths.run;
-  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
-  const t = teamsFeature(programId); if (!t) return res.redirect(base);
-  const rd = programRunDate(programId);
+// Auto-fill core — PARTY-AWARE: a party (shared checkins.group_id) places as one BLOCK on the
+// first team with room for all of it (friends who queued together play together); solo players
+// then balance onto the least-filled team. An oversize party that fits nowhere whole falls back
+// to per-player balancing (teams must still fill). Shared by the route + the demo seed.
+function teamFillCore(programId, rd, by) {
+  const t = teamsFeature(programId); if (!t) return;
   const counts = {}; for (let i = 1; i <= t.count; i++) counts[i] = 0;
   const assigned = new Set();
   for (const r of runTeamsFor(programId, rd)) { counts[r.team_no] = (counts[r.team_no] || 0) + 1; assigned.add(r.email); }
-  for (const p of teamFloor(programId, rd)) {
-    if (assigned.has(p.email)) continue;
-    let bestN = 0; for (let i = 1; i <= t.count; i++) if (counts[i] < t.size && (bestN === 0 || counts[i] < counts[bestN])) bestN = i;
-    if (bestN && assignTeam(programId, rd, p.email, bestN, req.userEmail)) counts[bestN]++;
+  // Units in floor order: parties as blocks, solos as singletons.
+  const floor = teamFloor(programId, rd).filter(p => !assigned.has(p.email));
+  const units = [], byGroup = new Map();
+  for (const p of floor) {
+    if (p.group_id) {
+      if (!byGroup.has(p.group_id)) { const u = []; byGroup.set(p.group_id, u); units.push(u); }
+      byGroup.get(p.group_id).push(p);
+    } else units.push([p]);
   }
+  for (const unit of units) {
+    let teamN = 0;
+    if (unit.length > 1) for (let i = 1; i <= t.count; i++) if (t.size - counts[i] >= unit.length) { teamN = i; break; }   // party → first team the WHOLE block fits
+    if (teamN) {
+      for (const p of unit) if (assignTeam(programId, rd, p.email, teamN, by)) counts[teamN]++;
+    } else {
+      for (const p of unit) {   // solo (or nowhere-whole party) → least-filled team
+        let n = 0; for (let i = 1; i <= t.count; i++) if (counts[i] < t.size && (n === 0 || counts[i] < counts[n])) n = i;
+        if (n && assignTeam(programId, rd, p.email, n, by)) counts[n]++;
+      }
+    }
+  }
+}
+function runTeamFill(programId, req, res) {
+  const base = P(programId).paths.run;
+  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  if (!teamsFeature(programId)) return res.redirect(base);
+  teamFillCore(programId, programRunDate(programId), req.userEmail);
   res.redirect(base);
 }
 // Pickleball run start epoch — the run date at 6 PM local. Drives the countdown banner
@@ -4928,7 +4958,11 @@ function runConfirm(programId, req, res) {
   const rd = programRunDate(programId), part = partitionFor(programId, rd);
   const floor = P(programId).config.offerWindow ? part.floorReal : part.floor;
   if (floor.some(p => p.email === req.userEmail)) {
-    db.prepare("UPDATE checkins SET confirmed_at = datetime('now') WHERE run_date = ? AND email = ? AND program_id = ? AND confirmed_at IS NULL").run(rd, req.userEmail, programId);
+    if (req.body.un === '1') {   // the confirmed pill is a toggle — undo clears the ✓ (plans change)
+      db.prepare('UPDATE checkins SET confirmed_at = NULL WHERE run_date = ? AND email = ? AND program_id = ?').run(rd, req.userEmail, programId);
+    } else {
+      db.prepare("UPDATE checkins SET confirmed_at = datetime('now') WHERE run_date = ? AND email = ? AND program_id = ? AND confirmed_at IS NULL").run(rd, req.userEmail, programId);
+    }
   }
   res.redirect(base);
 }
@@ -5374,7 +5408,24 @@ app.post('/admin/demo/seed', requireAdmin, (req, res) => {
     .run(em(8), '', '/demo-media/clip.mp4', 3, pid);
   // pinned message (shows in the pinned bar at the top of the room)
   db.prepare("INSERT INTO group_messages (from_email, body, pinned_at, pinned_by, program_id) VALUES (?,?,datetime('now'),?,?)")
-    .run(em(1), '📌 Doors open 6:45 — first 8 on the floor, everyone else waitlists. Bring both jersey colours.', req.userEmail, pid);
+    .run(em(1), '📌 Doors open 6:45 — first 12 on the floor, everyone else waitlists. Bring both jersey colours.', req.userEmail, pid);
+  // PARTIES (queue-with-friends showcase): party A = demo-1..4 (a whole team's worth), party B =
+  // demo-5,6 and party C = demo-7,8 (two pairs), demo-9..12 solo. Then the REAL party-aware
+  // auto-fill runs → Team 1 = one full party, Team 2 = two different groups, Team 3 = individuals.
+  clearRunParties(pid, rd);
+  db.prepare('DELETE FROM team_assignments WHERE program_id = ?').run(pid);
+  const insParty = db.prepare('INSERT INTO signup_groups (program_id, run_date, leader_email) VALUES (?,?,?)');
+  const insPartyM = db.prepare("INSERT INTO signup_group_members (group_id, email, status) VALUES (?,?,'joined')");
+  const setGid = db.prepare('UPDATE checkins SET group_id = ? WHERE program_id = ? AND run_date = ? AND email = ?');
+  const mkParty = (idx) => { // idx = 0-based demo indices; first is leader
+    const gid = insParty.run(pid, rd, em(idx[0])).lastInsertRowid;
+    for (const i of idx.slice(1)) insPartyM.run(gid, em(i));
+    for (const i of idx) setGid.run(gid, pid, rd, em(i));
+  };
+  mkParty([0, 1, 2, 3]);   // A — fills Team 1 whole
+  mkParty([4, 5]);         // B ┐
+  mkParty([6, 7]);         // C ┘ together = Team 2
+  teamFillCore(pid, rd, req.userEmail);   // the real party-aware auto-fill (demo-9..12 → Team 3)
   audit(req.userEmail, 'admin', 'demo:seed', `${total} players on ${rd}`);
   res.redirect(P(pid).paths.run);
 });
@@ -5386,6 +5437,8 @@ app.post('/admin/demo/endqueue', requireAdmin, (req, res) => {
   const rd = getSetting(cfg.keys.runDate);
   if (rd) {
     db.prepare('DELETE FROM checkins WHERE program_id = ?').run(pid);
+    db.prepare('DELETE FROM team_assignments WHERE program_id = ?').run(pid);   // teams + parties end with the run
+    clearRunParties(pid, rd);
     db.prepare('INSERT OR REPLACE INTO run_state (run_date, program_id, is_open, cancelled) VALUES (?,?,0,0)').run(rd, pid);
   }
   audit(req.userEmail, 'admin', 'demo:endqueue', rd || '');
@@ -5410,10 +5463,13 @@ app.post('/admin/demo/startqueue', requireAdmin, (req, res) => {
 // Tear the demo down — remove every synthetic row + its run state so nothing lingers.
 app.post('/admin/demo/clear', requireAdmin, (req, res) => {
   const pid = DEMO_PID, cfg = P(pid).config;
+  const rdCur = getSetting(cfg.keys.runDate);
   db.prepare('DELETE FROM checkins WHERE program_id = ?').run(pid);
   db.prepare('DELETE FROM run_state WHERE program_id = ?').run(pid);
   db.prepare('DELETE FROM attendance WHERE program_id = ?').run(pid);
   db.prepare('DELETE FROM group_messages WHERE program_id = ?').run(pid);   // clear the bot chatter too
+  db.prepare('DELETE FROM team_assignments WHERE program_id = ?').run(pid); // teams + parties too
+  if (rdCur) clearRunParties(pid, rdCur);
   delSetting(cfg.keys.runDate);
   audit(req.userEmail, 'admin', 'demo:clear', '');
   res.redirect(P(pid).paths.run);
@@ -5587,7 +5643,7 @@ const PROGRAM_DEFS = {
     key: 'demo', emoji: '🎬', displayName: 'DEMO — Live Waitlist',
     paths: { run: '/demo', chat: '/demo/chat', season: '/demo/season' }, seasonLabel: 'Demo season',
     config: {
-      cap: 8, waitlist: 6, prereg: 0,
+      cap: 12, waitlist: 6, prereg: 0,             // 12 floor = 3 teams of 4 (party + two-groups + individuals showcase)
       dow: 3, startHour: 19, endHour: 21,          // cosmetic (static — never scheduled): Wed 7–9 PM
       pingHour: 18, pingDowOffset: 1, lockTime: '18:00',
       keys: { runDate: 'demo_run_date', runBase: 'demo_run_base', seasonStart: 'demo_season_start',
@@ -5606,7 +5662,9 @@ const PROGRAM_DEFS = {
       tiers: ['team', 'host'], offerWindow: true, static: true,   // REAL offer money-moment, but frozen lifecycle
       autoRenew: { from: 'members' },
       mentionTag: 'demomention', chatSeqKey: 'demo_chat_seq',
-      features: { teams: false, groupQueue: false },
+      // Teams + queue-with-friends ON for the showcase: 3 teams of 4 (a full party / two groups /
+      // individuals) + party-atomic seating — the same generic features volleyball uses.
+      features: { teams: { count: 3, size: 4, opensAt: 'lock', selfServe: true }, groupQueue: { maxSize: 4 } },
     },
     unread: genericUnread(90),
     hubCard: genericHubCard(90),

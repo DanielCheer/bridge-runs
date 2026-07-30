@@ -175,6 +175,26 @@ window.__swapWrap=function(html){
     return true;
   }catch(e){return false;}
 };
+// iOS keyboard watcher — the SINGLE owner of body.kb-open, on EVERY page (not just chat).
+// When the on-screen keyboard overlays the page, iOS shrinks the VISUAL viewport while the
+// layout viewport keeps its height — position:fixed elements pin to the visual viewport and
+// the bottom nav "floats" mid-screen. Any input can summon the keyboard (guest add, announce,
+// search…), so: visual viewport meaningfully shorter than the layout viewport → kb-open
+// (nav hidden) — plus the chat composer's engaged flag (it positions itself separately and
+// covers the installed-PWA resize mode, where both viewports shrink and overlap reads ~0).
+window.__kbSync=function(){
+  var vv=window.visualViewport;
+  var kb=vv?Math.max(0,window.innerHeight-vv.height-vv.offsetTop):0;
+  document.body.classList.toggle('kb-open', kb>50 || !!window.__composerEngaged);
+};
+(function(){
+  if(window.__kbWatchBound)return; window.__kbWatchBound=1;
+  var vv=window.visualViewport;
+  function kick(){ requestAnimationFrame(window.__kbSync); setTimeout(window.__kbSync,150); setTimeout(window.__kbSync,450); }
+  if(vv){ vv.addEventListener('resize',kick); vv.addEventListener('scroll',kick); }
+  document.addEventListener('focusin',kick); document.addEventListener('focusout',kick);
+  window.addEventListener('orientationchange',kick); document.addEventListener('visibilitychange',kick);
+})();
 // True while any full-screen overlay/sheet is open — a poll-driven .wrap swap must NOT
 // fire then (it would destroy the tour/sheet mid-use and could leave scroll locked).
 window.__overlayOpen=function(){
@@ -1105,7 +1125,7 @@ const composerInitJS = () => `
           var coarse=!!(window.matchMedia&&window.matchMedia('(pointer:coarse)').matches); // touch device → software keyboard
           var engaged=false, rafUntil=0, rafOn=false, lastCss='';
           function overlap(){ return Math.max(0, window.innerHeight - vv.height - vv.offsetTop); }
-          function reset(comp){ engaged=false; lastCss=''; document.body.classList.remove('kb-open');
+          function reset(comp){ engaged=false; lastCss=''; window.__composerEngaged=false; if(window.__kbSync)window.__kbSync();
             if(comp){ comp.style.bottom=''; comp.style.left=''; comp.style.right=''; }
             document.documentElement.style.removeProperty('--kb'); }
           function sync(){
@@ -1123,7 +1143,7 @@ const composerInitJS = () => `
                 document.documentElement.style.setProperty('--kb',kb+'px'); }
               if(!engaged){ engaged=true;
                 var atBottom=(window.innerHeight+window.scrollY)>=(document.body.scrollHeight-40);
-                document.body.classList.add('kb-open');
+                window.__composerEngaged=true; if(window.__kbSync)window.__kbSync();   // the global watcher owns body.kb-open
                 if(atBottom) window.scrollTo(0,document.body.scrollHeight); }
             } else if(engaged||lastCss){ reset(comp); }
           }
@@ -2004,7 +2024,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
   // spot via the normal Sit-out. Independent of `action` so it rides alongside it.
   const confirmCta = (myState === 'in' && !suspended)
     ? (myConfirmed
-        ? `<div class="notice good" style="margin-top:10px">✓ Confirmed. Can't make it? Sit out to free your spot for the waitlist.</div>`
+        ? `<div class="notice good" style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="flex:1;min-width:180px">✓ Confirmed. Can't make it? Sit out to free your spot.</span><form method="POST" action="/checkin/confirm" class="swapform" style="margin:0"><input type="hidden" name="un" value="1"><button class="btn ghost sm" type="submit" style="width:auto">Undo ✕</button></form></div>`
         : `<form method="POST" action="/checkin/confirm" class="swapform" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming</button></form>`)
     : '';
   // (The run-day confirm/release ping is now automatic at the 2 PM lock — no host button.)
@@ -3102,7 +3122,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
     ${hero}${demoMode && canOperate ? `<div class="notice" style="margin-top:10px;background:#fff4e5;border-color:#e0b070">🎬 <b>Demo mode.</b> Seed a full floor + waitlist, then pull a floor player (Remove in "Who's going") to fire a real auto-offer — the top waitlister moves to <b>⏳ Claiming</b>; tap <b>✓ Claim</b> to slide them onto the floor. <b>End queue</b> = run's over (roster archives, check-in closes); <b>Start queue</b> = next week opens and the auto-renewers instantly claim their guaranteed spots. Nothing here touches live data.<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><form method="POST" action="/admin/demo/seed" class="swapform" style="margin:0"><button class="btn primary sm" type="submit">${going + waiting ? '↻ Reset' : '▶ Seed'} full run</button></form><form method="POST" action="/admin/demo/endqueue" class="swapform" style="margin:0"><button class="btn sm" type="submit">⏹ End queue</button></form><form method="POST" action="/admin/demo/startqueue" class="swapform" style="margin:0"><button class="btn sm" type="submit">▶ Start queue</button></form><form method="POST" action="/admin/demo/clear" class="swapform" style="margin:0" onsubmit="return confirm('Clear the demo run?')"><button class="btn ghost sm" type="submit">Clear</button></form></div></div>` : ''}
     ${(action || runToggle) ? `<div class="controls">${action}${runToggle}</div>` : ''}
     ${myState === 'in' && !cancelled ? (myConfirmed
-      ? `<div class="notice good" style="margin-top:10px">✓ <b>You're confirmed</b> for this run — see you there!</div>`
+      ? `<div class="notice good" style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="flex:1;min-width:180px">✓ <b>You're confirmed</b> — see you there!</span><form method="POST" action="${runBase}/confirm" class="swapform" style="margin:0"><input type="hidden" name="un" value="1"><button class="btn ghost sm" type="submit" style="width:auto">Undo ✕</button></form></div>`
       : `<form method="POST" action="${runBase}/confirm" class="swapform" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming</button></form>`) : ''}
     ${myState === 'waitlist' && !cancelled ? `<div class="notice warn" style="margin-top:10px">You're <b>#${myWaitPos} of ${waiting}</b> on the waitlist. If a spot opens you'll get a notification and move onto the floor — no need to re-check.</div>` : ''}${partyPanel}${teamsPanel}
     ${cancelled ? '' : `<div style="margin-top:12px"><a href="${runBase}/run.ics" style="font-size:13px;color:var(--muted)">📅 Add this run to your calendar</a></div>`}
