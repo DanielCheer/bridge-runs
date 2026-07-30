@@ -2897,6 +2897,8 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       .jsec-tick{width:8px;height:14px;background:var(--orange);transform:skewX(-14deg);border-radius:1px}
       .jsec h3{font-family:var(--head);font-weight:800;font-size:14px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink);margin:0}
       .jsec-meta{margin-left:auto;font-family:var(--head);font-weight:800;font-size:9.5px;letter-spacing:.16em;color:var(--muted);text-transform:uppercase}
+      .jops{display:flex;gap:8px;margin:0 0 8px}
+      .jops a{font-family:var(--head);font-weight:800;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:6px 12px;background:var(--card)}
       .jlist{display:flex;flex-direction:column;gap:7px}
       .jlist[hidden]{display:none}
       .jc{--sport:var(--ink);position:relative;display:flex;background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;text-decoration:none;color:inherit;box-shadow:0 1px 2px rgba(0,0,0,.04),0 10px 22px -16px rgba(34,35,29,.2);transition:transform .06s ease}
@@ -2949,6 +2951,7 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
     </header>
     <div class="jedge" aria-hidden="true"></div>
     ${nudge}${applyBanner}
+    ${canOperate ? `<div class="jops"><a href="/admin">⚙ Council</a>${isAdmin ? `<a href="/admin/people">People &amp; invites</a>` : ''}</div>` : ''}
     <div class="jseg"><button type="button" class="jseg-b on" data-jt="up">Upcoming</button><button type="button" class="jseg-b" data-jt="past">Past</button></div>
     <div class="jsec"><span class="jsec-tick"></span><h3>This Week</h3><span class="jsec-meta">${runs.length} run${runs.length === 1 ? '' : 's'}</span></div>
     <div class="jlist" data-jl="up">${runs.length ? runs.map(card).join('') : '<p class="jempty">No runs available yet.</p>'}</div>
@@ -3425,6 +3428,11 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
       ${friendReqIn > 0 ? `<span class="mdot">${friendReqIn > 9 ? '9+' : friendReqIn}</span>` : ''}
       <span style="color:var(--muted);font-size:20px">›</span>
     </a>
+    ${canOperate ? `<a href="/admin" style="display:flex;align-items:center;gap:12px;margin-top:10px;padding:12px 13px;border:1px solid var(--line);border-radius:14px;background:var(--card);text-decoration:none;color:inherit">
+      <span style="font-size:22px;line-height:1">⚙️</span>
+      <span style="flex:1;min-width:0"><b style="display:block;font-family:var(--head);font-size:15px;color:var(--ink)">Admin</b><small style="color:var(--muted);font-size:12.5px">Council review${showRoles ? ' · people & invites · exports' : ''}</small></span>
+      <span style="color:var(--muted);font-size:20px">›</span>
+    </a>` : ''}
     ${inbox}
     ${annHistory}
     ${annSheet}
