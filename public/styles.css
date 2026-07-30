@@ -821,6 +821,12 @@ ol.ig li b{font-weight:700}
 .mday span{font-family:var(--head);font-weight:700;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
   background:rgba(34,35,29,.05);padding:4px 12px;border-radius:999px}
 .msg{display:flex;flex-direction:column;max-width:82%}
+/* Long-press opens OUR action menu — suppress iOS's text-selection loupe/magnifier + callout on
+   message bubbles (touch devices only; the menu's own Copy covers copying there). Desktop keeps
+   native text selection untouched. */
+@media (pointer:coarse){
+  .msg .mb,.msg .mname,.msg .mcap{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+}
 .msg.mine{align-self:flex-end;align-items:flex-end}
 .msg.theirs{align-self:flex-start;align-items:flex-start}
 .msg.grouped{margin-top:1px}
