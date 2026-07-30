@@ -291,12 +291,12 @@ window.__pollStop=function(){window.__pollPage=null;window.__pollOnChange=null;}
   }
   window.__go=go; // exposed so the team tour can drive a smooth router swap between pages
   document.addEventListener('pointerdown',function(e){
-    var a=e.target&&e.target.closest&&e.target.closest('.tabs a[href],.opsnav a[href],.rhcard[href],.backruns[href],.hchat[href],.ftab[href],.mrow[href],.bk[href],.pbback[href],.pback[href]');
+    var a=e.target&&e.target.closest&&e.target.closest('.tabs a[href],.opsnav a[href],.jc[href],.backruns[href],.hchat[href],.ftab[href],.mrow[href],.bk[href],.pbback[href],.pback[href]');
     if(a)warm(a.getAttribute('href'));
   },{passive:true,capture:true});
   document.addEventListener('click',function(e){
     if(e.defaultPrevented||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;
-    var a=e.target&&e.target.closest&&e.target.closest('.tabs a[href],.opsnav a[href],.rhcard[href],.backruns[href],.hchat[href],.ftab[href],.mrow[href],.bk[href],.pbback[href],.pback[href]');
+    var a=e.target&&e.target.closest&&e.target.closest('.tabs a[href],.opsnav a[href],.jc[href],.backruns[href],.hchat[href],.ftab[href],.mrow[href],.bk[href],.pbback[href],.pback[href]');
     if(!a)return;
     if(a.hasAttribute('data-full'))return;   // opt out of the SPA swap → normal full navigation (e.g. apply form)
     if(a.target&&a.target!==''&&a.target!=='_self')return;
@@ -1465,7 +1465,7 @@ const firstRunTour = `
     var STEPS_ALL=[
       // ---- everyone ----
       {path:'/runs',ttl:"Welcome 👋",txt:"Here’s a quick tour of the app."},
-      {path:'/runs',sel:'.rhcard',ttl:"Pick your run",txt:"These are the runs — basketball, pickleball and more. Each has its own check-in, chat and season board. Tap one to open it."},
+      {path:'/runs',sel:'.jc',ttl:"Pick your run",txt:"These are the runs — basketball, pickleball and more. Each has its own check-in, chat and season board. Tap one to open it."},
       {path:'/runs',ttl:"Play with friends 🤝",txt:"Follow other players — once you follow each other, you’ll see who’s going right on each run’s card, and you can check in together as a group."},
       {path:'/checkin',sel:'[data-tour="join"]',ttl:"Grab your spot",txt:"Tap “I’m in” each week to claim a spot. Spots are limited — first come, first served. If it’s full you join the waitlist and move up automatically when a spot opens."},
       {path:'/checkin',sel:'.tabs a[href="/chat"]',ttl:"Run chat",txt:"Every run has its own chat — photos, voice notes, @mentions. It unlocks once you’ve joined that run. On the team? Press & hold a message to Pin it."},
