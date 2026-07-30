@@ -2750,7 +2750,7 @@ function dailyVerse() {
 // that run's check-in page. `runs` = [{ key, emoji, name, href, runDate, dateLabel,
 // timeLabel, going, cap, status:'open'|'closed'|'cancelled', hidden }]. Self-contained
 // styles (scoped .rh*) so it needs no new global CSS.
-export function runsPage({ email, runs = [], canJoin = true, status = 'approved', canOperate = false, isAdmin = false, needsWaiver = false, needsDob = false, firstName = 'there', gamesAttended = 0, gamesThisYear = 0, pastRuns = [], dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null }) {
+export function runsPage({ email, runs = [], canJoin = true, status = 'approved', canOperate = false, isAdmin = false, needsWaiver = false, needsDob = false, firstName = 'there', pastRuns = [], dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null }) {
   // Non-approved viewers can SEE the runs but can't join — a tap routes them to apply
   // (or to their status) instead of into a check-in they're not cleared for.
   const applyHref = status === 'none' ? '/' : '/status';
@@ -2841,35 +2841,30 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       .jbn b{font-family:var(--head);font-weight:800;font-size:11px;letter-spacing:.2em;color:var(--ink)}
       .jbn em{font-family:var(--head);font-weight:800;font-style:normal;font-size:8px;letter-spacing:.3em;color:var(--orange)}
       .jbell{margin-left:auto;display:flex}
-      .jgreet{margin-top:15px;position:relative;z-index:1}
+      .jgreet{margin-top:9px;position:relative;z-index:1}
       .je-eye{display:block;font-family:var(--head);font-weight:800;font-size:12px;letter-spacing:.32em;color:var(--orange);text-transform:uppercase}
-      .jgreet h1{margin:4px 0 0;font-family:var(--head);font-weight:800;font-size:38px;line-height:.95;letter-spacing:-.5px;text-transform:uppercase;color:var(--ink)}
+      .jgreet h1{margin:4px 0 0;font-family:var(--head);font-weight:800;font-size:33px;line-height:.95;letter-spacing:-.5px;text-transform:uppercase;color:var(--ink)}
       .je-dot{color:var(--orange)}
-      .jstats{display:flex;align-items:center;gap:14px;margin-top:12px;position:relative;z-index:1}
-      .jstat{display:flex;align-items:baseline;gap:7px}
-      .jstat b{font-family:var(--head);font-weight:800;font-size:19px;color:var(--orange)}
-      .jstat span{font-family:var(--head);font-weight:800;font-size:9px;line-height:1.15;letter-spacing:.14em;color:var(--muted);text-transform:uppercase}
-      .jsdiv{width:1px;height:15px;background:rgba(34,35,29,.2);transform:skewX(-15deg)}
-      .jedge{height:3px;margin:11px 0 8px;background:var(--orange);border-radius:2px}
-      .jseg{display:flex;gap:4px;margin:6px 0 13px;padding:4px;border-radius:12px;background:var(--card);border:1px solid var(--line)}
+      .jedge{height:3px;margin:8px 0 6px;background:var(--orange);border-radius:2px}
+      .jseg{display:flex;gap:4px;margin:4px 0 9px;padding:4px;border-radius:12px;background:var(--card);border:1px solid var(--line)}
       .jseg-b{flex:1;padding:9px 0;border:0;border-radius:8px;background:transparent;cursor:pointer;font-family:var(--head);font-weight:800;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);-webkit-tap-highlight-color:transparent}
       .jseg-b.on{background:var(--ink);color:var(--bg,#f6f1e8);box-shadow:inset 0 -2px 0 0 var(--orange)}
-      .jsec{display:flex;align-items:center;gap:8px;margin:4px 0 10px}
+      .jsec{display:flex;align-items:center;gap:8px;margin:2px 0 8px}
       .jsec-tick{width:8px;height:14px;background:var(--orange);transform:skewX(-14deg);border-radius:1px}
       .jsec h3{font-family:var(--head);font-weight:800;font-size:14px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink);margin:0}
       .jsec-meta{margin-left:auto;font-family:var(--head);font-weight:800;font-size:9.5px;letter-spacing:.16em;color:var(--muted);text-transform:uppercase}
-      .jlist{display:flex;flex-direction:column;gap:9px}
+      .jlist{display:flex;flex-direction:column;gap:7px}
       .jlist[hidden]{display:none}
       .jc{--sport:var(--ink);position:relative;display:flex;background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;text-decoration:none;color:inherit;box-shadow:0 1px 2px rgba(0,0,0,.04),0 10px 22px -16px rgba(34,35,29,.2);transition:transform .06s ease}
       .jc:active{transform:scale(.99)}
       .jc.locked{background:#f4f1ea}
-      .jc-date{flex:none;width:58px;background-color:var(--sport);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:12px 0;background-image:repeating-linear-gradient(115deg,rgba(255,255,255,.05) 0 2px,transparent 2px 11px)}
+      .jc-date{flex:none;width:58px;background-color:var(--sport);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:9px 0;background-image:repeating-linear-gradient(115deg,rgba(255,255,255,.05) 0 2px,transparent 2px 11px)}
       .jc.locked .jc-date{background-image:none}
       .jc-dow{font-family:var(--head);font-weight:800;font-size:10px;letter-spacing:.16em;color:rgba(255,255,255,.85)}
       .jc-num{font-family:var(--head);font-weight:800;font-size:26px;line-height:1;letter-spacing:-.5px;color:#fff}
       .jc-mon{font-family:var(--head);font-weight:800;font-size:8.5px;letter-spacing:.24em;color:rgba(255,255,255,.62)}
       .jc-lock{margin-top:8px;opacity:.95;display:flex}
-      .jc-body{position:relative;flex:1;min-width:0;padding:12px 13px;display:flex;flex-direction:column;justify-content:center;gap:5px;overflow:hidden}
+      .jc-body{position:relative;flex:1;min-width:0;padding:9px 13px;display:flex;flex-direction:column;justify-content:center;gap:5px;overflow:hidden}
       .jc-wm{position:absolute;left:var(--wl,50%);top:var(--wt,50%);transform:translate(-50%,-50%) rotate(var(--rot,0deg));color:var(--sport);opacity:.09;pointer-events:none}
       .jc.locked .jc-wm{opacity:.07}
       .jc-wm svg{display:block}
@@ -2894,7 +2889,7 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       .jc-favs .jc-fav:not(:first-child){margin-left:-6px}
       .jc-frtxt{color:var(--muted);font-size:11.5px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .jempty{color:var(--muted);text-align:center;font-size:14px;padding:20px 0}
-      .hubverse{max-width:36ch;margin:12px auto 4px;text-align:center;padding:0 14px}
+      .hubverse{max-width:36ch;margin:8px auto 0;text-align:center;padding:0 14px}
       .hubverse-t{font-size:13.5px;line-height:1.5;color:var(--ink);font-style:italic;margin:0}
       .hubverse-r{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:6px 0 0;font-weight:700}
       @media (prefers-color-scheme:dark){
@@ -2907,7 +2902,6 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       <span class="jh-court c1"></span><span class="jh-court c2"></span><span class="jh-court c3"></span>
       <div class="jbrand"><img class="jmark" alt="The Bridge" src="/icon-192.png?v=2"><div class="jbn"><b>THE BRIDGE</b><em>YA SPORTS</em></div><span class="jbell">${annBtn}</span></div>
       <div class="jgreet"><span class="je-eye">Welcome,</span><h1>${esc(firstName)}<span class="je-dot">.</span></h1></div>
-      ${canJoin ? `<div class="jstats"><div class="jstat"><b>${gamesAttended}</b><span>Game${gamesAttended === 1 ? '' : 's'}<br>attended</span></div><div class="jsdiv"></div><div class="jstat"><b>${gamesThisYear}</b><span>This<br>year</span></div></div>` : ''}
     </header>
     <div class="jedge" aria-hidden="true"></div>
     ${nudge}${applyBanner}
