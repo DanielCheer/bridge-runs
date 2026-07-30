@@ -5368,10 +5368,10 @@ app.post('/admin/demo/seed', requireAdmin, (req, res) => {
     .run(em(5), '', '/stickers/gameon.svg', pid);
   // voice note (3s bundled clip)
   db.prepare('INSERT INTO group_messages (from_email, body, audio, audio_dur, program_id) VALUES (?,?,?,?,?)')
-    .run(em(2), '', '/demo/voice.m4a', 3, pid);
+    .run(em(2), '', '/demo-media/voice.m4a', 3, pid);
   // video (3s bundled clip, native player)
   db.prepare('INSERT INTO group_messages (from_email, body, video, video_dur, program_id) VALUES (?,?,?,?,?)')
-    .run(em(8), '', '/demo/clip.mp4', 3, pid);
+    .run(em(8), '', '/demo-media/clip.mp4', 3, pid);
   // pinned message (shows in the pinned bar at the top of the room)
   db.prepare("INSERT INTO group_messages (from_email, body, pinned_at, pinned_by, program_id) VALUES (?,?,datetime('now'),?,?)")
     .run(em(1), '📌 Doors open 6:45 — first 8 on the floor, everyone else waitlists. Bring both jersey colours.', req.userEmail, pid);
