@@ -3070,7 +3070,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
   // self-join/switch button (floor players, once teams open) + operator auto-fill/assign controls.
   const teamsPanel = !teamsCfg ? '' : (() => {
     const assigned = new Set(teamRows.map(r => r.email));
-    const nameOf = (em) => { const p = floorPlayers.find(x => x.email === em); return esc(p ? p.name : em); };
+    const nameOf = (em) => { const p = floorPlayers.find(x => x.email === em); return esc(p ? p.name : em) + (p && p.minor ? MINOR_STAR : ''); };   // minors carry the red asterisk in EVERY list
     // Party colour map: everyone sharing a group_id gets the same muted dot, so you can see at a
     // glance who queued together (solo players get no dot). Palette cycles past 6 parties.
     const partyIdx = new Map();
@@ -3104,7 +3104,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
     if (pd.party) {
       const p = pd.party;
       const rows = p.members.map(m => `<div style="display:flex;align-items:center;gap:6px;padding:3px 0">
-          <span style="flex:1">${esc(m.name)}${m.status === 'leader' ? ' <span class="tag">Leader</span>' : ''}${m.status === 'invited' ? ' <span class="tag" style="opacity:.55">Invited</span>' : ''}</span>${m.checkedIn ? '<span class="tag" style="background:#2f7169;color:#fff">✓ In</span>' : ''}</div>`).join('');
+          <span style="flex:1">${esc(m.name)}${m.minor ? MINOR_STAR : ''}${m.status === 'leader' ? ' <span class="tag">Leader</span>' : ''}${m.status === 'invited' ? ' <span class="tag" style="opacity:.55">Invited</span>' : ''}</span>${m.checkedIn ? '<span class="tag" style="background:#2f7169;color:#fff">✓ In</span>' : ''}</div>`).join('');
       const canInvite = p.isLeader && p.members.length < pd.maxSize;
       const checkinBtn = isOpen && !cancelled ? f('checkin', {}, '✓ Check in my group', 'primary') : '';
       const leaveBtn = f('leave', {}, p.isLeader ? 'Disband group' : 'Leave group', 'ghost sm');

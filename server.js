@@ -1800,15 +1800,20 @@ function topOfferee(part, exclude = null) {
 // floated to the top exactly like an operator Bump (MIN(sort_order)-1; a plain positional swap
 // can lose to lower row-ids at the same sort_order). Returns true if a guest took the spot.
 // Callers skip the offer / promotion-notify for that spot when this returns true.
+const stmtMinSortByRun = db.prepare('SELECT MIN(sort_order) m FROM checkins WHERE run_date = ? AND program_id = ?');
+const stmtFloatGuest = db.prepare('UPDATE checkins SET sort_order = ?, held = 0 WHERE run_date = ? AND email = ? AND program_id = ?');
+const stmtDelCheckinRow = db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = ?');
+const stmtConfirmSet = db.prepare("UPDATE checkins SET confirmed_at = datetime('now') WHERE run_date = ? AND email = ? AND program_id = ? AND confirmed_at IS NULL");
+const stmtConfirmClear = db.prepare('UPDATE checkins SET confirmed_at = NULL WHERE run_date = ? AND email = ? AND program_id = ?');
+const stmtPmAutoRenew = db.prepare('SELECT auto_renew FROM program_membership WHERE program_id = ? AND email = ?');
 function seatWaitingGuest(programId, rd) {
   const cfg = P(programId).config;
   const part = partitionFor(programId, rd);
   const wait = cfg.offerWindow ? part.waitPlayers : part.wait;
   const g = wait.find(p => /@guest\.local$/.test(p.email));
   if (!g) return false;
-  const { m } = db.prepare('SELECT MIN(sort_order) m FROM checkins WHERE run_date = ? AND program_id = ?').get(rd, programId);
-  db.prepare('UPDATE checkins SET sort_order = ?, held = 0 WHERE run_date = ? AND email = ? AND program_id = ?')
-    .run((m ?? 0) - 1, rd, g.email, programId);
+  const { m } = stmtMinSortByRun.get(rd, programId);
+  stmtFloatGuest.run((m ?? 0) - 1, rd, g.email, programId);
   audit('system', 'system', `${cfg.logTag || 'run'}:guest-priority-seat`, g.email);
   return true;
 }
@@ -2764,7 +2769,7 @@ function peopleByEmails(emails) {
   if (!uniq.length) return m;
   const ph = uniq.map(() => '?').join(',');
   for (const r of db.prepare(
-    `SELECT id, full_name, email, avatar, status, is_host, is_team, is_regular FROM applicants WHERE email IN (${ph})`).all(...uniq))
+    `SELECT id, full_name, email, avatar, status, is_host, is_team, is_regular, dob FROM applicants WHERE email IN (${ph})`).all(...uniq))
     m.set(lc(r.email), r);
   return m;
 }
@@ -3363,8 +3368,10 @@ app.post('/checkin/join', requireLogin, (req, res) => {
     // A regular who joins AFTER the run opens is "late" — held on the waitlist
     // until Friday 4pm so the open-phase floor spots stay reserved for normals.
     const isLateRegular = runOpen && a.is_regular && !a.is_team && !already;
-    db.prepare('INSERT OR IGNORE INTO checkins (run_date,email,name,held) VALUES (?,?,?,?)')
-      .run(runDate, email, a.full_name, isLateRegular ? 1 : 0);
+    // Joining ON run day IS confirming (same reasoning as claim=confirm) — otherwise a held
+    // late-regular released at 4 PM would be swept "unconfirmed" at 4:30 with zero warning.
+    db.prepare("INSERT OR IGNORE INTO checkins (run_date,email,name,held,confirmed_at) VALUES (?,?,?,?, CASE WHEN ? = 1 THEN datetime('now') END)")
+      .run(runDate, email, a.full_name, isLateRegular ? 1 : 0, runDate === ymdLocal() ? 1 : 0);
   } catch (e) { console.error(e); }
   res.redirect('/checkin');
 });
@@ -3527,6 +3534,9 @@ app.post('/admin/run/cancel', requireLogin, (req, res) => {
   if (cancel === runIsCancelled(runDate)) return res.redirect('/checkin'); // no state change → no push spam
   setRunCancelled(runDate, cancel);
   if (cancel) db.prepare('DELETE FROM checkins WHERE run_date = ? AND program_id = 1').run(runDate); // clear the floor — a cancelled run has nobody on it
+  // Un-cancelling past the confirm cutoff must NOT arm an instant unpinged sweep — stamp/re-arm
+  // the ping+sweep markers by the same rule as a date move.
+  if (!cancel) migrateConfirmMarkers(runDate, P(1).config.confirmCutoff, 'autoping_done', 'confirmsweep_done');
   audit(email, admin ? 'admin' : 'host', cancel ? 'run:cancel' : 'run:uncancel', runDate);
   if (cancel) {
     // Game-day notification: push only (no email storm) — the check-in banner carries it in-app.
@@ -3549,13 +3559,8 @@ app.post('/checkin/confirm', requireLogin, (req, res) => {
   // Only real floor players confirm — a waitlister shouldn't pre-mark ✓ and slide on later.
   const part = partitionRun(runDate);
   if (part.floorReal.some(p => p.email === req.userEmail)) {
-    if (req.body.un === '1') {
-      db.prepare('UPDATE checkins SET confirmed_at = NULL WHERE run_date = ? AND email = ? AND program_id = 1')
-        .run(runDate, req.userEmail);
-    } else {
-      db.prepare("UPDATE checkins SET confirmed_at = datetime('now') WHERE run_date = ? AND email = ? AND program_id = 1 AND confirmed_at IS NULL")
-        .run(runDate, req.userEmail);
-    }
+    if (req.body.un === '1') stmtConfirmClear.run(runDate, req.userEmail, 1);
+    else stmtConfirmSet.run(runDate, req.userEmail, 1);
   }
   res.redirect('/checkin');
 });
@@ -3874,7 +3879,7 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
   // Setting/re-confirming the run day REVIVES a cancelled run (re-scheduling = you're
   // committing to run again) — done BEFORE the no-op guard so re-submitting the SAME date
   // still un-cancels. The check-in page reflects it immediately.
-  if (runIsCancelled(raw)) { setRunCancelled(raw, false); audit(email, actorRole, 'run:uncancel-via-rundate', raw); }
+  if (runIsCancelled(raw)) { setRunCancelled(raw, false); migrateConfirmMarkers(raw, P(1).config.confirmCutoff, 'autoping_done', 'confirmsweep_done'); audit(email, actorRole, 'run:uncancel-via-rundate', raw); }
 
   // No-op guard: if the stored state already matches this request, skip the write +
   // announcement (re-submitting the same day/time must not spam everyone).
@@ -3916,6 +3921,8 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
         if (Date.now() >= newClose) setSetting('autoclose_done', newRunDate);
         else db.prepare("DELETE FROM app_settings WHERE key = 'autoclose_done'").run();
       }
+      // Confirm ping + sweep markers follow the same rule — never let the moved day sweep unpinged.
+      migrateConfirmMarkers(newRunDate, P(1).config.confirmCutoff, 'autoping_done', 'confirmsweep_done');
       db.prepare('UPDATE checkins SET run_date = ? WHERE run_date = ? AND program_id = 1').run(newRunDate, oldRunDate);
       db.prepare('UPDATE regular_optout SET run_date = ? WHERE run_date = ? AND program_id = 1').run(newRunDate, oldRunDate);
       db.exec('COMMIT');
@@ -4364,7 +4371,7 @@ function autoRunState() {
       const drop = partitionRun(rd).floorReal.filter(p => !p.guest && !p.confirmed_at);
       for (const p of drop) {
         const offeree = offereeForFloorLeave(rd, p.email);
-        db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = 1').run(rd, p.email);
+        stmtDelCheckinRow.run(rd, p.email, 1);
         clearTeamAssignment(1, rd, p.email);
         if (offeree) createOffer(rd, offeree, null, 1);
       }
@@ -4849,8 +4856,25 @@ function pkNotifyPromotion(rd, leavingEmail) { return notifyPromotionFor(2, rd, 
 function dropFromPickleball(email) {
   if (!email) return;
   const rd = pkRunDate();
-  pkNotifyPromotion(rd, email);
-  db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = 2').run(rd, email);
+  // Guest priority applies here too (suspend/reject/delete cascades free a floor spot).
+  const onFloor = partitionFor(2, rd).floor.some(p => lc(p.email) === lc(email));
+  if (onFloor && !seatWaitingGuest(2, rd)) pkNotifyPromotion(rd, email);
+  stmtDelCheckinRow.run(rd, email, 2);
+}
+
+// Confirm-flow markers when a run's EFFECTIVE DAY changes (date move / uncancel past the window):
+// the 9 AM ping is load-bearing for the confirm-or-release sweep — a day must NEVER sweep players
+// it never pinged. If the (new) day's cutoff has already passed, STAMP both markers (that day's
+// window is over: no ping, no sweep); otherwise RE-ARM both (delete) so the day pings at 9 AM and
+// sweeps at its own cutoff. Mirrors /admin/rundate's long-standing autoclose carry rule.
+function migrateConfirmMarkers(newRd, confirmCutoff, pingKey, sweepKey) {
+  if (!confirmCutoff) return;
+  const past = schedNow() >= new Date(newRd + 'T' + confirmCutoff + ':00').getTime();
+  for (const k of [pingKey, sweepKey]) {
+    if (!k) continue;
+    if (past) setSetting(k, newRd);
+    else db.prepare('DELETE FROM app_settings WHERE key = ?').run(k);
+  }
 }
 // Weekly auto open/ping/lock for an opt-in run (runs on the shared 60s interval), keyed to the
 // program's run date. Check-in OPENS the moment the prior run ends (config.endHour, openOffsetDays
@@ -5022,7 +5046,12 @@ function runOpen(programId, req, res) {
   const base = P(programId).paths.run;
   const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
   const rd = programRunDate(programId); if (runCancelledFor(programId, rd)) return res.redirect(base);
-  setRunStateFor(programId, rd, 'is_open', 1); seatRenewers(programId, rd); res.redirect(base);
+  setRunStateFor(programId, rd, 'is_open', 1);
+  // Don't re-seat auto-renewers past the confirm cutoff — a manual re-open after the 4:30 sweep
+  // would silently restore the exact players the sweep just released.
+  const cfg = P(programId).config;
+  if (!cfg.confirmCutoff || schedNow() < new Date(rd + 'T' + cfg.confirmCutoff + ':00').getTime()) seatRenewers(programId, rd);
+  res.redirect(base);
 }
 function runClose(programId, req, res) {
   const base = P(programId).paths.run;
@@ -5035,11 +5064,8 @@ function runConfirm(programId, req, res) {
   const rd = programRunDate(programId), part = partitionFor(programId, rd);
   const floor = P(programId).config.offerWindow ? part.floorReal : part.floor;
   if (floor.some(p => p.email === req.userEmail)) {
-    if (req.body.un === '1') {   // the confirmed pill is a toggle — undo clears the ✓ (plans change)
-      db.prepare('UPDATE checkins SET confirmed_at = NULL WHERE run_date = ? AND email = ? AND program_id = ?').run(rd, req.userEmail, programId);
-    } else {
-      db.prepare("UPDATE checkins SET confirmed_at = datetime('now') WHERE run_date = ? AND email = ? AND program_id = ? AND confirmed_at IS NULL").run(rd, req.userEmail, programId);
-    }
+    if (req.body.un === '1') stmtConfirmClear.run(rd, req.userEmail, programId);   // the confirmed pill is a toggle — undo clears the ✓
+    else stmtConfirmSet.run(rd, req.userEmail, programId);
   }
   res.redirect(base);
 }
@@ -5081,15 +5107,21 @@ function runJoin(programId, req, res) {
   // list / chat audience / push). Idempotent + guest-safe.
   joinProgramMembership(programId, req.userEmail);
   db.prepare('DELETE FROM regular_optout WHERE run_date = ? AND email = ? AND program_id = ?').run(rd, req.userEmail, programId); // re-joining clears any sit-out
-  db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, program_id) VALUES (?,?,?,?)').run(rd, req.userEmail, g.a.full_name, programId);
+  // Joining ON run day IS confirming (claim=confirm reasoning) — a same-day joiner must not be
+  // swept "unconfirmed" at the cutoff they signed up within.
+  db.prepare("INSERT OR IGNORE INTO checkins (run_date, email, name, program_id, confirmed_at) VALUES (?,?,?,?, CASE WHEN ? = 1 THEN datetime('now') END)")
+    .run(rd, req.userEmail, g.a.full_name, programId, rd === ymdLocal() ? 1 : 0);
   res.redirect(base);
 }
 function runCancel(programId, req, res) {
   const base = P(programId).paths.run;
   const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
   const rd = programRunDate(programId), on = req.body.on !== '0';
+  const cfg = P(programId).config;
   setRunStateFor(programId, rd, 'cancelled', on);
   if (on) { setRunStateFor(programId, rd, 'is_open', 0); db.prepare('DELETE FROM checkins WHERE run_date = ? AND program_id = ?').run(rd, programId); clearRunTeams(programId, rd); clearRunParties(programId, rd); }
+  // Un-cancelling past the confirm cutoff must NOT arm an instant unpinged sweep (same rule as a date move).
+  else migrateConfirmMarkers(rd, cfg.confirmCutoff, cfg.keys.autoping, cfg.keys.confirmsweep);
   res.redirect(base);
 }
 function runPublish(programId, req, res) {
@@ -5105,10 +5137,14 @@ function runLeave(programId, req, res) {
   const base = P(programId).paths.run, cfg = P(programId).config;
   const g = programGate(programId, req, res); if (!g) return;
   const rd = programRunDate(programId);
-  const offeree = cfg.offerWindow ? offereeForFloorLeave(rd, req.userEmail, programId) : null;
-  if (!cfg.offerWindow) notifyPromotionFor(programId, rd, req.userEmail); // simple: notify next before the row goes
+  const offeree = cfg.offerWindow ? offereeForFloorLeave(rd, req.userEmail, programId) : null;   // guest priority handled inside
+  if (!cfg.offerWindow) {
+    // Simple model: guest priority first (owner rule), then the member promotion push.
+    const onFloor = partitionFor(programId, rd).floor.some(p => lc(p.email) === lc(req.userEmail));
+    if (onFloor && !seatWaitingGuest(programId, rd)) notifyPromotionFor(programId, rd, req.userEmail);
+  }
   db.prepare('INSERT OR IGNORE INTO regular_optout (run_date, email, program_id) VALUES (?, ?, ?)').run(rd, req.userEmail, programId);
-  db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = ?').run(rd, req.userEmail, programId);
+  stmtDelCheckinRow.run(rd, req.userEmail, programId);
   clearTeamAssignment(programId, rd, req.userEmail);   // off the floor → off any team
   setPartyDeclinedFor(programId, rd, req.userEmail);   // and out of any party so a group check-in can't re-seat them (P2-2)
   if (offeree) createOffer(rd, offeree, req, programId);
@@ -5129,7 +5165,7 @@ function removeFromRun(programId, rd, em, req = null) {
     const onFloor = partitionFor(programId, rd).floor.some(p => lc(p.email) === lc(em));
     if (onFloor && !seatWaitingGuest(programId, rd)) notifyPromotionFor(programId, rd, em);
   }
-  db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = ?').run(rd, em, programId);
+  stmtDelCheckinRow.run(rd, em, programId);
   clearTeamAssignment(programId, rd, em);   // off the floor → off any team
   setPartyDeclinedFor(programId, rd, em);   // and out of any party so a group check-in can't re-seat them (P2-2)
   if (offeree) createOffer(rd, offeree, req, programId);
@@ -5273,7 +5309,9 @@ function runDate(programId, req, res) {
   const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
   const d = String(req.body.date || '').trim();
   const oldRd = programRunDate(programId);
-  const markerKeys = [cfg.keys.autoopen, cfg.keys.autoping, cfg.keys.autolock];
+  // autoping is NOT blind-carried — it pairs with the confirm sweep (migrateConfirmMarkers below):
+  // carrying it while the sweep marker re-arms would sweep the moved day UNPINGED (P1).
+  const markerKeys = [cfg.keys.autoopen, cfg.keys.autolock];
   if (!d) {   // clear → back to the weekly standing day
     db.exec('BEGIN');
     try {
@@ -5289,6 +5327,7 @@ function runDate(programId, req, res) {
           db.prepare('DELETE FROM run_state WHERE run_date = ? AND program_id = ?').run(oldRd, programId);
         }
         for (const k of markerKeys) if (getSetting(k) === oldRd) setSetting(k, newRd);
+        migrateConfirmMarkers(newRd, cfg.confirmCutoff, cfg.keys.autoping, cfg.keys.confirmsweep);
       }
       db.exec('COMMIT');
     } catch (e) { db.exec('ROLLBACK'); console.error(`[${cfg.logTag}-date] clear FAILED: ${e.message}`); throw e; }
@@ -5311,6 +5350,7 @@ function runDate(programId, req, res) {
         db.prepare('DELETE FROM run_state WHERE run_date = ? AND program_id = ?').run(oldRd, programId);
       }
       for (const k of markerKeys) if (getSetting(k) === oldRd) setSetting(k, d);
+      migrateConfirmMarkers(d, cfg.confirmCutoff, cfg.keys.autoping, cfg.keys.confirmsweep);
       setSetting(cfg.keys.runDate, d);
       // The consumed standing day is the base of the cycle being MOVED — never the day nearest the
       // destination. Keying off `d` breaks when the run moves to a day AFTER its standing day (marks
@@ -5363,7 +5403,7 @@ function runGetPage(programId, req, res) {
   const myState = mine ? (floor.indexOf(mine) >= 0 ? 'in' : 'waitlist') : 'out';
   const myWaitPos = myState === 'waitlist' ? wait.findIndex(p => p.email === req.userEmail) + 1 : 0;
   const myConfirmed = myState === 'in' && !!(mine && mine.confirmed_at);
-  const iAutoRenew = !!(db.prepare('SELECT auto_renew FROM program_membership WHERE program_id = ? AND email = ?').get(programId, req.userEmail)?.auto_renew);
+  const iAutoRenew = !!(stmtPmAutoRenew.get(programId, req.userEmail)?.auto_renew);
   const opener = programSeasonStart(programId), pre = !!opener && ymdLocal() < opener;
   res.send(runPage({
     email: req.userEmail, runDate: rd, runLabel: runLabelFor(rd), isOpen: runOpenFor(programId, rd), cancelled: runCancelledFor(programId, rd),
@@ -5475,7 +5515,7 @@ app.post('/admin/demo/seed', requireAdmin, (req, res) => {
   // Seed the demo CHAT with bot chatter so the room looks alive (cleared on reset/clear below).
   // Beyond text it showcases EVERY message type: a photo (with caption), a sticker, a voice note,
   // a video, a threaded reply, and a pinned message — the media are tiny bundled static assets
-  // (public/demo/*, referenced by path exactly like /stickers/*), so nothing is uploaded/orphaned.
+  // (public/demo-media/*, referenced by path exactly like /stickers/*), so nothing is uploaded/orphaned.
   db.prepare('DELETE FROM group_messages WHERE program_id = ?').run(pid);
   const insMsg = db.prepare('INSERT INTO group_messages (from_email, body, program_id) VALUES (?,?,?)');
   const em = (i) => `demo-${i + 1}@demo.local`;
@@ -5519,7 +5559,7 @@ app.post('/admin/demo/seed', requireAdmin, (req, res) => {
   audit(req.userEmail, 'admin', 'demo:seed', `${total} players on ${rd}`);
   res.redirect(P(pid).paths.run);
 });
-// END QUEUE — simulate the run finishing: the roster archives away and check-in closes (what the
+// END QUEUE — simulate the run finishing: the roster is cleared and check-in closes (what the
 // weekly rollover + autolock do for a live program; the static demo never schedules, so it's a
 // button). Chat is kept so the room still looks alive between cycles.
 app.post('/admin/demo/endqueue', requireAdmin, (req, res) => {
@@ -5973,7 +6013,7 @@ function partyPanelFor(programId, rd, email) {
     const dir = peopleByEmails(list.map(m => m.email));
     party = {
       id: g.id, isLeader, myStatus: isLeader ? 'leader' : (memberRows.find(m => m.email === email)?.status || 'none'),
-      members: list.map(m => { const p = dir.get(lc(m.email)); return { id: p?.id || 0, name: p?.full_name || m.email, status: m.status, checkedIn: checkedIn.has(lc(m.email)) }; }),
+      members: list.map(m => { const p = dir.get(lc(m.email)); return { id: p?.id || 0, email: lc(m.email), name: p?.full_name || m.email, minor: isMinor(p), status: m.status, checkedIn: checkedIn.has(lc(m.email)) }; }),
     };
   }
   const invArgs = g ? [email, programId, rd, g.id] : [email, programId, rd];
@@ -6070,6 +6110,15 @@ function buildPrograms() {
   setProgramMeta(meta);
 }
 buildPrograms();
+// Config guard (fail loud at boot, not silently at 2 PM): BASKETBALL's inline confirm sweep runs
+// inside the post-lock branch (autoRunState), so a confirmCutoff EARLIER than its 14:00 lock would
+// silently fire at lock time instead of the configured hour. Generic programs sweep independently
+// of their lock (vb legitimately locks at 18:00 with a 16:30 cutoff) — only program 1 is coupled.
+{
+  const c = P(1).config;
+  if (c.confirmCutoff && c.lockTime && c.confirmCutoff < c.lockTime)
+    throw new Error(`[config] basketball: confirmCutoff (${c.confirmCutoff}) must be >= lockTime (${c.lockTime}) — the inline sweep runs post-lock`);
+}
 // Register run routes for programs beyond basketball (/checkin/*) + pickleball (/pickleball/*),
 // which keep their inline routes — e.g. volleyball via the config-driven factory. After
 // buildPrograms() so P(id) is hydrated (mountRunProgram reads program.paths.run).
