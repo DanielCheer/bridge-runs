@@ -1,5 +1,9 @@
 // db.js — uses Node's built-in SQLite (node:sqlite, Node 22+). No native build,
 // no extra install. File-based, survives restarts.
+// guard.js MUST be first: it enforces the test/production boundary (paths, ports, external API,
+// mail) BEFORE this module opens a database file. Every entry point imports db.js, so no script can
+// start without passing it. See guard.js for the reasoning.
+import { assertFixtureSanitized } from './guard.js';
 import { DatabaseSync } from 'node:sqlite';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -9,6 +13,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'bridge.db');
 
 const db = new DatabaseSync(DB_PATH);
+// A harness DB must not carry live push subscriptions or Planning Center credentials — checked here,
+// the first moment it can be, so an unsanitized copy fails to boot instead of contacting real people.
+assertFixtureSanitized(db);
 db.exec('PRAGMA journal_mode = WAL;');
 // NORMAL is the recommended durability for WAL: safe across app crashes, only
 // risks the last transaction on an OS crash / power loss. Default FULL fsyncs on

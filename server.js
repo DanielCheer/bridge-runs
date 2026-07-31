@@ -679,7 +679,14 @@ async function writeChatVideo(buf, msgId, ext) {
 // The 2:1 hero photo on the check-in page. A host uploads a photo and frames it in the
 // browser (pan/zoom in a 2:1 window); the client sends the source-pixel crop rect and we
 // sharp-crop to the final 2320×1102 (40:19). BANNER_PATH is env-overridable (tests point elsewhere).
-const BANNER_PATH = process.env.BANNER_PATH || path.join(__dirname, 'public', 'gym.jpg');
+// ONE root for every program's banner file. Previously each program hardcoded its own path into
+// `public/`, so volleyball's and any in-app-created program's banner had NO env override at all —
+// a test that uploaded a banner would overwrite an image the LIVE server serves immediately. Now
+// there is a single writable location for the guard to verify and for the harness to redirect.
+const BANNER_DIR = process.env.BANNER_DIR || path.join(__dirname, 'public');
+fs.mkdirSync(BANNER_DIR, { recursive: true });   // a redirected banner dir may not exist yet (matches AVATARS_DIR/CHAT_MEDIA_DIR)
+const bannerFile = (name) => path.join(BANNER_DIR, name);
+const BANNER_PATH = process.env.BANNER_PATH || bannerFile('gym.jpg');
 const uploadBanner = multer({ storage: multer.memoryStorage(), limits: { fileSize: 14 * 1024 * 1024, files: 1 } }).single('photo');
 // Cache-bust token = the banner file's mtime, so an upload busts the <img> the moment it's
 // saved (no restart, no manual version bump). Falls back to a constant if the file is absent.
@@ -688,7 +695,7 @@ function bannerVersion() {
 }
 // Pickleball gets its OWN banner photo (pk-banner.jpg); until one is uploaded it falls back
 // to the basketball court photo, so the page always shows something.
-const PK_BANNER_PATH = process.env.PK_BANNER_PATH || path.join(__dirname, 'public', 'pk-banner.jpg');
+const PK_BANNER_PATH = process.env.PK_BANNER_PATH || bannerFile('pk-banner.jpg');
 // Banner (own uploaded photo else the shared gym.jpg) — program-generic; the file path + public URL
 // come from config.bannerPath/bannerPublic. pk* names stay wrappers.
 function bannerHasOwnFor(programId) { try { return fs.statSync(P(programId).config.bannerPath).size > 0; } catch { return false; } }
@@ -6242,7 +6249,7 @@ const PROGRAM_DEFS = {
         annTitle: 'Volleyball announcement',
       },
       theme: 'vb', access: 'opt-in', approval: 'invite',
-      bannerPath: path.join(__dirname, 'public', 'vb-banner.jpg'), bannerPublic: '/vb-banner.jpg',
+      bannerPath: bannerFile('vb-banner.jpg'), bannerPublic: '/vb-banner.jpg',
       tiers: ['team', 'host'], offerWindow: false,   // SIMPLE model — immediate waitlist promotion (see block comment)
       autoRenew: { from: 'members' },
       autoRenewPenalty: { strikes: 3, pauseWeeks: 2 },   // ENABLED: 3 consecutive no-shows (auto-seated, never confirmed) → auto-renew pauses 2 weeks. Tunable.
@@ -6714,7 +6721,7 @@ function defFromRow(row) {
       copy: derivedCopy(name, emoji),
       theme: PROGRAM_THEMES.includes(spec.theme) ? spec.theme : 'default',
       access: 'opt-in', approval: row.approval,
-      bannerPath: path.join(__dirname, 'public', `prog-${slug}-banner.jpg`), bannerPublic: `/prog-${slug}-banner.jpg`,
+      bannerPath: bannerFile(`prog-${slug}-banner.jpg`), bannerPublic: `/prog-${slug}-banner.jpg`,
       tiers: ['team', 'host'], offerWindow: !!spec.offerWindow,
       autoRenew: spec.autoRenew ? { from: 'members' } : null,
       mentionTag: `${slug}mention`, chatSeqKey: k('chat_seq'),
