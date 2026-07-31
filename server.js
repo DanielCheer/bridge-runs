@@ -4629,6 +4629,34 @@ app.get('/admin/pco/barcodes.csv', requireAdmin, (req, res) => {
   res.send('﻿' + lines.join('\r\n'));
 });
 
+// Admin confirms a waiver they have actually SEEN (a physical copy, or the church's own records).
+// This is a different claim from the member's self-report: the member attests they signed, an admin
+// attests they've seen it — so it writes waiver_verified_at (the same column the PCO form check
+// uses) and names the admin in the audit log. It never invents a SIGNING date: an optional
+// "signed on" is recorded when the admin knows it, otherwise only the verification date exists.
+app.post('/admin/people/waiver', requireAdmin, (req, res) => {
+  const a = db.prepare('SELECT email, full_name FROM applicants WHERE id = ?').get(req.body.id);
+  if (!a) return res.redirect('/admin/people?msg=' + encodeURIComponent('No such person.'));
+  if (req.body.on === '0') {
+    db.prepare('UPDATE applicants SET waiver_verified_at = NULL WHERE email = ?').run(a.email);
+    audit(req.userEmail, 'admin', 'people:waiver-unverify', a.email);
+    return res.redirect('/admin/people?msg=' + encodeURIComponent(`Cleared the confirmation for ${a.full_name} — their own attestation stands.`));
+  }
+  const signedOn = String(req.body.signed_on || '').trim();
+  if (signedOn && !/^\d{4}-\d{2}-\d{2}$/.test(signedOn))
+    return res.redirect('/admin/people?msg=' + encodeURIComponent('Use a date like 2026-07-15, or leave it blank.'));
+  // A date the organizer supplies is AUTHORITATIVE — they've seen the signed document, so it
+  // corrects a self-report's "when I ticked the box" timestamp (which is not a signing date at
+  // all). No date given → whatever is on record stands. Either way the audit row carries the date,
+  // so the correction is traceable.
+  db.prepare(`UPDATE applicants SET waiver_ok = 1,
+                waiver_at = COALESCE(?, waiver_at),
+                waiver_verified_at = datetime('now') WHERE email = ?`)
+    .run(signedOn || null, a.email);
+  audit(req.userEmail, 'admin', 'people:waiver-verified' + (signedOn ? `:signed-${signedOn}` : ''), a.email);
+  res.redirect('/admin/people?msg=' + encodeURIComponent(`${a.full_name}'s waiver is confirmed on file.`));
+});
+
 app.post('/admin/people/delete', requireAdmin, (req, res) => {
   const { id } = req.body;
   const a = db.prepare('SELECT email, full_name, avatar FROM applicants WHERE id = ?').get(id);

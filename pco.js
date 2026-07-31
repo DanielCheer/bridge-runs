@@ -416,8 +416,9 @@ function profileFieldsFor(row) {
     values.waiver = !row.waiver_ok ? 'No'
       : row.waiver_verified_at ? 'Yes (verified)' : 'Yes (self-reported)';
     // Only a REAL recorded date is published — a legacy member cleared before dates were kept
-    // publishes the Yes without inventing a date. Verification date wins when present.
-    const d = row.waiver_verified_at || row.waiver_at;
+    // publishes the Yes without inventing a date. The SIGNING date wins when known (that's what
+    // "waiver confirmed" means to a reader); the verification date is the fallback.
+    const d = row.waiver_at || row.waiver_verified_at;
     values.waiverDate = row.waiver_ok && d ? String(d).slice(0, 10) : '';
     sig.push(`w:${values.waiver}:${values.waiverDate}`);
   }

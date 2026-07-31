@@ -4716,9 +4716,18 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
         <button class="btn sm" type="submit">Save</button>
       </div>
     </form>
-    <p class="tally-note" style="margin:6px 0 0">Waiver: ${a.waiver_ok
-      ? `<b>on file</b>${a.waiver_at ? ` — confirmed ${esc(String(a.waiver_at).slice(0, 10))}` : ' — date not recorded (confirmed before dates were kept)'}`
-      : '<b>not on file</b> — they can’t join a run until they confirm it'}</p>
+    <p class="tally-note" style="margin:6px 0 0">Waiver: ${a.waiver_verified_at
+      ? `<b>confirmed on file</b>${a.waiver_at ? ` — signed ${esc(String(a.waiver_at).slice(0, 10))}` : ''} · seen by an organizer ${esc(String(a.waiver_verified_at).slice(0, 10))}`
+      : a.waiver_ok
+        ? `<b>self-reported</b>${a.waiver_at ? ` — they confirmed ${esc(String(a.waiver_at).slice(0, 10))}` : ' — date not recorded (before dates were kept)'}`
+        : '<b>not on file</b> — they can’t join a run until they confirm it'}</p>
+    ${a.waiver_verified_at
+      ? `<form method="POST" action="/admin/people/waiver" class="swapform" style="margin:6px 0 0"><input type="hidden" name="id" value="${a.id}"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Undo waiver confirmation</button></form>`
+      : `<form method="POST" action="/admin/people/waiver" class="editrow swapform" style="margin:6px 0 0">
+           <input type="hidden" name="id" value="${a.id}"><input type="hidden" name="on" value="1">
+           <label style="flex:1">Signed on <span style="text-transform:none;font-weight:400;color:var(--muted)">(optional — leave blank if you don't know)</span><input name="signed_on" type="date"></label>
+           <button class="btn sm" type="submit">I've seen their signed waiver</button>
+         </form>`}
     ${a.suspended
       ? `<form method="POST" action="/admin/people/suspend" class="swapform" style="margin:6px 0 0">
            <input type="hidden" name="id" value="${a.id}"><input type="hidden" name="on" value="0">
