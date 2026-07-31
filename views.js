@@ -4248,6 +4248,60 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–
 }
 
 // ---------- STATUS PAGE (unapproved players) ----------
+// ---------- PLANNING CENTER SYNC (admin console) ----------
+// Deliberately a plain admin tool page (statusPage idiom, no tabs): status card → connect form →
+// actions → match report. Everything user-derived goes through esc().
+export function pcoAdminPage({ s = {}, msg = '' }) {
+  const rep = s.report;
+  const statusCard = s.connected
+    ? `<div class="card rail" style="margin-top:12px">
+        <div class="subhead" style="margin-top:0">Connected</div>
+        <p style="margin:6px 0 0"><b>${esc(s.org || 'Planning Center')}</b> — People sync is live.
+        ${s.linked} member${s.linked === 1 ? '' : 's'} linked · ${s.outboxPending} pending write${s.outboxPending === 1 ? '' : 's'}.</p>
+        ${s.error === 'auth' ? `<p style="color:#b3261e;margin:8px 0 0"><b>⚠ Planning Center rejected the credentials — sync is paused.</b> Reconnect below with a fresh token.</p>` : ''}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+          <form method="POST" action="/admin/pco/link"><button class="btn sm" type="submit">Match People now</button></form>
+          <form method="POST" action="/admin/pco/poll"><button class="btn ghost sm" type="submit">Pull latest PCO edits</button></form>
+          <form method="POST" action="/admin/pco/auto"><input type="hidden" name="on" value="${s.autocreate ? '0' : '1'}"><button class="btn ghost sm" type="submit">${s.autocreate ? '✓ Auto-add new members — turn off' : 'Auto-add new members — turn on'}</button></form>
+          <form method="POST" action="/admin/pco/disconnect" onsubmit="return confirm('Disconnect Planning Center? Links are kept; syncing stops.')"><button class="btn ghost sm" type="submit">Disconnect</button></form>
+        </div>
+      </div>`
+    : `<div class="card rail" style="margin-top:12px">
+        <div class="subhead" style="margin-top:0">Not connected</div>
+        <p style="margin:6px 0 0">Link the church's Planning Center account and this app keeps its <b>People</b> directory in sync automatically: members are matched by email (nobody re-registers), new approved members are written back, and profile edits flow both ways. Attendance stays in this app — Planning Center doesn't accept attendance from any outside system.</p>
+      </div>`;
+  const connectForm = `
+    <div class="subhead">Connect${s.connected ? ' (replace credentials)' : ''}</div>
+    <form method="POST" action="/admin/pco/connect" class="card rail">
+      <p class="tally-note" style="margin:0 0 10px">Create a <b>Personal Access Token</b> at api.planningcenteronline.com → Personal Access Tokens, then paste both halves here. They're stored in the app's database (never in code) and ride the encrypted backup.</p>
+      <label>Application ID<input name="app_id" autocomplete="off" placeholder="pco_app_…"></label>
+      <label>Secret<input name="secret" type="password" autocomplete="off" placeholder="••••••••"></label>
+      <label>Webhook authenticity secret <span style="text-transform:none;font-weight:400;color:var(--muted)">(optional — only if webhooks are set up in PCO)</span><input name="webhook_secret" autocomplete="off"></label>
+      <label class="lvl" style="margin-top:8px"><input type="checkbox" name="autocreate" value="1" checked> Automatically add new approved members to People</label>
+      <button class="btn" type="submit" style="margin-top:10px">Connect &amp; test</button>
+    </form>`;
+  const reportCard = rep ? `
+    <div class="subhead">Last match report <span style="text-transform:none;font-weight:400;color:var(--muted)">(${esc(String(rep.at || '').slice(0, 16).replace('T', ' '))})</span></div>
+    <div class="card rail">
+      <p style="margin:0"><b>${rep.matched}</b> matched by email · <b>${(rep.bridgeOnly || []).length}</b> only in this app · <b>${rep.pcoOnly}</b> only in People (they just haven't joined a run — nothing is imported).</p>
+      ${(rep.bridgeOnly || []).length ? `
+        <p class="tally-note" style="margin:10px 0 6px">Members not yet in the church directory:</p>
+        <p style="margin:0;word-break:break-all">${rep.bridgeOnly.slice(0, 30).map(esc).join(' · ')}${rep.bridgeOnly.length > 30 ? ` · +${rep.bridgeOnly.length - 30} more` : ''}</p>
+        <form method="POST" action="/admin/pco/create" style="margin-top:10px"><button class="btn sm" type="submit">Add ${rep.bridgeOnly.length} to People</button></form>` : ''}
+      ${(rep.dupes || []).length ? `<p class="tally-note" style="margin:10px 0 0">⚠ Duplicate emails inside People (linked the first, review in PCO): ${rep.dupes.slice(0, 10).map(esc).join(', ')}</p>` : ''}
+    </div>` : '';
+  return HEAD('Planning Center — The Bridge', '', { wall: false }) + header('<b>PLANNING CENTER</b>') + `
+    <div class="rule"></div>
+    ${msg ? `<div class="notice">${esc(msg)}</div>` : ''}
+    <span class="eyebrow">People sync</span>
+    <h1 style="margin-bottom:0">Planning Center</h1>
+    ${statusCard}
+    ${connectForm}
+    ${reportCard}
+    <div class="foot" style="margin-top:24px"><a href="/admin/people">‹ Back to People &amp; invites</a></div>
+  ` + FOOT;
+}
+
 export function statusPage({ email, status }) {
   const body = status === 'pending'
     ? `<span class="eyebrow">Application in review</span>
@@ -4501,6 +4555,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
       <a class="btn ghost" href="/admin/share" style="margin:0">📱 Share sign-up QR &amp; links</a>
       <a class="btn ghost" href="/admin/people/export.csv" style="margin:0" download>⬇︎ Export people (CSV)</a>
       <a class="btn ghost" href="/admin/export" style="margin:0" data-tour="export">⬇︎ Export &amp; backup</a>
+      <a class="btn ghost" href="/admin/pco" style="margin:0">⇄ Planning Center</a>
     </div>
 
     <div class="subhead">Add a player</div>

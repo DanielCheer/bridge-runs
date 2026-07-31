@@ -13,6 +13,10 @@ import { fileURLToPath } from 'url';
 import db, { rekeyEmailTx, transact } from './db.js';
 import { startBackups } from './backup.js';
 import { sendMagicLink, sendAnnouncement, sendSpotOffer, emailConfigured } from './mailer.js';
+import {
+  pcoTick, pcoDaily, pcoStatus, pcoConnect, pcoDisconnect, pcoSetAutocreate,
+  pcoRunInitialLink, pcoCreateBridgeOnly, pcoQueuePatch, pcoHandleWebhook,
+} from './pco.js';
 import webpush from 'web-push';
 import {
   setSession, clearSession, currentUser, isAdmin,
@@ -22,7 +26,7 @@ import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, exportPage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap, setProgramMeta,
   STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, demoProfileCard, pickleballPage, runPage, runsPage, pkJoinPage, runJoinPage, pastRunPage, waiverPage,
-  friendsPage, friendsSearchFragment, chatLockedPage, runChatPage,
+  friendsPage, friendsSearchFragment, chatLockedPage, runChatPage, pcoAdminPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -2428,6 +2432,7 @@ app.post('/profile', requireLogin, (req, res) => {
     return res.send(profileTabPage({ ...errProps, error: 'Couldn’t save that — your details are unchanged. Try again.' }));
   }
   audit(req.userEmail, 'player', 'profile:edit', email);
+  pcoQueuePatch(email, { full_name, phone });   // mirror the edit into PCO People (outbox; inert unless connected)
   if (email !== a.email) { setSession(res, email); refreshAvatarMap(); } // cookie IS the email — re-sign it; re-key the avatar map
   res.redirect('/profile?saved=1');
 });
@@ -4223,6 +4228,7 @@ app.post('/admin/people/edit', requireAdmin, (req, res) => {
   }
   if (email !== cur.email) refreshAvatarMap(); // avatar file follows the id; re-key its email in the map
   audit(req.userEmail, 'admin', 'people:edit', email);
+  pcoQueuePatch(email, { full_name, phone });   // mirror the edit into PCO People (outbox; inert unless connected)
   res.redirect('/admin/people?msg=Saved');
 });
 
@@ -4251,6 +4257,58 @@ app.post('/admin/people/suspend', requireAdmin, (req, res) => {
   res.redirect('/admin/people?msg=' + encodeURIComponent(on ? 'Suspended' : 'Unsuspended'));
 });
 
+// ---------- Planning Center sync (Phase 1) — admin console + webhook ----------
+// Every state-changing route is ADMIN-gated. The webhook is public by necessity but HMAC-verified
+// inside pcoHandleWebhook against the stored authenticity secret (raw body needed for the
+// signature, hence the inline express.raw — the global urlencoded parser skips JSON bodies).
+app.get('/admin/pco', requireAdmin, (req, res) => {
+  res.send(pcoAdminPage({ s: pcoStatus(), msg: req.query.msg || '' }));
+});
+app.post('/admin/pco/connect', requireAdmin, async (req, res) => {
+  const appId = String(req.body.app_id || '').trim(), secret = String(req.body.secret || '').trim();
+  if (!appId || !secret)
+    return res.redirect('/admin/pco?msg=' + encodeURIComponent('Both the application ID and secret are required.'));
+  const r = await pcoConnect(appId, secret, !!req.body.autocreate, String(req.body.webhook_secret || '').trim());
+  audit(req.userEmail, 'admin', r.ok ? 'pco:connect' : 'pco:connect-failed', appId.slice(0, 8) + '…');
+  res.redirect('/admin/pco?msg=' + encodeURIComponent(r.ok ? `Connected to ${r.org}.` : `Couldn’t connect: ${r.error}`));
+});
+app.post('/admin/pco/disconnect', requireAdmin, (req, res) => {
+  pcoDisconnect();
+  audit(req.userEmail, 'admin', 'pco:disconnect', '');
+  res.redirect('/admin/pco?msg=' + encodeURIComponent('Disconnected.'));
+});
+app.post('/admin/pco/link', requireAdmin, async (req, res) => {
+  try {
+    const r = await pcoRunInitialLink();
+    res.redirect('/admin/pco?msg=' + encodeURIComponent(
+      `Matched ${r.matched} · ${r.bridgeOnly.length} Bridge-only · ${r.pcoOnly} PCO-only.`));
+  } catch (e) {
+    res.redirect('/admin/pco?msg=' + encodeURIComponent('Match failed: ' + e.message.slice(0, 120)));
+  }
+});
+app.post('/admin/pco/create', requireAdmin, async (req, res) => {
+  try {
+    const r = await pcoCreateBridgeOnly();
+    res.redirect('/admin/pco?msg=' + encodeURIComponent(
+      `Created ${r.created} in People` + (r.linked ? ` (${r.linked} already existed — linked)` : '') + '.'));
+  } catch (e) {
+    res.redirect('/admin/pco?msg=' + encodeURIComponent('Create failed: ' + e.message.slice(0, 120)));
+  }
+});
+app.post('/admin/pco/auto', requireAdmin, (req, res) => {
+  pcoSetAutocreate(req.body.on === '1');
+  audit(req.userEmail, 'admin', 'pco:autocreate:' + (req.body.on === '1' ? 'on' : 'off'), '');
+  res.redirect('/admin/pco');
+});
+app.post('/admin/pco/poll', requireAdmin, async (req, res) => {
+  try { await pcoDaily(); res.redirect('/admin/pco?msg=' + encodeURIComponent('Synced with People.')); }
+  catch (e) { res.redirect('/admin/pco?msg=' + encodeURIComponent('Sync failed: ' + e.message.slice(0, 120))); }
+});
+app.post('/pco/webhook', express.raw({ type: '*/*', limit: '1mb' }), (req, res) => {
+  const r = pcoHandleWebhook(req.body, req.get('x-pco-webhooks-authenticity'));
+  res.status(r.code).end();
+});
+
 app.post('/admin/people/delete', requireAdmin, (req, res) => {
   const { id } = req.body;
   const a = db.prepare('SELECT email, full_name, avatar FROM applicants WHERE id = ?').get(id);
@@ -4263,6 +4321,7 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
     db.prepare('DELETE FROM checkins WHERE email = ?').run(a.email);
     if (offeree) createOffer(runDate, offeree, req);
     db.prepare('DELETE FROM votes WHERE applicant_id = ?').run(id);      // votes cast ON them
+    db.prepare('DELETE FROM pco_outbox WHERE email = ?').run(a.email);   // pending PCO writes die with the account (the PCO person is never deleted)
     db.prepare('DELETE FROM votes WHERE voter_email = ?').run(a.email);  // and votes they cast — else a
     // same-email re-registration made team would resurrect years-old approve/reject tallies.
     // hard-delete is the ONLY path that removes attendance history. checkins (above) and
@@ -4431,14 +4490,19 @@ setInterval(() => {
     // preserves the original call sequence, and one try/catch keeps the original error semantics.
     for (const p of PROGRAMS.values()) p.tick();
   } catch (e) { console.error(`[interval] rollover/expiry FAILED: ${e.message}`); }
+  // PCO People sync: drain the outbox + reconcile unlinked members. Async and fully
+  // self-contained (own error handling, inert without credentials) — fire and forget.
+  pcoTick().catch(e => console.error('[pco] tick rejected:', e.message));
 }, 60000).unref();
 
 // Test-only: synchronously run every program's scheduler tick (rollover + auto open/ping/lock).
 // Mounted ONLY when ENABLE_TEST_TICK=1 so it can never exist in prod — lets the harness drive the
 // clock phases (paired with TEST_NOW) without waiting for the 60s interval. Precedent: FORCE_HELD_RELEASED.
 if (process.env.ENABLE_TEST_TICK === '1') {
-  app.post('/admin/test/tick', requireAdmin, (req, res) => {
+  app.post('/admin/test/tick', requireAdmin, async (req, res) => {
     for (const p of PROGRAMS.values()) p.tick();
+    await pcoTick();                                  // awaited so the harness can assert right after
+    if (req.body && req.body.pcodaily) await pcoDaily(); // opt-in: also run the nightly delta poll
     res.json({ ok: true, now: schedNow() });
   });
 }

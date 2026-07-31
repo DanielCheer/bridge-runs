@@ -596,6 +596,32 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_party_members_email ON party_members(email);
 `);
 
+// ---------- Planning Center sync (Phase 1: People ⇄ Bridge identity) ----------
+// applicants.pco_id — the durable link to a PCO Person once matched or created. TEXT because
+// PCO ids are opaque strings. Lives in the post-Phase2 zone: adding it above the rebuild would
+// drop it from fresh DBs (the checkins.dob lesson).
+{
+  const cols = db.prepare('PRAGMA table_info(applicants)').all().map(c => c.name);
+  if (!cols.includes('pco_id')) db.exec('ALTER TABLE applicants ADD COLUMN pco_id TEXT');
+}
+// pco_outbox — queued OUTBOUND writes (profile PATCHes and the like), drained on the 60s tick.
+// A PCO outage never blocks a Bridge action; every write is replayable; a row that exhausts its
+// retries is closed with last_error + an audit row (fail-loud, never silent). Inert without creds.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS pco_outbox (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL,              -- 'patch' (Phase 1); future kinds ride the same drain
+    email      TEXT NOT NULL,              -- Bridge identity the write is about
+    payload    TEXT NOT NULL DEFAULT '{}', -- JSON: fields to write
+    attempts   INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    next_at    INTEGER NOT NULL DEFAULT 0, -- epoch ms gate for retry backoff
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    done_at    TEXT                        -- set on success OR on giving up (see last_error)
+  );
+  CREATE INDEX IF NOT EXISTS idx_pco_outbox_open ON pco_outbox(done_at, next_at);
+`);
+
 // Prune stale magic-link tokens on startup. A token is dead once it's been used
 // OR has expired — keeping them forever just grows the table unbounded (a fresh
 // row is written on every /login). Unused-and-still-valid tokens are preserved
@@ -655,6 +681,9 @@ function rekeyEmailTx(oldEmail, newEmail) {
     db.prepare('UPDATE group_messages        SET pinned_by=?   WHERE pinned_by=?').run(newEmail, oldEmail);
     db.prepare('UPDATE group_reactions       SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE push_subscriptions    SET email=?       WHERE email=?').run(newEmail, oldEmail);
+    // pco_outbox rows are keyed on email but not UNIQUE on it — a plain carry is safe, and the
+    // applicants.pco_id link rides the applicants row itself (updated by the caller in this txn).
+    db.prepare('UPDATE pco_outbox            SET email=?       WHERE email=?').run(newEmail, oldEmail);
     // Email-keyed per-user state (read markers, sit-outs, per-program membership + auto-renew).
     // Target-address leftovers lose; the migrating person's own state is carried over them.
     for (const t of EMAIL_KEYED_TABLES) {
