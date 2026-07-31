@@ -28,7 +28,7 @@ import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, exportPage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap, setProgramMeta,
   STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, demoProfileCard, pickleballPage, runPage, runsPage, pkJoinPage, runJoinPage, pastRunPage, waiverPage,
-  friendsPage, friendsSearchFragment, chatLockedPage, runChatPage, pcoAdminPage,
+  friendsPage, friendsSearchFragment, chatLockedPage, runChatPage, pcoAdminPage, programsAdminPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -4276,6 +4276,169 @@ app.post('/admin/people/suspend', requireAdmin, (req, res) => {
   res.redirect('/admin/people?msg=' + encodeURIComponent(on ? 'Suspended' : 'Unsuspended'));
 });
 
+// ---------- PROGRAMS (admin) — create a new run/program from the app, no deploy ----------
+// The church's answer to "can we add a youth program ourselves?": this writes a `program` row +
+// JSON spec, rebuilds the registry, and mounts the routes live. Code-defined programs (basketball,
+// pickleball, volleyball, demo) are read-only here — they can be published/hidden but never edited
+// or deleted through this screen, so the live runs can't be reconfigured by accident.
+const PROGRAM_CODE_IDS = new Set([1, 2, 3, 90]);
+const DEMO_PROGRAM_ID = 90;
+function programAdminRows() {
+  return db.prepare('SELECT * FROM program ORDER BY id').all().map(row => {
+    const p = PROGRAMS.get(row.id);
+    let spec = null; try { spec = JSON.parse(row.config || 'null'); } catch {}
+    const counts = db.prepare('SELECT (SELECT COUNT(*) FROM checkins WHERE program_id=?) c, (SELECT COUNT(*) FROM attendance WHERE program_id=?) a, (SELECT COUNT(*) FROM group_messages WHERE program_id=?) m, (SELECT COUNT(*) FROM program_membership WHERE program_id=?) mem').get(row.id, row.id, row.id, row.id);
+    // NB: basketball's hand-written config predates the generic shape — it has NO `keys` object
+    // (its setting names are inline) and carries start/end as 'HH:MM' strings rather than
+    // startHour/endHour. Read defensively so this screen renders every program, old shape or new.
+    const cfg = p ? p.config : null;
+    const hour = (v) => (Number.isFinite(v) ? v : null);
+    return {
+      id: row.id, name: p ? p.displayName : row.name, slug: row.slug, active: !!row.active, approval: row.approval,
+      editable: !PROGRAM_CODE_IDS.has(row.id), builtIn: PROGRAM_CODE_IDS.has(row.id),
+      mounted: !!p, emoji: p ? p.emoji : (spec && spec.emoji) || '',
+      runPath: p ? p.paths.run : (row.slug ? '/' + row.slug : ''),
+      cap: cfg ? cfg.cap : null, dow: cfg && Number.isFinite(cfg.dow) ? cfg.dow : null,
+      // One ready-to-print label, built here because server.js owns the clock formatter: the
+      // generic shape carries whole hours, basketball carries 'HH:MM' strings — both render.
+      timeLabel: !cfg ? ''
+        : Number.isFinite(cfg.startHour) && Number.isFinite(cfg.endHour)
+          ? fmtClockRange(`${String(cfg.startHour).padStart(2, '0')}:00`, `${String(cfg.endHour).padStart(2, '0')}:00`)
+          : (cfg.start && cfg.end ? fmtClockRange(cfg.start, cfg.end) : ''),
+      startHour: cfg ? hour(cfg.startHour) : null, endHour: cfg ? hour(cfg.endHour) : null,
+      theme: cfg ? cfg.theme : '', spec,
+      hasData: counts.c > 0 || counts.a > 0 || counts.m > 0, members: counts.mem,
+      runDate: cfg ? (cfg.keys ? (getSetting(cfg.keys.runDate) || '') : nextRunDate()) : '',
+    };
+  });
+}
+// Validate + normalize the wizard's input into the stored spec. Returns {spec, name, slug, approval}
+// or {error}. Everything the engine needs is either validated here or derived in defFromRow.
+function parseProgramForm(body, { existingSlug = null } = {}) {
+  const name = String(body.name || '').trim().slice(0, 40);
+  if (name.length < 2) return { error: 'Give the program a name (at least 2 characters).' };
+  const slug = String(body.slug || '').trim().toLowerCase();
+  if (!/^[a-z][a-z0-9-]{1,20}$/.test(slug)) return { error: 'The web address can only use lowercase letters, numbers and dashes (2–21 characters, starting with a letter).' };
+  if (slug !== existingSlug) {
+    // Program-collision FIRST: a mounted program's routes also make its slug "reserved", and
+    // "another program already uses this" is the message that tells the admin what to actually do.
+    if (db.prepare('SELECT 1 FROM program WHERE slug = ?').get(slug)) return { error: `Another program already uses “/${slug}”.` };
+    if (slugIsReserved(slug)) return { error: `“/${slug}” is already used by the app — pick a different web address.` };
+  }
+  const int = (v, d) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : d; };
+  const cap = int(body.cap, 0), waitlist = int(body.waitlist, 0), prereg = int(body.prereg, 0);
+  if (cap < 1 || cap > 200) return { error: 'Floor size must be between 1 and 200.' };
+  if (waitlist < 0 || waitlist > 50) return { error: 'Waitlist size must be between 0 and 50.' };
+  if (prereg < 0 || prereg > cap) return { error: 'Early-access spots can’t exceed the floor size.' };
+  const dow = int(body.dow, -1);
+  if (dow < 0 || dow > 6) return { error: 'Pick which day of the week the run happens.' };
+  const startHour = int(body.startHour, -1), endHour = int(body.endHour, -1);
+  if (startHour < 0 || startHour > 23) return { error: 'Pick a valid start time.' };
+  if (endHour <= startHour || endHour > 24) return { error: 'The end time has to be after the start time.' };
+  const hhmm = (v) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(v || ''));
+  const lockTime = hhmm(body.lockTime) ? String(body.lockTime) : `${String(startHour).padStart(2, '0')}:00`;
+  const confirmMode = String(body.confirmMode || 'none');
+  let confirmCutoff = null;
+  if (confirmMode === 'cutoff') {
+    if (!hhmm(body.confirmCutoff)) return { error: 'Give the confirm deadline as a time like 16:30.' };
+    confirmCutoff = String(body.confirmCutoff);
+  }
+  const teamsCount = int(body.teamsCount, 0), teamsSize = int(body.teamsSize, 0);
+  if (teamsCount < 0 || teamsCount > 12) return { error: 'Teams: pick between 0 and 12.' };
+  if (teamsCount > 0 && (teamsSize < 1 || teamsSize > 30)) return { error: 'Team size must be between 1 and 30.' };
+  const partySize = int(body.partySize, 0);
+  if (partySize < 0 || partySize > 12) return { error: 'Group sign-up size must be between 0 and 12.' };
+  const approval = ['open', 'invite', 'council', 'host'].includes(body.approval) ? body.approval : 'open';
+  const spec = {
+    displayName: name,
+    emoji: String(body.emoji || '🏅').trim().slice(0, 4) || '🏅',
+    cap, waitlist, prereg,
+    dow, startHour, endHour,
+    lockTime, confirmCutoff,
+    pingHour: 9, pingDowOffset: 0, openOffsetDays: -7,
+    theme: PROGRAM_THEMES.includes(body.theme) ? body.theme : 'default',
+    offerWindow: body.seating === 'offer',
+    autoRenew: body.autoRenew === '1',
+    teams: teamsCount > 0 ? { count: teamsCount, size: teamsSize } : null,
+    groupQueue: partySize > 1 ? { maxSize: partySize } : null,
+  };
+  return { spec, name, slug, approval };
+}
+app.get('/admin/programs', requireAdmin, (req, res) => {
+  res.send(programsAdminPage({ rows: programAdminRows(), msg: req.query.msg || '', form: req.query.form === '1', themes: PROGRAM_THEMES }));
+});
+app.post('/admin/programs/create', requireAdmin, (req, res) => {
+  const parsed = parseProgramForm(req.body);
+  if (parsed.error) return res.redirect('/admin/programs?form=1&msg=' + encodeURIComponent(parsed.error));
+  // ids 4..89 are the in-app range (90 is the demo showcase, reserved).
+  const maxRow = db.prepare('SELECT MAX(id) m FROM program WHERE id < ?').get(DEMO_PROGRAM_ID);
+  const id = Math.max(4, (maxRow.m || 3) + 1);
+  if (id >= DEMO_PROGRAM_ID) return res.redirect('/admin/programs?msg=' + encodeURIComponent('Program limit reached — archive an old program first.'));
+  try {
+    db.prepare('INSERT INTO program (id,name,sport,slug,active,approval,config) VALUES (?,?,?,?,0,?,?)')
+      .run(id, parsed.name, parsed.slug, parsed.slug, parsed.approval, JSON.stringify(parsed.spec));
+  } catch (e) {
+    return res.redirect('/admin/programs?form=1&msg=' + encodeURIComponent('Couldn’t create that program: ' + e.message.slice(0, 100)));
+  }
+  buildPrograms();            // registry + view meta + PCO sport labels
+  mountPendingPrograms();     // routes live immediately — no restart
+  audit(req.userEmail, 'admin', 'program:create', `${id}:${parsed.slug}`);
+  res.redirect('/admin/programs?msg=' + encodeURIComponent(`Created ${parsed.name}. It's hidden — set its first run date, then publish it.`));
+});
+app.post('/admin/programs/edit', requireAdmin, (req, res) => {
+  const id = Number(req.body.id);
+  const row = db.prepare('SELECT * FROM program WHERE id = ?').get(id);
+  if (!row) return res.redirect('/admin/programs?msg=' + encodeURIComponent('No such program.'));
+  if (PROGRAM_CODE_IDS.has(id)) return res.redirect('/admin/programs?msg=' + encodeURIComponent('Basketball, pickleball, volleyball and the demo are managed in code — they can be published or hidden here, not edited.'));
+  const parsed = parseProgramForm(req.body, { existingSlug: row.slug });
+  if (parsed.error) return res.redirect('/admin/programs?msg=' + encodeURIComponent(parsed.error));
+  db.prepare('UPDATE program SET name=?, sport=?, slug=?, approval=?, config=? WHERE id=?')
+    .run(parsed.name, parsed.slug, parsed.slug, parsed.approval, JSON.stringify(parsed.spec), id);
+  buildPrograms();
+  // A slug change means new paths: mount the new ones (the old routes stay registered but their
+  // program is gone from the registry, so they 404 through the normal gate — never a stale run).
+  MOUNTED_PROGRAMS.delete(id);
+  mountPendingPrograms();
+  audit(req.userEmail, 'admin', 'program:edit', `${id}:${parsed.slug}`);
+  res.redirect('/admin/programs?msg=Saved');
+});
+app.post('/admin/programs/active', requireAdmin, (req, res) => {
+  const id = Number(req.body.id), on = req.body.on === '1';
+  const row = db.prepare('SELECT * FROM program WHERE id = ?').get(id);
+  if (!row) return res.redirect('/admin/programs?msg=' + encodeURIComponent('No such program.'));
+  if (id === 1) return res.redirect('/admin/programs?msg=' + encodeURIComponent('The basketball run is always live.'));
+  db.prepare('UPDATE program SET active=? WHERE id=?').run(on ? 1 : 0, id);
+  buildPrograms();
+  audit(req.userEmail, 'admin', on ? 'program:publish' : 'program:hide', `${id}:${row.slug}`);
+  res.redirect('/admin/programs?msg=' + encodeURIComponent(on
+    ? `${row.name} is live — every approved member can see it now.`
+    : `${row.name} is hidden again (admins only).`));
+});
+app.post('/admin/programs/delete', requireAdmin, (req, res) => {
+  const id = Number(req.body.id);
+  const row = db.prepare('SELECT * FROM program WHERE id = ?').get(id);
+  if (!row) return res.redirect('/admin/programs?msg=' + encodeURIComponent('No such program.'));
+  if (PROGRAM_CODE_IDS.has(id)) return res.redirect('/admin/programs?msg=' + encodeURIComponent('That program is managed in code and can’t be deleted here.'));
+  // Never silently destroy history: a program that has ANY rosters, attendance or chat can only be
+  // hidden. Delete is for a mis-created program, and even then it's an explicit empty-only path.
+  const used = db.prepare('SELECT (SELECT COUNT(*) FROM checkins WHERE program_id=?) c, (SELECT COUNT(*) FROM attendance WHERE program_id=?) a, (SELECT COUNT(*) FROM group_messages WHERE program_id=?) m').get(id, id, id);
+  if (used.c || used.a || used.m)
+    return res.redirect('/admin/programs?msg=' + encodeURIComponent(`${row.name} already has sign-ups, attendance or chat history — hide it instead of deleting, so the records survive.`));
+  transact(() => {
+    db.prepare('DELETE FROM program_membership WHERE program_id=?').run(id);
+    db.prepare('DELETE FROM run_state WHERE program_id=?').run(id);
+    db.prepare('DELETE FROM run_overrides WHERE program_id=?').run(id);
+    db.prepare('DELETE FROM announcements WHERE program_id=?').run(id);
+    db.prepare('DELETE FROM group_reads WHERE program_id=?').run(id);
+    db.prepare('DELETE FROM program WHERE id=?').run(id);
+  });
+  for (const k of Object.values((PROGRAMS.get(id) || { config: { keys: {} } }).config.keys)) delSetting(k);
+  buildPrograms();
+  MOUNTED_PROGRAMS.delete(id);
+  audit(req.userEmail, 'admin', 'program:delete', `${id}:${row.slug}`);
+  res.redirect('/admin/programs?msg=' + encodeURIComponent(`${row.name} was removed.`));
+});
+
 // ---------- Planning Center sync (Phase 1) — admin console + webhook ----------
 // Every state-changing route is ADMIN-gated. The webhook is public by necessity but HMAC-verified
 // inside pcoHandleWebhook against the stored authenticity secret (raw body needed for the
@@ -6293,6 +6456,15 @@ const stmtProgActiveById = db.prepare('SELECT active FROM program WHERE id = ?')
 // friendly 500 (no stack-trace leak) — same as the inline routes.
 function mountRunProgram(app, program) {
   const b = program.paths.run, id = program.id;
+  // Express can't UNMOUNT routes, but an in-app program can be deleted or re-slugged at runtime —
+  // so every path this function registers gets one prefix guard that 404s the moment `b` stops
+  // being this program's live path. Without it, a stale route reaches a handler that assumes
+  // P(id) exists and throws a 500. One guard per program beats a check inside 30 handlers.
+  app.use(b, (req, res, next) => {
+    const live = PROGRAMS.get(id);
+    if (live && live.paths.run === b) return next();
+    return res.status(404).send('Not found');
+  });
   app.get(b, requireLogin, (req, res) => runGetPage(id, req, res));
   app.get(`${b}/run.ics`, requireLogin, (req, res) => runIcs(id, req, res));
   app.post(`${b}/join-run`, requireLogin, (req, res) => runJoinRun(id, req, res));
@@ -6339,11 +6511,87 @@ function mountRunProgram(app, program) {
   // the one-tap group check-in (any joined member seats the whole party — assumed coming).
   app.post(`${b}/party/checkin`, requireLogin, (req, res) => runPartyCheckin(id, req, res));
 }
+// ---------- DB-DEFINED PROGRAMS (created in-app, no deploy) ----------
+// A church admin fills in the "New program" wizard → one `program` row with a JSON spec → this
+// builds the same shape PROGRAM_DEFS hand-writes, so the generic engine (routes, scheduler, chat,
+// season, teams, parties, hub card, exports, PCO labels) picks it up with zero new code. Only the
+// genuinely arbitrary choices are stored; everything formulaic is DERIVED here — which is exactly
+// why hand-writing them was never real engineering work:
+//   paths    /<slug>, /<slug>/chat, /<slug>/season
+//   keys     <slug>_run_date, <slug>_autoopen_done, … (the app_settings namespace)
+//   copy     push/announcement strings, from the display name + emoji
+//   banner   public/prog-<slug>-banner.jpg (falls back to the shared gym photo until one is uploaded)
+const PROGRAM_THEMES = ['default', 'pk', 'vb'];   // curated, known-legible skins (see styles.css)
+function derivedCopy(name, emoji) {
+  const low = name.toLowerCase();
+  return {
+    openTitle: `${name} check-in is open`,
+    openBody: (rd) => `Check-in is open for ${runWeekday(rd)}, ${runLabelFor(rd)} ${low} — grab your spot ${emoji}`,
+    confirmTitle: `Confirm your ${low} spot`,
+    confirmBody: (rd) => `You're on the floor for ${runWeekday(rd)} ${low}. Tap to confirm — or leave to free your spot.`,
+    promoTitle: `You're in for ${low} ${emoji}`,
+    promoBody: (rd) => `A spot opened — you're on the floor for ${runWeekday(rd)}, ${runLabelFor(rd)} ${low}.`,
+    annTitle: `${name} announcement`,
+  };
+}
+function defFromRow(row) {
+  let spec;
+  try { spec = JSON.parse(row.config || 'null'); } catch { spec = null; }
+  if (!spec || !row.slug) return null;
+  const slug = row.slug, name = spec.displayName || row.name, emoji = spec.emoji || '🏅';
+  const k = (s) => `${slug}_${s}`;
+  const features = {};
+  if (spec.teams && spec.teams.count > 0) features.teams = { count: spec.teams.count, size: spec.teams.size, opensAt: 'lock', selfServe: true };
+  if (spec.groupQueue && spec.groupQueue.maxSize > 1) features.groupQueue = { maxSize: spec.groupQueue.maxSize };
+  return {
+    key: slug, emoji, displayName: name,
+    paths: { run: `/${slug}`, chat: `/${slug}/chat`, season: `/${slug}/season` },
+    seasonLabel: `${name} season`,
+    config: {
+      cap: spec.cap, waitlist: spec.waitlist, prereg: spec.prereg || 0,
+      dow: spec.dow, startHour: spec.startHour, endHour: spec.endHour,
+      pingHour: spec.pingHour == null ? 9 : spec.pingHour, pingDowOffset: spec.pingDowOffset == null ? 0 : spec.pingDowOffset,
+      lockTime: spec.lockTime, confirmCutoff: spec.confirmCutoff || null,
+      keys: {
+        runDate: k('run_date'), runBase: k('run_base'), seasonStart: k('season_start'),
+        autoopen: k('autoopen_done'), autoping: k('autoping_done'), autolock: k('autolock_done'),
+        arassess: k('arassess_done'), confirmsweep: k('confirmsweep_done'),
+      },
+      logTag: slug, openOffsetDays: spec.openOffsetDays == null ? -7 : spec.openOffsetDays,
+      copy: derivedCopy(name, emoji),
+      theme: PROGRAM_THEMES.includes(spec.theme) ? spec.theme : 'default',
+      access: 'opt-in', approval: row.approval,
+      bannerPath: path.join(__dirname, 'public', `prog-${slug}-banner.jpg`), bannerPublic: `/prog-${slug}-banner.jpg`,
+      tiers: ['team', 'host'], offerWindow: !!spec.offerWindow,
+      autoRenew: spec.autoRenew ? { from: 'members' } : null,
+      mentionTag: `${slug}mention`, chatSeqKey: k('chat_seq'),
+      features,
+    },
+    unread: genericUnread(row.id), hubCard: genericHubCard(row.id), tick: genericTick(row.id),
+  };
+}
+// A program's own routes live under /<slug>, so a slug must never shadow an app route or a real
+// file in public/. Computed from the LIVE router stack rather than a hand-kept list — a list would
+// silently rot the next time a route is added.
+function slugIsReserved(slug) {
+  if (fs.existsSync(path.join(__dirname, 'public', slug))) return true;
+  const stack = (app._router && app._router.stack) || [];
+  for (const layer of stack) {
+    const raw = layer.route && layer.route.path;
+    for (const p of (Array.isArray(raw) ? raw : [raw])) {
+      if (typeof p === 'string' && p.startsWith('/') && p.split('/')[1] === slug) return true;
+    }
+  }
+  return false;
+}
+
 function buildPrograms() {
   PROGRAMS.clear();
   for (const row of db.prepare('SELECT * FROM program ORDER BY id').all()) {
-    const def = PROGRAM_DEFS[row.id];
-    if (!def) continue; // only runs with a known engine are mounted this phase (Phase 3 generalizes)
+    // Code-defined programs (1/2/3/90) always win by id — their behaviour is frozen. Everything
+    // else is built from the row's JSON spec, so an in-app creation needs no deploy.
+    const def = PROGRAM_DEFS[row.id] || defFromRow(row);
+    if (!def) continue; // a row with neither an engine nor a valid spec is inert, never a crash
     PROGRAMS.set(row.id, {
       id: row.id, key: def.key, emoji: def.emoji, displayName: def.displayName,
       paths: def.paths, seasonLabel: def.seasonLabel, config: def.config,
@@ -6378,7 +6626,17 @@ buildPrograms();
 // Register run routes for programs beyond basketball (/checkin/*) + pickleball (/pickleball/*),
 // which keep their inline routes — e.g. volleyball via the config-driven factory. After
 // buildPrograms() so P(id) is hydrated (mountRunProgram reads program.paths.run).
-for (const p of PROGRAMS.values()) if (p.id >= 3) mountRunProgram(app, p);
+// Mounting is idempotent + incremental: a program CREATED at runtime gets its routes without a
+// restart. (Express matches layers in registration order; the terminal 4-arg error handler below
+// only runs on next(err), so routes registered after it still match normally — the program-fn
+// suite proves a freshly created program answers on its own paths in the same process.)
+const MOUNTED_PROGRAMS = new Set();
+function mountPendingPrograms() {
+  for (const p of PROGRAMS.values()) {
+    if (p.id >= 3 && !MOUNTED_PROGRAMS.has(p.id)) { mountRunProgram(app, p); MOUNTED_PROGRAMS.add(p.id); }
+  }
+}
+mountPendingPrograms();
 // Terminal error handler — registered LAST (after every inline + mounted route) so a sync throw
 // (or a forwarded async reject via next(e)) in ANY route lands here with a friendly 500 instead of
 // a hung socket OR Express's stack-trace-leaking default handler. Must be the last app.use (4-arg).

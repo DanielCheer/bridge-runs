@@ -465,6 +465,14 @@ db.prepare("INSERT OR IGNORE INTO program (id,name,sport,slug,active,approval) V
 // synthetic checkins-only rows (@demo.local, no applicant rows) confined to program_id=90, so it
 // can never touch live basketball/pickleball/volleyball rosters, attendance, or exports.
 db.prepare("INSERT OR IGNORE INTO program (id,name,sport,slug,active,approval) VALUES (90,'Demo','demo','demo',0,'invite')").run();
+// program.config (2026-07-31) — the JSON spec for programs CREATED IN THE APP (admin "New program"
+// wizard). NULL for the four code-defined programs above: buildPrograms prefers PROGRAM_DEFS by id,
+// so basketball/pickleball/volleyball/demo behaviour is untouched, and only DB-defined rows (id ≥ 4)
+// are built from this column. That's what makes adding a program a church-admin action, not a deploy.
+{
+  const cols = db.prepare('PRAGMA table_info(program)').all().map(c => c.name);
+  if (!cols.includes('config')) db.exec('ALTER TABLE program ADD COLUMN config TEXT');
+}
 // Add program_id (DEFAULT 1) to every run-scoped table — guarded + backfilled so existing rows stay basketball.
 for (const t of ['checkins', 'run_state', 'run_overrides', 'regular_optout', 'attendance', 'group_messages', 'group_reads', 'group_reactions', 'announcements', 'votes']) {
   const cols = db.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name);
