@@ -11,6 +11,7 @@ Backfilled below from git history for the releases that shipped before this file
 
 | Date (local) | Tag | Commit | Summary |
 |---|---|---|---|
+| 2026-07-31 | rel-20260731-1957 | e93faae | Kiosk arrivals — door screens overlay live PCO Check-Ins taps (IN chips, building tally, walk-ins); /admin/pco toggle, inert without creds; pco-fn 128/128 + full regression |
 | 2026-07-31 | rel-20260731-1727 | db09db0 | Waitlist pings, analytics dashboard, gym kiosk, scheduled announcements — approved queue complete |
 | 2026-07-31 | rel-20260731-1718 | 47b4630 | Program hosts + enforced join modes (request/approve flow); off-site backup mirror; PII one-pager |
 | 2026-07-31 | rel-20260731-1550 | 0b53e23 | Security batch: revocable sessions + admin sign-in alerts, security headers, healthz, key-event audit, npm audit clean, desktop push |
