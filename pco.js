@@ -357,6 +357,74 @@ export async function pcoCreateBridgeOnly() {
   return { created, linked };
 }
 
+// ---------- Phase 2b: Check-Ins at the door (read-side) ----------
+// PCO Check-Ins is write-walled for everyone, but READING check-ins back is open — that's the
+// whole hybrid: the church's station takes the tap (their official record), Bridge reads the taps
+// and reconciles them against its own roster. Nothing here writes to Check-Ins.
+
+// Reconcile one run date against the door taps. Buckets:
+//   ok      — signed up in Bridge AND tapped at the station
+//   noShows — on the Bridge roster, never tapped (guests exempt: no PCO person to tap as)
+//   walkIns — tapped at the station with no Bridge signup (named if the person is linked)
+export async function pcoReconcile(dateStr) {
+  const eventId = getSetting('pco_checkins_event');
+  if (!eventId) throw new Error('No Check-Ins event configured');
+  const tapped = new Set();   // pco person ids that tapped that day
+  await eachPerson(
+    `/check-ins/v2/events/${encodeURIComponent(eventId)}/check_ins` +
+    `?where[created_at][gte]=${dateStr}T00:00:00Z&where[created_at][lte]=${dateStr}T23:59:59Z&per_page=100`,
+    (c) => { const pid = c.relationships?.person?.data?.id; if (pid) tapped.add(String(pid)); });
+  const roster = db.prepare(
+    `SELECT email, name FROM checkins WHERE run_date = ? AND ${SYNTHETIC}`).all(dateStr);
+  const linkOf = new Map(db.prepare('SELECT email, pco_id FROM applicants WHERE pco_id IS NOT NULL').all()
+    .map(r => [r.email, String(r.pco_id)]));
+  const byPcoId = new Map([...linkOf].map(([e, p]) => [p, e]));
+  let ok = 0; const noShows = [];
+  const rosterIds = new Set();
+  for (const r of roster) {
+    const pid = linkOf.get(r.email);
+    if (pid) rosterIds.add(pid);
+    if (pid && tapped.has(pid)) ok++;
+    else noShows.push(r.name || r.email);
+  }
+  const walkIns = [...tapped].filter(pid => !rosterIds.has(pid))
+    .map(pid => byPcoId.get(pid) || `PCO person #${pid}`);
+  const report = { at: new Date().toISOString(), date: dateStr, ok, noShows, walkIns };
+  setSetting('pco_checkins_report', JSON.stringify(report));
+  audit(`pco:reconcile ${dateStr} ok=${ok} no-shows=${noShows.length} walk-ins=${walkIns.length}`, '');
+  return report;
+}
+
+// Verify door passes by reading them back from PCO (consumption, not emission): for every linked
+// member, store the FIRST pass code PCO actually has on file — Church Center's own pass counts,
+// so does a Bridge-issued barcode once the church imports the CSV. The profile QR renders ONLY
+// from a verified code; members with none land on the "missing" list that feeds the CSV export.
+export async function pcoVerifyPasses() {
+  const linked = db.prepare(`SELECT email, pco_id FROM applicants WHERE pco_id IS NOT NULL AND ${SYNTHETIC}`).all();
+  const setCode = db.prepare('UPDATE applicants SET pco_pass_code = ? WHERE email = ?');
+  let withPass = 0; const missing = [];
+  for (const m of linked) {
+    const json = await pcoFetch(`/check-ins/v2/people/${m.pco_id}/passes`);
+    const code = json.data?.[0]?.attributes?.code || null;
+    setCode.run(code, m.email);
+    if (code) withPass++; else missing.push(m.email);
+  }
+  const report = { at: new Date().toISOString(), withPass, missing };
+  setSetting('pco_pass_report', JSON.stringify(report));
+  audit(`pco:verify-passes with=${withPass} missing=${missing.length}`, '');
+  return report;
+}
+
+// Rows for the "PCO barcode CSV" (People importer format — Barcode column is officially
+// supported; the import ADDS barcodes but never overwrites an existing one). Only linked members
+// still missing a verified pass; code = BR<pco_id> (stable + collision-free by construction).
+export function pcoBarcodeRows() {
+  return db.prepare(
+    `SELECT full_name, email, pco_id FROM applicants
+     WHERE pco_id IS NOT NULL AND pco_pass_code IS NULL AND ${SYNTHETIC} ORDER BY full_name`).all()
+    .map(a => ({ ...splitName(a.full_name), email: a.email, barcode: 'BR' + a.pco_id }));
+}
+
 export function pcoStatus() {
   return {
     connected: pcoConnected(),
@@ -367,5 +435,12 @@ export function pcoStatus() {
     report: JSON.parse(getSetting('pco_report') || 'null'),
     outboxPending: stmtOutboxPending.get().n,
     linked: db.prepare('SELECT COUNT(*) n FROM applicants WHERE pco_id IS NOT NULL').get().n,
+    // Phase 2b surfaces
+    doorMode: getSetting('pco_door_mode') === '1',
+    passEnabled: getSetting('pco_pass_enabled') === '1',
+    eventId: getSetting('pco_checkins_event') || '',
+    passHolders: db.prepare('SELECT COUNT(*) n FROM applicants WHERE pco_pass_code IS NOT NULL').get().n,
+    passReport: JSON.parse(getSetting('pco_pass_report') || 'null'),
+    checkinsReport: JSON.parse(getSetting('pco_checkins_report') || 'null'),
   };
 }

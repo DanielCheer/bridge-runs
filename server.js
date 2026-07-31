@@ -16,6 +16,7 @@ import { sendMagicLink, sendAnnouncement, sendSpotOffer, emailConfigured } from 
 import {
   pcoTick, pcoDaily, pcoStatus, pcoConnect, pcoDisconnect, pcoSetAutocreate,
   pcoRunInitialLink, pcoCreateBridgeOnly, pcoQueuePatch, pcoHandleWebhook,
+  pcoReconcile, pcoVerifyPasses, pcoBarcodeRows,
 } from './pco.js';
 import webpush from 'web-push';
 import {
@@ -160,6 +161,12 @@ const stmtDelSetting = db.prepare('DELETE FROM app_settings WHERE key = ?');
 const getSetting = (k) => stmtGetSetting.get(k)?.value;
 const setSetting = (k, v) => stmtSetSetting.run(k, String(v));
 const delSetting = (k) => stmtDelSetting.run(k);
+// Door check-in mode (the PCO Check-Ins hybrid): the physical door tap IS the confirmation, so
+// the in-app "✓ I'm coming" step disappears everywhere — no run-day ping, no confirm-or-release
+// sweep, no button (views key off confirmBy === ''). One admin toggle on /admin/pco, read LIVE
+// at every site through effectiveConfirmCutoff(), so flipping it needs no restart or config edit.
+const doorMode = () => getSetting('pco_door_mode') === '1';
+const effectiveConfirmCutoff = (cutoff) => (doorMode() ? null : (cutoff || null));
 // Apply any host-saved capacity overrides (app_settings) over the env defaults. Called
 // once at startup and again whenever the host saves settings, so live edits need no
 // restart. A missing / non-positive stored value falls back to the env default.
@@ -2157,7 +2164,7 @@ app.get('/checkin', requireLogin, (req, res) => {
     iAmTeam, iAmRegular, iOptedOut, iAutoRenew,
     viewerIsAdmin, canOperate, canSeeRoster,
     suspended: !!(a && a.suspended), suspendReason: (a && a.suspend_reason) || '',
-    myConfirmed, confirmBy: fmtClockLabel(P(1).config.confirmCutoff), msg: req.query.msg || '', bannerVer: bannerVersion(),
+    myConfirmed, confirmBy: effectiveConfirmCutoff(P(1).config.confirmCutoff) ? fmtClockLabel(P(1).config.confirmCutoff) : '', msg: req.query.msg || '', bannerVer: bannerVersion(),
     cancelled: runIsCancelled(runDate),
     locked: runIsLocked(runDate),
     announcement: latestAnnouncement(),
@@ -2289,11 +2296,18 @@ app.get('/u/:id', requireLogin, (req, res) => {
 
 // ---------- PROFILE (own editable tab) ----------
 const POSITIONS = ['', 'PG', 'SG', 'SF', 'PF', 'C', 'S', 'OH', 'MB', 'OPP', 'L', 'DS']; // basketball + volleyball
-app.get('/profile', requireLogin, (req, res) => {
+app.get('/profile', requireLogin, async (req, res) => {
   const gate = requirePlayer(req, res);
   if (!gate) return;
   const a = gate.a;
   if (!a) return res.redirect('/status'); // admins with no applicant row have nothing to edit
+  // Door check-in pass (Phase 2b): renders ONLY from a VERIFIED code (pco_pass_code is written
+  // by the read-back, never assumed) and only while the admin has passes switched on.
+  let passQr = '';
+  if (getSetting('pco_pass_enabled') === '1' && a.pco_pass_code) {
+    try { passQr = await QRCode.toString(a.pco_pass_code, { type: 'svg', margin: 1, color: { dark: '#183B38', light: '#ffffff' } }); }
+    catch (e) { console.error(`[pco] pass QR failed for ${a.email}: ${e.message}`); }
+  }
   // Operator announcement history lives here now (moved off the check-in page).
   const canOperate = gate.viewerIsAdmin || !!a.is_team;
   // Host DM inbox lives on the host's own profile tab now (no Messages tab). Only
@@ -2307,7 +2321,7 @@ app.get('/profile', requireLogin, (req, res) => {
     : (req.query.photoerr ? 'err:' + String(req.query.photoerr) : '');
   const chatProgram = chatProgramFor(req);
   const cc = chatCountsFor(chatProgram || 1, a.email, a.id);
-  res.send(profileTabPage({ a, stats: attendanceStats(a.email), saved: req.query.saved === '1', error: '',
+  res.send(profileTabPage({ a, stats: attendanceStats(a.email), saved: req.query.saved === '1', error: '', passQr, passCode: a.pco_pass_code || '',
     dmUnread: unreadCount(a.email), groupUnread: cc.group, groupMention: cc.gm, chatProgram, canOperate, announcementLog: canOperate ? announcementHistory() : [],
     friendCount: friendsOf(a.email).length, friendReqIn: friendReqIncomingCount(a.email), followerCount: followersOf(a.email).length, // Friends entry-point summary
     iAmHost, threads: loadInbox(a.email), photoMsg, ann: annPanel(a.email), minor: isMinor(a), showRoles: gate.viewerIsAdmin }));
@@ -3543,7 +3557,7 @@ app.post('/admin/run/cancel', requireLogin, (req, res) => {
   if (cancel) db.prepare('DELETE FROM checkins WHERE run_date = ? AND program_id = 1').run(runDate); // clear the floor — a cancelled run has nobody on it
   // Un-cancelling past the confirm cutoff must NOT arm an instant unpinged sweep — stamp/re-arm
   // the ping+sweep markers by the same rule as a date move.
-  if (!cancel) migrateConfirmMarkers(runDate, P(1).config.confirmCutoff, 'autoping_done', 'confirmsweep_done');
+  if (!cancel) migrateConfirmMarkers(runDate, effectiveConfirmCutoff(P(1).config.confirmCutoff), 'autoping_done', 'confirmsweep_done');
   audit(email, admin ? 'admin' : 'host', cancel ? 'run:cancel' : 'run:uncancel', runDate);
   if (cancel) {
     // Game-day notification: push only (no email storm) — the check-in banner carries it in-app.
@@ -3886,7 +3900,7 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
   // Setting/re-confirming the run day REVIVES a cancelled run (re-scheduling = you're
   // committing to run again) — done BEFORE the no-op guard so re-submitting the SAME date
   // still un-cancels. The check-in page reflects it immediately.
-  if (runIsCancelled(raw)) { setRunCancelled(raw, false); migrateConfirmMarkers(raw, P(1).config.confirmCutoff, 'autoping_done', 'confirmsweep_done'); audit(email, actorRole, 'run:uncancel-via-rundate', raw); }
+  if (runIsCancelled(raw)) { setRunCancelled(raw, false); migrateConfirmMarkers(raw, effectiveConfirmCutoff(P(1).config.confirmCutoff), 'autoping_done', 'confirmsweep_done'); audit(email, actorRole, 'run:uncancel-via-rundate', raw); }
 
   // No-op guard: if the stored state already matches this request, skip the write +
   // announcement (re-submitting the same day/time must not spam everyone).
@@ -3929,7 +3943,7 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
         else db.prepare("DELETE FROM app_settings WHERE key = 'autoclose_done'").run();
       }
       // Confirm ping + sweep markers follow the same rule — never let the moved day sweep unpinged.
-      migrateConfirmMarkers(newRunDate, P(1).config.confirmCutoff, 'autoping_done', 'confirmsweep_done');
+      migrateConfirmMarkers(newRunDate, effectiveConfirmCutoff(P(1).config.confirmCutoff), 'autoping_done', 'confirmsweep_done');
       db.prepare('UPDATE checkins SET run_date = ? WHERE run_date = ? AND program_id = 1').run(newRunDate, oldRunDate);
       db.prepare('UPDATE regular_optout SET run_date = ? WHERE run_date = ? AND program_id = 1').run(newRunDate, oldRunDate);
       db.exec('COMMIT');
@@ -4309,6 +4323,58 @@ app.post('/pco/webhook', express.raw({ type: '*/*', limit: '1mb' }), (req, res) 
   res.status(r.code).end();
 });
 
+// ---- Phase 2b: door mode + Check-Ins reconciliation + door passes ----
+// Door mode: the PCO station tap replaces the in-app "✓ I'm coming" step — every confirm surface
+// (ping / sweep / button) reads this live through effectiveConfirmCutoff(). Flip, no restart.
+app.post('/admin/pco/doormode', requireAdmin, (req, res) => {
+  setSetting('pco_door_mode', req.body.on === '1' ? '1' : '0');
+  audit(req.userEmail, 'admin', 'pco:doormode:' + (req.body.on === '1' ? 'on' : 'off'), '');
+  res.redirect('/admin/pco?msg=' + encodeURIComponent(req.body.on === '1'
+    ? 'Door mode ON — the ✓ I’m-coming step is hidden and the confirm sweep is off.'
+    : 'Door mode OFF — the in-app confirm step is back.'));
+});
+app.post('/admin/pco/event', requireAdmin, (req, res) => {
+  const id = String(req.body.event_id || '').trim();
+  if (!/^\d{1,12}$/.test(id)) return res.redirect('/admin/pco?msg=' + encodeURIComponent('Event ID should be the number from the Check-Ins event URL.'));
+  setSetting('pco_checkins_event', id);
+  audit(req.userEmail, 'admin', 'pco:event-set', id);
+  res.redirect('/admin/pco?msg=' + encodeURIComponent('Check-Ins event saved.'));
+});
+app.post('/admin/pco/reconcile', requireAdmin, async (req, res) => {
+  const date = String(req.body.date || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.redirect('/admin/pco?msg=' + encodeURIComponent('Pick the run date to reconcile.'));
+  try {
+    const r = await pcoReconcile(date);
+    res.redirect('/admin/pco?msg=' + encodeURIComponent(`Reconciled ${date}: ${r.ok} ✓ · ${r.noShows.length} no-show(s) · ${r.walkIns.length} walk-in(s).`));
+  } catch (e) {
+    res.redirect('/admin/pco?msg=' + encodeURIComponent('Reconcile failed: ' + e.message.slice(0, 120)));
+  }
+});
+app.post('/admin/pco/passes', requireAdmin, (req, res) => {
+  setSetting('pco_pass_enabled', req.body.on === '1' ? '1' : '0');
+  audit(req.userEmail, 'admin', 'pco:passes:' + (req.body.on === '1' ? 'on' : 'off'), '');
+  res.redirect('/admin/pco');
+});
+app.post('/admin/pco/passes/verify', requireAdmin, async (req, res) => {
+  try {
+    const r = await pcoVerifyPasses();
+    res.redirect('/admin/pco?msg=' + encodeURIComponent(`Passes verified: ${r.withPass} working · ${r.missing.length} still need the CSV import.`));
+  } catch (e) {
+    res.redirect('/admin/pco?msg=' + encodeURIComponent('Verify failed: ' + e.message.slice(0, 120)));
+  }
+});
+// People-importer CSV that links a Bridge barcode to every member missing a pass. Import in PCO
+// People (Barcode column is officially supported; existing barcodes are never overwritten).
+app.get('/admin/pco/barcodes.csv', requireAdmin, (req, res) => {
+  const rows = pcoBarcodeRows();
+  const lines = [['First Name', 'Last Name', 'Email', 'Barcode'].join(',')];
+  for (const r of rows) lines.push([csvCell(r.first), csvCell(r.last), csvCell(r.email), csvCell(r.barcode)].join(','));
+  audit(req.userEmail, 'admin', 'pco:barcodes-csv', String(rows.length));
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="pco-barcodes.csv"');
+  res.send('﻿' + lines.join('\r\n'));
+});
+
 app.post('/admin/people/delete', requireAdmin, (req, res) => {
   const { id } = req.body;
   const a = db.prepare('SELECT email, full_name, avatar FROM applicants WHERE id = ?').get(id);
@@ -4407,13 +4473,16 @@ function autoRunState() {
   const { rd, openAt, closeAt } = runStateSchedule();
   const now = schedNow();   // == Date.now() in prod; honours the TEST_NOW seam like the generic engine
   // Confirm cutoff (config.confirmCutoff, absolute 'HH:MM'): unconfirmed floor spots are
-  // RELEASED to the waitlist at this time on run day (owner rule — 4:30 PM).
-  const cutoffAt = new Date(rd + 'T' + P(1).config.confirmCutoff + ':00').getTime();
-  const cutoffLabel = fmtClockLabel(P(1).config.confirmCutoff);
+  // RELEASED to the waitlist at this time on run day (owner rule — 4:30 PM). Door mode
+  // (effectiveConfirmCutoff → null) disables the whole confirm concept: no ping, no sweep —
+  // Infinity keeps the sweep's `now >= cutoffAt` permanently false, and the ping gates on bbCutoff.
+  const bbCutoff = effectiveConfirmCutoff(P(1).config.confirmCutoff);
+  const cutoffAt = bbCutoff ? new Date(rd + 'T' + bbCutoff + ':00').getTime() : Infinity;
+  const cutoffLabel = bbCutoff ? fmtClockLabel(bbCutoff) : '';
   // RUN-DAY 9 AM CONFIRM PING (once) — push every unconfirmed floor player, deadline spelled out.
   // Fires any time from 9 AM up to the cutoff (a late boot still pings; past the cutoff the sweep
   // is the message).
-  if (now >= new Date(rd + 'T09:00:00').getTime() && now < cutoffAt
+  if (bbCutoff && now >= new Date(rd + 'T09:00:00').getTime() && now < cutoffAt
       && getSetting('autoping_done') !== rd && !runIsCancelled(rd)) {
     setSetting('autoping_done', rd);
     const targets = partitionRun(rd).floorReal.filter(p => !p.guest && !p.confirmed_at).map(p => p.email);
@@ -4982,12 +5051,14 @@ function autoRunStateFor(programId) {
     }
   }
   // Confirm cutoff (config.confirmCutoff, absolute 'HH:MM' on run day): unconfirmed floor spots
-  // are RELEASED to the next in line (owner rule). Absent = no sweep for this program.
-  const cutoffAt = cfg.confirmCutoff ? new Date(rd + 'T' + cfg.confirmCutoff + ':00').getTime() : null;
-  const cutoffLabel = cutoffAt ? fmtClockLabel(cfg.confirmCutoff) : '';
+  // are RELEASED to the next in line (owner rule). Absent = no sweep for this program. Door mode
+  // (effectiveConfirmCutoff → null) also kills the confirm PING — the door tap is the confirmation.
+  const genCutoff = effectiveConfirmCutoff(cfg.confirmCutoff);
+  const cutoffAt = genCutoff ? new Date(rd + 'T' + genCutoff + ':00').getTime() : null;
+  const cutoffLabel = cutoffAt ? fmtClockLabel(genCutoff) : '';
   // CONFIRM PING (once) — run-day morning (config.pingHour), deadline spelled out. Stops firing
   // once the cutoff has passed (the sweep is the message then).
-  if (now >= pingAt && now < (cutoffAt || lockAt) && getSetting(cfg.keys.autoping) !== rd) {
+  if (!doorMode() && now >= pingAt && now < (cutoffAt || lockAt) && getSetting(cfg.keys.autoping) !== rd) {
     setSetting(cfg.keys.autoping, rd);
     if (runOpenFor(programId, rd) && !runCancelledFor(programId, rd)) {
       const part = partitionFor(programId, rd);
@@ -5123,7 +5194,8 @@ function runOpen(programId, req, res) {
   // Don't re-seat auto-renewers past the confirm cutoff — a manual re-open after the 4:30 sweep
   // would silently restore the exact players the sweep just released.
   const cfg = P(programId).config;
-  if (!cfg.confirmCutoff || schedNow() < new Date(rd + 'T' + cfg.confirmCutoff + ':00').getTime()) seatRenewers(programId, rd);
+  const openCutoff = effectiveConfirmCutoff(cfg.confirmCutoff);   // door mode: cutoff gone → renewers always seat
+  if (!openCutoff || schedNow() < new Date(rd + 'T' + openCutoff + ':00').getTime()) seatRenewers(programId, rd);
   res.redirect(base);
 }
 function runClose(programId, req, res) {
@@ -5194,7 +5266,7 @@ function runCancel(programId, req, res) {
   setRunStateFor(programId, rd, 'cancelled', on);
   if (on) { setRunStateFor(programId, rd, 'is_open', 0); db.prepare('DELETE FROM checkins WHERE run_date = ? AND program_id = ?').run(rd, programId); clearRunTeams(programId, rd); clearRunParties(programId, rd); }
   // Un-cancelling past the confirm cutoff must NOT arm an instant unpinged sweep (same rule as a date move).
-  else migrateConfirmMarkers(rd, cfg.confirmCutoff, cfg.keys.autoping, cfg.keys.confirmsweep);
+  else migrateConfirmMarkers(rd, effectiveConfirmCutoff(cfg.confirmCutoff), cfg.keys.autoping, cfg.keys.confirmsweep);
   res.redirect(base);
 }
 function runPublish(programId, req, res) {
@@ -5400,7 +5472,7 @@ function runDate(programId, req, res) {
           db.prepare('DELETE FROM run_state WHERE run_date = ? AND program_id = ?').run(oldRd, programId);
         }
         for (const k of markerKeys) if (getSetting(k) === oldRd) setSetting(k, newRd);
-        migrateConfirmMarkers(newRd, cfg.confirmCutoff, cfg.keys.autoping, cfg.keys.confirmsweep);
+        migrateConfirmMarkers(newRd, effectiveConfirmCutoff(cfg.confirmCutoff), cfg.keys.autoping, cfg.keys.confirmsweep);
       }
       db.exec('COMMIT');
     } catch (e) { db.exec('ROLLBACK'); console.error(`[${cfg.logTag}-date] clear FAILED: ${e.message}`); throw e; }
@@ -5423,7 +5495,7 @@ function runDate(programId, req, res) {
         db.prepare('DELETE FROM run_state WHERE run_date = ? AND program_id = ?').run(oldRd, programId);
       }
       for (const k of markerKeys) if (getSetting(k) === oldRd) setSetting(k, d);
-      migrateConfirmMarkers(d, cfg.confirmCutoff, cfg.keys.autoping, cfg.keys.confirmsweep);
+      migrateConfirmMarkers(d, effectiveConfirmCutoff(cfg.confirmCutoff), cfg.keys.autoping, cfg.keys.confirmsweep);
       setSetting(cfg.keys.runDate, d);
       // The consumed standing day is the base of the cycle being MOVED — never the day nearest the
       // destination. Keying off `d` breaks when the run moves to a day AFTER its standing day (marks
@@ -5484,7 +5556,7 @@ function runGetPage(programId, req, res) {
     cap: cfg.cap, waitlistCap: cfg.waitlist, going: floor.length + offered.length, waiting: wait.length,
     canOperate: g.canOperate, isAdmin: g.admin, myState, myWaitPos, floorPlayers: floor, offeredPlayers: offered, waitPlayers: wait, hidden: !programActive(programId),
     myConfirmed, iAutoRenew,
-    confirmBy: cfg.confirmCutoff ? fmtClockLabel(cfg.confirmCutoff) : '',
+    confirmBy: effectiveConfirmCutoff(cfg.confirmCutoff) ? fmtClockLabel(cfg.confirmCutoff) : '',
     bannerSrc: bannerSrcFor(programId), bannerVer: bannerVersionFor(programId),
     tipoff: startEpochFor(programId, rd), announcement: latestAnnouncementFor(programId),
     season: opener || '', seasonWeekday: opener ? runWeekday(opener) : '', seasonLabel: opener ? runLabelFor(opener) : '',

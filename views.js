@@ -2051,7 +2051,9 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
 
   // Run-day confirm/release: a floor player either confirms they're coming or frees the
   // spot via the normal Sit-out. Independent of `action` so it rides alongside it.
-  const confirmCta = (myState === 'in' && !suspended)
+  // confirmBy === '' means the confirm step is OFF for this program (no cutoff configured, or
+  // door check-in mode is on — the physical station tap is the confirmation) → render nothing.
+  const confirmCta = (myState === 'in' && !suspended && confirmBy)
     ? (myConfirmed
         ? `<div class="notice good" style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="flex:1;min-width:180px">✓ Confirmed. Can't make it? Sit out to free your spot.</span><form method="POST" action="/checkin/confirm" class="swapform" style="margin:0"><input type="hidden" name="un" value="1"><button class="btn ghost sm" type="submit" style="width:auto">Undo ✕</button></form></div>`
         : `<form method="POST" action="/checkin/confirm" class="swapform" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming</button>${confirmBy ? `<p class="tally-note" style="margin:6px 0 0">Confirm by <b>${esc(confirmBy)}</b> — unconfirmed spots go to the waitlist.</p>` : ''}</form>`)
@@ -3225,9 +3227,9 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
     ${announcement ? `<div class="notice" style="margin-top:10px;display:flex;align-items:flex-start;gap:8px;justify-content:space-between"><span>📣 <b>Announcement</b> · ${esc(announcement.body)}${announcement.author ? `<span style="color:var(--muted)"> — ${esc(announcement.author)}</span>` : ''}</span>${canOperate ? `<form method="POST" action="${runBase}/announce/retract" class="swapform" style="margin:0;flex-shrink:0"><button class="btn ghost sm" type="submit" title="Retract this announcement">Retract</button></form>` : ''}</div>` : ''}
     ${hero}${demoMode && canOperate ? `<div class="notice" style="margin-top:10px;background:#fff4e5;border-color:#e0b070">🎬 <b>Demo mode.</b> Seed a full floor + waitlist, then pull a floor player (Remove in "Who's going") to fire a real auto-offer — the top waitlister moves to <b>⏳ Claiming</b>; tap <b>✓ Claim</b> to slide them onto the floor. <b>End queue</b> = run's over (roster archives, check-in closes); <b>Start queue</b> = next week opens and the auto-renewers instantly claim their guaranteed spots. Nothing here touches live data.<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><form method="POST" action="/admin/demo/seed" class="swapform" style="margin:0"><button class="btn primary sm" type="submit">${going + waiting ? '↻ Reset' : '▶ Seed'} full run</button></form><form method="POST" action="/admin/demo/endqueue" class="swapform" style="margin:0"><button class="btn sm" type="submit">⏹ End queue</button></form><form method="POST" action="/admin/demo/startqueue" class="swapform" style="margin:0"><button class="btn sm" type="submit">▶ Start queue</button></form><form method="POST" action="/admin/demo/clear" class="swapform" style="margin:0" onsubmit="return confirm('Clear the demo run?')"><button class="btn ghost sm" type="submit">Clear</button></form></div></div>` : ''}
     ${(action || runToggle) ? `<div class="controls">${action}${runToggle}</div>` : ''}
-    ${myState === 'in' && !cancelled ? (myConfirmed
+    ${myState === 'in' && !cancelled && confirmBy ? (myConfirmed
       ? `<div class="notice good" style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="flex:1;min-width:180px">✓ <b>You're confirmed</b> — see you there!</span><form method="POST" action="${runBase}/confirm" class="swapform" style="margin:0"><input type="hidden" name="un" value="1"><button class="btn ghost sm" type="submit" style="width:auto">Undo ✕</button></form></div>`
-      : `<form method="POST" action="${runBase}/confirm" class="swapform" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming</button>${confirmBy ? `<p class="tally-note" style="margin:6px 0 0">Confirm by <b>${esc(confirmBy)}</b> — unconfirmed spots go to the waitlist.</p>` : ''}</form>`) : ''}
+      : `<form method="POST" action="${runBase}/confirm" class="swapform" style="margin-top:10px"><button class="btn primary" type="submit">✓ I'm coming</button><p class="tally-note" style="margin:6px 0 0">Confirm by <b>${esc(confirmBy)}</b> — unconfirmed spots go to the waitlist.</p></form>`) : ''}
     ${myState === 'waitlist' && !cancelled ? `<div class="notice warn" style="margin-top:10px">You're <b>#${myWaitPos} of ${waiting}</b> on the waitlist. If a spot opens you'll get a notification and move onto the floor — no need to re-check.</div>` : ''}${partyPanel}${teamsPanel}
     ${cancelled ? '' : `<div style="margin-top:12px"><a href="${runBase}/run.ics" style="font-size:13px;color:var(--muted)">📅 Add this run to your calendar</a></div>`}
     ${qrBlock}
@@ -3352,7 +3354,16 @@ function inboxRows(me, threads) {
 }
 
 // ---------- PROFILE (own editable tab) ----------
-export function profileTabPage({ a, stats, saved = false, error = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, canOperate = false, announcementLog = [], iAmHost = false, threads = [], photoMsg = '', ann = null, friendCount = 0, friendReqIn = 0, followerCount = 0, minor = false, showRoles = false }) {
+export function profileTabPage({ a, stats, saved = false, error = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, canOperate = false, announcementLog = [], iAmHost = false, threads = [], photoMsg = '', ann = null, friendCount = 0, friendReqIn = 0, followerCount = 0, minor = false, showRoles = false, passQr = '', passCode = '' }) {
+  // Door check-in pass (Phase 2b, hybrid mode): the QR the church's Check-Ins station scans.
+  // Rendered only when the server verified the code exists in PCO (passQr non-empty).
+  const passCard = passQr ? `
+    <div class="card rail" style="margin-top:12px">
+      <div class="subhead" style="margin-top:0">Door check-in pass</div>
+      <p class="tally-note" style="margin:4px 0 8px">Show this at the check-in station on run night — one scan and you're in. No typing, no forms.</p>
+      <div style="max-width:200px;margin:0 auto">${passQr}</div>
+      <p style="text-align:center;margin:6px 0 0;font-size:12px;letter-spacing:2px;color:var(--muted)">${esc(passCode)}</p>
+    </div>` : '';
   // The own-profile tab is a chromeless editor (its own .bar, no masthead), so the
   // global announcements bell lives in the .bar rather than the .mast here. Same
   // button + panel + JS as every other page (one shared affordance, one live dot).
@@ -3472,6 +3483,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
       <span style="flex:1;min-width:0"><b style="display:block;font-family:var(--head);font-size:15px;color:var(--ink)">Admin</b><small style="color:var(--muted);font-size:12.5px">Council review${showRoles ? ' · people & invites · exports' : ''}</small></span>
       <span style="color:var(--muted);font-size:20px">›</span>
     </a>` : ''}
+    ${passCard}
     ${inbox}
     ${annHistory}
     ${annSheet}
@@ -4290,14 +4302,53 @@ export function pcoAdminPage({ s = {}, msg = '' }) {
         <form method="POST" action="/admin/pco/create" style="margin-top:10px"><button class="btn sm" type="submit">Add ${rep.bridgeOnly.length} to People</button></form>` : ''}
       ${(rep.dupes || []).length ? `<p class="tally-note" style="margin:10px 0 0">⚠ Duplicate emails inside People (linked the first, review in PCO): ${rep.dupes.slice(0, 10).map(esc).join(', ')}</p>` : ''}
     </div>` : '';
+  // ---- Phase 2b cards: door mode, Check-Ins reconciliation, door passes ----
+  const doorCard = `
+    <div class="subhead">Run-night mode</div>
+    <div class="card rail">
+      <p style="margin:0">${s.doorMode
+        ? '<b>🚪 Door mode is ON.</b> The church’s Check-Ins station is the confirmation — the in-app “✓ I’m coming” step is hidden and unconfirmed spots are never swept.'
+        : '<b>📲 In-app confirm is ON.</b> Floor players confirm in the app by the cutoff or their spot is released. Turn on door mode when the PCO Check-Ins station runs the door — one tap there replaces the in-app step.'}</p>
+      <form method="POST" action="/admin/pco/doormode" style="margin-top:10px"><input type="hidden" name="on" value="${s.doorMode ? '0' : '1'}"><button class="btn ${s.doorMode ? 'ghost ' : ''}sm" type="submit">${s.doorMode ? 'Switch back to in-app confirm' : 'Turn on door mode'}</button></form>
+    </div>`;
+  const cr = s.checkinsReport;
+  const checkinsCard = s.connected ? `
+    <div class="subhead">Check-Ins at the door</div>
+    <div class="card rail">
+      <p class="tally-note" style="margin:0 0 10px">After a run, pull the station's taps back and reconcile them against the roster — no-shows flagged, walk-ins surfaced. Reading Check-Ins is open to us; writing is walled for everyone.</p>
+      <form method="POST" action="/admin/pco/event" class="editrow" style="margin:0 0 8px">
+        <label style="flex:1">Check-Ins event ID<input name="event_id" value="${esc(s.eventId)}" inputmode="numeric" placeholder="the number in the event's URL"></label>
+        <button class="btn ghost sm" type="submit">Save</button>
+      </form>
+      ${s.eventId ? `<form method="POST" action="/admin/pco/reconcile" class="editrow" style="margin:0">
+        <label style="flex:1">Run date<input name="date" type="date"></label>
+        <button class="btn sm" type="submit">Reconcile</button>
+      </form>` : ''}
+      ${cr ? `<div class="notice" style="margin:10px 0 0"><b>${esc(cr.date)}</b> — ${cr.ok} ✓ tapped &amp; signed up${cr.noShows.length ? ` · <b>${cr.noShows.length} no-show${cr.noShows.length === 1 ? '' : 's'}:</b> ${cr.noShows.slice(0, 12).map(esc).join(', ')}${cr.noShows.length > 12 ? '…' : ''}` : ' · no no-shows'}${cr.walkIns.length ? ` · <b>${cr.walkIns.length} walk-in${cr.walkIns.length === 1 ? '' : 's'}:</b> ${cr.walkIns.slice(0, 12).map(esc).join(', ')}${cr.walkIns.length > 12 ? '…' : ''}` : ' · no walk-ins'}</div>` : ''}
+    </div>` : '';
+  const pr = s.passReport;
+  const passesCard = s.connected ? `
+    <div class="subhead">Door passes (profile QR)</div>
+    <div class="card rail">
+      <p class="tally-note" style="margin:0 0 10px">Each member's profile can carry a QR the station scans — no name typing at the door. Flow: export the barcode CSV → import it in People (Barcode column) → Verify passes. QRs only appear once verified. ${s.passHolders} member${s.passHolders === 1 ? ' has' : 's have'} a working pass.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <form method="POST" action="/admin/pco/passes" style="margin:0"><input type="hidden" name="on" value="${s.passEnabled ? '0' : '1'}"><button class="btn ghost sm" type="submit">${s.passEnabled ? '✓ Profile QRs shown — hide' : 'Show profile QRs'}</button></form>
+        <a class="btn ghost sm" href="/admin/pco/barcodes.csv" style="margin:0" download>⬇︎ Barcode CSV for People import</a>
+        <form method="POST" action="/admin/pco/passes/verify" style="margin:0"><button class="btn sm" type="submit">Verify passes</button></form>
+      </div>
+      ${pr && pr.missing.length ? `<p class="tally-note" style="margin:10px 0 0">Still without a pass (${pr.missing.length}): ${pr.missing.slice(0, 15).map(esc).join(', ')}${pr.missing.length > 15 ? '…' : ''}</p>` : ''}
+    </div>` : '';
   return HEAD('Planning Center — The Bridge', '', { wall: false }) + header('<b>PLANNING CENTER</b>') + `
     <div class="rule"></div>
     ${msg ? `<div class="notice">${esc(msg)}</div>` : ''}
     <span class="eyebrow">People sync</span>
     <h1 style="margin-bottom:0">Planning Center</h1>
     ${statusCard}
+    ${doorCard}
     ${connectForm}
     ${reportCard}
+    ${checkinsCard}
+    ${passesCard}
     <div class="foot" style="margin-top:24px"><a href="/admin/people">‹ Back to People &amp; invites</a></div>
   ` + FOOT;
 }

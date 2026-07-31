@@ -603,6 +603,10 @@ db.exec(`
 {
   const cols = db.prepare('PRAGMA table_info(applicants)').all().map(c => c.name);
   if (!cols.includes('pco_id')) db.exec('ALTER TABLE applicants ADD COLUMN pco_id TEXT');
+  // pco_pass_code — the VERIFIED Check-Ins pass/barcode value for this person, written only by
+  // the "Verify passes" read-back (never assumed): the profile door-QR renders from this, so a
+  // QR only ever shows once PCO actually knows the code. NULL = no working pass yet.
+  if (!cols.includes('pco_pass_code')) db.exec('ALTER TABLE applicants ADD COLUMN pco_pass_code TEXT');
 }
 // pco_outbox — queued OUTBOUND writes (profile PATCHes and the like), drained on the 60s tick.
 // A PCO outage never blocks a Bridge action; every write is replayable; a row that exhausts its
