@@ -607,6 +607,10 @@ db.exec(`
   // the "Verify passes" read-back (never assumed): the profile door-QR renders from this, so a
   // QR only ever shows once PCO actually knows the code. NULL = no working pass yet.
   if (!cols.includes('pco_pass_code')) db.exec('ALTER TABLE applicants ADD COLUMN pco_pass_code TEXT');
+  // pco_att_sig — signature of the attendance stats last pushed to this person's PCO custom
+  // fields. Only a CHANGED signature is re-pushed, so the weekly sync costs ~4 requests per
+  // person who actually played (not per member) — comfortably inside PCO's 100-req/20s budget.
+  if (!cols.includes('pco_att_sig')) db.exec('ALTER TABLE applicants ADD COLUMN pco_att_sig TEXT');
 }
 // pco_outbox — queued OUTBOUND writes (profile PATCHes and the like), drained on the 60s tick.
 // A PCO outage never blocks a Bridge action; every write is replayable; a row that exhausts its

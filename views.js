@@ -4311,6 +4311,16 @@ export function pcoAdminPage({ s = {}, msg = '' }) {
         : '<b>📲 In-app confirm is ON.</b> Floor players confirm in the app by the cutoff or their spot is released. Turn on door mode when the PCO Check-Ins station runs the door — one tap there replaces the in-app step.'}</p>
       <form method="POST" action="/admin/pco/doormode" style="margin-top:10px"><input type="hidden" name="on" value="${s.doorMode ? '0' : '1'}"><button class="btn ${s.doorMode ? 'ghost ' : ''}sm" type="submit">${s.doorMode ? 'Switch back to in-app confirm' : 'Turn on door mode'}</button></form>
     </div>`;
+  const attCard = s.connected ? `
+    <div class="subhead">Attendance on People profiles</div>
+    <div class="card rail">
+      <p class="tally-note" style="margin:0 0 10px">After every run, each player's Planning Center profile is updated with ${(s.fieldNames || []).map(n => `<b>${esc(n)}</b>`).join(' · ')} — real custom fields, so your staff can filter Lists, trigger Workflows and pull reports inside Planning Center. The fields are created automatically the first time. Per-run history stays in this app (Planning Center accepts attendance from no outside system).</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <form method="POST" action="/admin/pco/attendance" style="margin:0"><input type="hidden" name="on" value="${s.attendanceFields ? '0' : '1'}"><button class="btn ${s.attendanceFields ? 'ghost ' : ''}sm" type="submit">${s.attendanceFields ? '✓ On — turn off' : 'Turn on attendance fields'}</button></form>
+        ${s.attendanceFields ? `<form method="POST" action="/admin/pco/attendance/push" style="margin:0"><button class="btn ghost sm" type="submit">Push attendance now${s.attendancePending ? ` (${s.attendancePending})` : ''}</button></form>` : ''}
+      </div>
+      ${s.attendanceFields && s.attendanceLast ? `<p class="tally-note" style="margin:10px 0 0">Last written ${esc(String(s.attendanceLast).slice(0, 16).replace('T', ' '))}${s.attendancePending ? ` · ${s.attendancePending} profile${s.attendancePending === 1 ? '' : 's'} queued (they update automatically)` : ' · everyone up to date'}.</p>` : ''}
+    </div>` : '';
   const cr = s.checkinsReport;
   const checkinsCard = s.connected ? `
     <div class="subhead">Check-Ins at the door</div>
@@ -4347,6 +4357,7 @@ export function pcoAdminPage({ s = {}, msg = '' }) {
     ${doorCard}
     ${connectForm}
     ${reportCard}
+    ${attCard}
     ${checkinsCard}
     ${passesCard}
     <div class="foot" style="margin-top:24px"><a href="/admin/people">‹ Back to People &amp; invites</a></div>

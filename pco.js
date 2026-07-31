@@ -276,6 +276,7 @@ export async function pcoTick() {
   try {
     await drainOutbox();
     await reconcileScan();
+    await pcoPushAttendance(5);   // slow drain: any attendance backlog self-heals across ticks
   } catch (e) {
     if (!(e instanceof PcoAuthError) && !(e instanceof PcoRateError))
       console.error('[pco] tick failed:', e.message);
@@ -357,6 +358,136 @@ export async function pcoCreateBridgeOnly() {
   return { created, linked };
 }
 
+// ---------- Phase 2: attendance → People custom fields ----------
+// The church's own reporting surface: after every run, each player's PCO People profile carries
+// their YA-Sports numbers as REAL custom fields, so staff can filter Lists ("volleyball players
+// with 5+ games"), fire Workflows, and pull reports inside Planning Center. Custom fields hold a
+// CURRENT VALUE (a scoreboard, not a per-date ledger) — the per-date history stays in Bridge,
+// because PCO accepts attendance from nobody (see the Check-Ins wall). Opt-in per church via the
+// pco_attendance_fields toggle; a field definition is created once, then its id is cached.
+const FIELD_DEFS = [
+  { key: 'games', name: 'YA Sports — games attended', type: 'number' },
+  { key: 'last', name: 'YA Sports — last attended', type: 'date' },
+  { key: 'sports', name: 'YA Sports — sports played', type: 'string' },
+];
+const stmtAttRows = db.prepare(
+  'SELECT program_id, COUNT(*) n, MAX(run_date) last FROM attendance WHERE email = ? GROUP BY program_id');
+const stmtAttCandidates = db.prepare(
+  `SELECT email, pco_id, pco_att_sig FROM applicants
+   WHERE pco_id IS NOT NULL AND ${SYNTHETIC} ORDER BY id`);
+const stmtSetAttSig = db.prepare('UPDATE applicants SET pco_att_sig = ? WHERE email = ?');
+
+// Program id → the label the church sees in PCO. Injected from server.js's registry at boot so
+// this module never imports the program layer (and a new sport needs no edit here).
+let PROGRAM_LABELS = { 1: 'Basketball', 2: 'Pickleball', 3: 'Volleyball' };
+export function pcoSetProgramLabels(map) { if (map && Object.keys(map).length) PROGRAM_LABELS = map; }
+
+// One person's scoreboard, plus the signature that decides whether a push is needed at all.
+function attendanceFieldsFor(email) {
+  const rows = stmtAttRows.all(email).filter(r => Number(r.program_id) !== 90);   // demo program never counts
+  const games = rows.reduce((n, r) => n + r.n, 0);
+  const last = rows.reduce((m, r) => (r.last > m ? r.last : m), '');
+  const sports = rows.filter(r => r.n > 0).map(r => PROGRAM_LABELS[r.program_id] || `Program ${r.program_id}`).sort().join(', ');
+  return { values: { games: String(games), last, sports }, sig: `${games}|${last}|${sports}` };
+}
+
+// Ensure the three field definitions exist in the church's People account; cache their ids.
+// PCO allows creating definitions via the API, so setup is automatic — but if a data_type is
+// rejected we retry as plain text rather than leaving the church with a half-built sync.
+async function ensureFieldDefs() {
+  const cached = JSON.parse(getSetting('pco_field_ids') || '{}');
+  if (FIELD_DEFS.every(f => cached[f.key])) return cached;
+  const existing = new Map();
+  await (async () => {
+    let path = '/people/v2/field_definitions?per_page=100';
+    while (path) {
+      const json = await pcoFetch(path);
+      for (const d of json.data || []) {
+        if (!d.attributes?.deleted_at) existing.set(String(d.attributes?.name || '').trim(), d.id);
+      }
+      const next = json.links?.next;
+      path = next ? next.replace(/^https?:\/\/[^/]+/, '') : null;
+    }
+  })();
+  const ids = { ...cached };
+  for (const f of FIELD_DEFS) {
+    if (ids[f.key]) continue;
+    const hit = existing.get(f.name);
+    if (hit) { ids[f.key] = hit; continue; }
+    const create = (type) => pcoFetch('/people/v2/field_definitions', {
+      method: 'POST',
+      body: { data: { type: 'FieldDefinition', attributes: { name: f.name, data_type: type } } },
+    });
+    let made;
+    try { made = await create(f.type); }
+    catch (e) {
+      if (e instanceof PcoAuthError || e instanceof PcoRateError) throw e;
+      made = await create('string');   // graceful fallback: a text field still filters in Lists
+      audit(`pco:field-def-fallback ${f.name} (${f.type} rejected → text)`, '');
+    }
+    ids[f.key] = made.data.id;
+    audit('pco:field-def-created', f.name);
+  }
+  setSetting('pco_field_ids', JSON.stringify(ids));
+  return ids;
+}
+
+// Write one person's three values, PATCHing an existing datum or POSTing a new one.
+async function pushOnePerson(pcoId, ids, values) {
+  const cur = await pcoFetch(`/people/v2/people/${pcoId}/field_data?per_page=100`);
+  const byDef = new Map();
+  for (const d of cur.data || []) {
+    const defId = d.relationships?.field_definition?.data?.id || d.attributes?.field_definition_id;
+    if (defId) byDef.set(String(defId), d.id);
+  }
+  for (const f of FIELD_DEFS) {
+    const defId = ids[f.key], value = values[f.key];
+    if (!defId || value === '' || value == null) continue;   // never write a blank over a real value
+    const have = byDef.get(String(defId));
+    if (have) await pcoFetch(`/people/v2/people/${pcoId}/field_data/${have}`, {
+      method: 'PATCH', body: { data: { type: 'FieldDatum', id: String(have), attributes: { value } } },
+    });
+    else await pcoFetch(`/people/v2/people/${pcoId}/field_data`, {
+      method: 'POST', body: { data: { type: 'FieldDatum', attributes: { field_definition_id: defId, value } } },
+    });
+  }
+}
+
+// Push up to `limit` people whose scoreboard CHANGED since their last push. Returns how many were
+// written. Called from the weekly rollover (all of that night's players), the 60s tick (a slow
+// drain so any backlog self-heals), and the admin "Push attendance now" button.
+export async function pcoPushAttendance(limit = 25) {
+  if (!pcoConnected() || getSetting('pco_attendance_fields') !== '1') return 0;
+  const ids = await ensureFieldDefs();
+  let pushed = 0;
+  for (const m of stmtAttCandidates.all()) {
+    if (pushed >= limit) break;
+    const { values, sig } = attendanceFieldsFor(m.email);
+    if (sig === (m.pco_att_sig || '') || sig === '0||') continue;   // unchanged, or never played
+    await pushOnePerson(m.pco_id, ids, values);
+    stmtSetAttSig.run(sig, m.email);
+    pushed++;
+  }
+  if (pushed) {
+    setSetting('pco_att_last', new Date().toISOString());
+    audit('pco:attendance-fields-pushed', String(pushed));
+  }
+  return pushed;
+}
+export function pcoSetAttendanceFields(on) {
+  setSetting('pco_attendance_fields', on ? '1' : '0');
+  if (!on) delSetting('pco_field_ids');   // re-discover on re-enable (definitions may have changed)
+}
+// How many linked members are waiting for a push (drives the admin console's count).
+export function pcoAttendancePending() {
+  let n = 0;
+  for (const m of stmtAttCandidates.all()) {
+    const { sig } = attendanceFieldsFor(m.email);
+    if (sig !== (m.pco_att_sig || '') && sig !== '0||') n++;
+  }
+  return n;
+}
+
 // ---------- Phase 2b: Check-Ins at the door (read-side) ----------
 // PCO Check-Ins is write-walled for everyone, but READING check-ins back is open — that's the
 // whole hybrid: the church's station takes the tap (their official record), Bridge reads the taps
@@ -435,6 +566,11 @@ export function pcoStatus() {
     report: JSON.parse(getSetting('pco_report') || 'null'),
     outboxPending: stmtOutboxPending.get().n,
     linked: db.prepare('SELECT COUNT(*) n FROM applicants WHERE pco_id IS NOT NULL').get().n,
+    // Phase 2 (attendance custom fields)
+    attendanceFields: getSetting('pco_attendance_fields') === '1',
+    attendanceLast: getSetting('pco_att_last') || '',
+    attendancePending: getSetting('pco_attendance_fields') === '1' ? pcoAttendancePending() : 0,
+    fieldNames: FIELD_DEFS.map(f => f.name),
     // Phase 2b surfaces
     doorMode: getSetting('pco_door_mode') === '1',
     passEnabled: getSetting('pco_pass_enabled') === '1',

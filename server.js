@@ -17,6 +17,7 @@ import {
   pcoTick, pcoDaily, pcoStatus, pcoConnect, pcoDisconnect, pcoSetAutocreate,
   pcoRunInitialLink, pcoCreateBridgeOnly, pcoQueuePatch, pcoHandleWebhook,
   pcoReconcile, pcoVerifyPasses, pcoBarcodeRows,
+  pcoPushAttendance, pcoSetAttendanceFields, pcoSetProgramLabels,
 } from './pco.js';
 import webpush from 'web-push';
 import {
@@ -1931,6 +1932,10 @@ function ensureWeek(runDate = nextRunDate()) {
   // today archives only runs that have actually ended.
   const t = ymdLocal();
   stmtArchiveAttendance.run(t, CAP);  // archive the final floor of every run that has ended
+  // Attendance just changed for everyone who played → refresh their PCO People custom fields.
+  // Fire-and-forget: a PCO outage must never stall the weekly rollover, and the 60s tick's slow
+  // drain picks up anyone missed (signature-diffed, so it re-pushes only what actually changed).
+  pcoPushAttendance(50).catch(e => console.error(`[pco] attendance push after rollover FAILED: ${e.message}`));
   stmtPurgeCheckins.run(t);           // then purge those now-past runs' checkins…
   stmtPurgeOptouts.run(t);            // …opt-outs…
   stmtPurgeRunState.run(t);           // …and stale open/closed state
@@ -4314,6 +4319,25 @@ app.post('/admin/pco/auto', requireAdmin, (req, res) => {
   audit(req.userEmail, 'admin', 'pco:autocreate:' + (req.body.on === '1' ? 'on' : 'off'), '');
   res.redirect('/admin/pco');
 });
+// Phase 2 — attendance custom fields on People profiles (opt-in, church-facing reporting).
+app.post('/admin/pco/attendance', requireAdmin, (req, res) => {
+  const on = req.body.on === '1';
+  pcoSetAttendanceFields(on);
+  audit(req.userEmail, 'admin', 'pco:attendance-fields:' + (on ? 'on' : 'off'), '');
+  res.redirect('/admin/pco?msg=' + encodeURIComponent(on
+    ? 'Attendance fields ON — each player’s People profile now carries their YA Sports numbers.'
+    : 'Attendance fields OFF — existing values stay in People, nothing further is written.'));
+});
+app.post('/admin/pco/attendance/push', requireAdmin, async (req, res) => {
+  try {
+    const n = await pcoPushAttendance(200);
+    res.redirect('/admin/pco?msg=' + encodeURIComponent(n
+      ? `Updated ${n} profile${n === 1 ? '' : 's'} in People.`
+      : 'Everyone in People is already up to date.'));
+  } catch (e) {
+    res.redirect('/admin/pco?msg=' + encodeURIComponent('Push failed: ' + e.message.slice(0, 120)));
+  }
+});
 app.post('/admin/pco/poll', requireAdmin, async (req, res) => {
   try { await pcoDaily(); res.redirect('/admin/pco?msg=' + encodeURIComponent('Synced with People.')); }
   catch (e) { res.redirect('/admin/pco?msg=' + encodeURIComponent('Sync failed: ' + e.message.slice(0, 120))); }
@@ -6332,6 +6356,14 @@ function buildPrograms() {
   const meta = {};
   for (const [id, p] of PROGRAMS) meta[id] = { chat: p.paths.chat, season: p.paths.season, seasonLabel: p.seasonLabel };
   setProgramMeta(meta);
+  // Same idea for the PCO sync: it labels the "sports played" custom field from the registry, so
+  // adding a program needs no edit in pco.js. Built from the program KEY (the canonical sport
+  // name — 'basketball', 'volleyball'), not displayName: display names carry branding prefixes
+  // ("ADV Basketball") that don't belong in a church-facing sport list. Demo is filtered out on
+  // the sync side by program id.
+  const labels = {};
+  for (const [id, p] of PROGRAMS) labels[id] = p.key.charAt(0).toUpperCase() + p.key.slice(1);
+  pcoSetProgramLabels(labels);
 }
 buildPrograms();
 // Config guard (fail loud at boot, not silently at 2 PM): BASKETBALL's inline confirm sweep runs
