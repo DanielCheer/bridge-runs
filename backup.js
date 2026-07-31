@@ -76,6 +76,7 @@ export function backupNow() {
     // resets it to zero bytes. Safe here — single connection, no other writers.
     db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
     prune();
+    offsiteCopy(dest);
     console.log(`[backup] wrote ${path.basename(dest)} (encrypted)`);
     return dest;
   } catch (e) {
@@ -96,6 +97,30 @@ function prune() {
   const excess = snaps.length - KEEP;
   for (let i = 0; i < excess; i++) {
     try { fs.unlinkSync(path.join(BACKUP_DIR, snaps[i])); } catch { /* ignore */ }
+  }
+}
+
+// OFF-SITE copy (S3, the continuity-plan promise): every encrypted snapshot is mirrored into
+// BACKUP_OFFSITE_DIR — point it at a folder a sync client owns (Google Drive for Desktop, OneDrive,
+// a mounted bucket) and the church-controlled off-site copy is automatic. Snapshots are AES-GCM
+// encrypted, so the sync provider only ever holds ciphertext; the key must NEVER live in that
+// folder. Unset = feature off (logged once, not every snapshot). Same retention as local.
+const OFFSITE_DIR = process.env.BACKUP_OFFSITE_DIR || '';
+let offsiteWarned = false;
+function offsiteCopy(encPath) {
+  if (!OFFSITE_DIR) {
+    if (!offsiteWarned) { offsiteWarned = true; console.log('[backup] BACKUP_OFFSITE_DIR unset — off-site mirroring is OFF'); }
+    return;
+  }
+  try {
+    fs.mkdirSync(OFFSITE_DIR, { recursive: true });
+    fs.copyFileSync(encPath, path.join(OFFSITE_DIR, path.basename(encPath)));
+    const snaps = fs.readdirSync(OFFSITE_DIR).filter(f => /^bridge-.*\.db\.enc$/.test(f)).sort();
+    for (let i = 0; i < snaps.length - KEEP; i++) {
+      try { fs.unlinkSync(path.join(OFFSITE_DIR, snaps[i])); } catch { /* ignore */ }
+    }
+  } catch (e) {
+    console.error(`[backup] OFF-SITE copy FAILED: ${e.message}`);   // loud, never fatal — the local snapshot exists
   }
 }
 

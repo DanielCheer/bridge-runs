@@ -65,7 +65,7 @@ function audit(actor, actorRole, action, target) {
   // admin logins, PCO connects) would otherwise age out while the state it explains lives on.
   if (KEY_EVENT_RE.test(action)) stmtAuditKey.run(actor, actorRole, action, target || '');
 }
-const KEY_EVENT_RE = /^(waiver:|people:waiver|admin:role|people:approve|people:delete|people:suspend|invite:claimed|session:|pco:connected|pco:oauth-connected|pco:disconnected|program:(create|delete))/;
+const KEY_EVENT_RE = /^(waiver:|people:waiver|admin:role|people:approve|people:delete|people:suspend|invite:claimed|session:|pco:connected|pco:oauth-connected|pco:disconnected|program:(create|delete|host-granted|host-revoked|request-approved|request-declined|member-removed))/;
 const stmtAuditKey = db.prepare('INSERT INTO audit_key_events (actor,actor_role,action,target) VALUES (?,?,?,?)');
 
 // Sign-in wrapper for the REAL login sites (magic link, code, invite claim, offer-claim sign-in) —
@@ -4477,13 +4477,12 @@ function parseProgramForm(body, { existingSlug = null } = {}) {
   if (teamsCount > 0 && (teamsSize < 1 || teamsSize > 30)) return { error: 'Team size must be between 1 and 30.' };
   const partySize = int(body.partySize, 0);
   if (partySize < 0 || partySize > 12) return { error: 'Group sign-up size must be between 0 and 12.' };
-  // Approval MODE is deliberately not offered by the wizard: nothing enforces it yet (every opt-in
-  // run admits any approved member), and shipping a picker whose options do nothing would be a lie
-  // in the UI. New in-app programs are stored 'open' — the behaviour that actually exists. Invite-
-  // only/council/host per program needs enforcement + a per-program member-add screen first.
+  // joinMode is ENFORCED now (F3: runJoinRun + memberOf + the request flow), so the picker is
+  // honest again. The legacy `approval` column stays 'open' — joinMode in the spec is the authority.
+  const joinMode = ['open', 'invite', 'host'].includes(body.joinMode) ? body.joinMode : 'open';
   const approval = 'open';
   const spec = {
-    displayName: name, emoji,
+    displayName: name, emoji, joinMode,
     cap, waitlist, prereg,
     dow, startHour, endHour,
     lockTime, confirmCutoff,
@@ -4547,6 +4546,41 @@ app.post('/admin/programs/edit', requireAdmin, (req, res) => {
   mountPendingPrograms();
   audit(req.userEmail, 'admin', 'program:edit', `${id}:${parsed.slug}`);
   res.redirect('/admin/programs?msg=Saved');
+});
+// F2/F3: per-program member management (admin). Hosts approve REQUESTS on the run page; roles and
+// invite-mode additions are an admin action here, so host-granting stays with the org owner.
+app.post('/admin/programs/member', requireAdmin, (req, res) => {
+  const id = Number(req.body.id);
+  const email = String(req.body.email || '').trim().toLowerCase();
+  const act = String(req.body.act || '');
+  if (!PROGRAMS.has(id) || id === 90) return res.redirect('/admin/programs?msg=' + encodeURIComponent('No such program.'));
+  if (!isValidEmail(email)) return res.redirect('/admin/programs?msg=' + encodeURIComponent('That email doesn’t look valid.'));
+  const a = applicantByEmail(email);
+  const back = (m) => res.redirect('/admin/programs?msg=' + encodeURIComponent(m));
+  if (act === 'add' || act === 'host') {
+    if (!a || a.status !== 'approved') return back('They need an approved app account first (People & invites).');
+    joinProgramMembership(id, email);   // approved membership (no-op if already a member)
+    db.prepare("UPDATE program_membership SET status = 'approved', role = ? WHERE program_id = ? AND email = ?")
+      .run(act === 'host' ? 'host' : 'approved', id, email);
+    audit(req.userEmail, 'admin', act === 'host' ? 'program:host-granted' : 'program:member-added', `${id}:${email}`);
+    if (act === 'host') setImmediate(() => sendPush([email], {
+      title: `You're a host — ${P(id).displayName}`,
+      body: 'You can open/close check-in, post announcements, add guests and approve join requests for this run.',
+      url: P(id).paths.run, tag: `host${id}`,
+    }));
+    return back(act === 'host' ? `${a.full_name} is now a host of ${P(id).displayName}.` : `${a.full_name} added to ${P(id).displayName}.`);
+  }
+  if (act === 'unhost') {
+    db.prepare("UPDATE program_membership SET role = 'approved' WHERE program_id = ? AND email = ? AND role = 'host'").run(id, email);
+    audit(req.userEmail, 'admin', 'program:host-revoked', `${id}:${email}`);
+    return back('Host role removed (they stay a member).');
+  }
+  if (act === 'remove') {
+    db.prepare('DELETE FROM program_membership WHERE program_id = ? AND email = ?').run(id, email);
+    audit(req.userEmail, 'admin', 'program:member-removed', `${id}:${email}`);
+    return back('Removed from the program (their app account is untouched).');
+  }
+  back('Unknown action.');
 });
 app.post('/admin/programs/active', requireAdmin, (req, res) => {
   const id = Number(req.body.id), on = req.body.on === '1';
@@ -5293,11 +5327,24 @@ function latestPkAnnouncement() { return latestAnnouncementFor(2); }
 // members list, and the push/email audiences all read from it. One set of helpers keyed by program
 // id; the pk* names below stay thin wrappers so call sites are untouched (a new program reuses them
 // by passing its id).
-function joinProgramMembership(programId, email) {
+// status: 'approved' (open join) or 'pending' (host-approve mode — a REQUEST, not a membership;
+// memberOf filters on approved, so pending grants nothing until a host says yes).
+function joinProgramMembership(programId, email, status = 'approved') {
   if (!email || /@guest\.local$/.test(email)) return;
-  db.prepare("INSERT OR IGNORE INTO program_membership (program_id, email, status, role) VALUES (?, ?, 'approved', 'approved')").run(programId, email);
+  db.prepare('INSERT OR IGNORE INTO program_membership (program_id, email, status, role) VALUES (?, ?, ?, ?)')
+    .run(programId, email, status, 'approved');
 }
-const stmtIsMember = db.prepare('SELECT 1 FROM program_membership WHERE program_id = ? AND email = ?'); // hoisted — runs per neutral-page render (chatProgramFor) + every chat gate (P3-6)
+// F2: program HOSTS — members whose program_membership.role='host' operate THEIR program (open/
+// close/announce/guests/requests) without being global admins. One row per program; grant/revoke
+// on /admin/programs.
+const stmtIsProgHost = db.prepare("SELECT 1 FROM program_membership WHERE program_id = ? AND email = ? AND role = 'host' AND status = 'approved'");
+function isProgramHost(programId, email) { return !!(email && stmtIsProgHost.get(programId, String(email).toLowerCase())); }
+const stmtProgHosts = db.prepare("SELECT email FROM program_membership WHERE program_id = ? AND role = 'host' AND status = 'approved'");
+function programHostEmails(programId) {
+  const hosts = stmtProgHosts.all(programId).map(r => r.email);
+  return [...new Set([...hosts, ...ADMINS])];   // admins always hear requests too
+}
+const stmtIsMember = db.prepare("SELECT 1 FROM program_membership WHERE program_id = ? AND email = ? AND status = 'approved'"); // hoisted — runs per neutral-page render (chatProgramFor) + every chat gate (P3-6)
 function memberOf(programId, email) {
   if (!email) return false;
   if (isAdmin(email)) return true; // admins operate the run — always members
@@ -5582,7 +5629,9 @@ function programGate(programId, req, res) {
   const admin = isAdmin(req.userEmail);
   if (!admin && (!a || a.status !== 'approved')) { res.redirect('/status'); return null; } // row-less admins allowed (matches requirePlayer)
   if (!programActive(programId) && !admin) { res.status(404).send('Not found'); return null; } // hidden from everyone but admins
-  return { a, admin, canOperate: admin };
+  // canOperate: global admins, or THIS program's host (F2). Host power is per-program by
+  // construction — the row carries the program_id, so a youth host can't touch volleyball.
+  return { a, admin, canOperate: admin || isProgramHost(programId, req.userEmail) };
 }
 function pkGate(req, res) { return programGate(2, req, res); }
 // Hoisted rollover statements — program-generic (bind program_id at call). ensureWeekFor runs on
@@ -5687,11 +5736,54 @@ function runAutorenew(programId, req, res) {
   db.prepare('UPDATE program_membership SET auto_renew = ? WHERE program_id = ? AND email = ?').run(on, programId, req.userEmail);
   res.redirect(base);
 }
+// F3: joinMode is ENFORCED here — 'open' (anyone approved joins, the historic behaviour and the
+// default), 'invite' (organizers add members; self-join refused), 'host' (self-join creates a
+// REQUEST; hosts get a push and approve on the run page). Built-in programs carry no joinMode →
+// 'open', exactly their live behaviour.
 function runJoinRun(programId, req, res) {
   const g = programGate(programId, req, res); if (!g) return;
+  const base = P(programId).paths.run;
+  const mode = P(programId).config.joinMode || 'open';
+  if (memberOf(programId, req.userEmail)) { setRunCookie(req, res, programId); return res.redirect(base); }
+  if (mode === 'invite') return res.redirect(base);   // the join page already explains invite-only; no state change
+  if (mode === 'host') {
+    const existing = db.prepare('SELECT status FROM program_membership WHERE program_id = ? AND email = ?').get(programId, req.userEmail);
+    if (!existing) {
+      joinProgramMembership(programId, req.userEmail, 'pending');
+      audit(req.userEmail, 'player', 'program:join-requested', `${programId}`);
+      const who = (g.a && g.a.full_name) || req.userEmail;
+      setImmediate(() => sendPush(programHostEmails(programId), {
+        title: `${P(programId).displayName}: join request`,
+        body: `${who} asked to join. Approve or decline on the run page.`,
+        url: base, tag: `joinreq${programId}`,
+      }));
+    }
+    return res.redirect(base);   // page shows "request sent" for pending members
+  }
   joinProgramMembership(programId, req.userEmail);
   setRunCookie(req, res, programId);
-  res.redirect(P(programId).paths.run);
+  res.redirect(base);
+}
+// Hosts/admins act on pending requests from the run page.
+function runRequests(programId, req, res) {
+  const base = P(programId).paths.run;
+  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const email = String(req.body.email || '').toLowerCase();
+  const row = db.prepare("SELECT 1 FROM program_membership WHERE program_id = ? AND email = ? AND status = 'pending'").get(programId, email);
+  if (!row) return res.redirect(base);
+  if (req.body.act === 'approve') {
+    db.prepare("UPDATE program_membership SET status = 'approved' WHERE program_id = ? AND email = ?").run(programId, email);
+    audit(req.userEmail, g.admin ? 'admin' : 'host', 'program:request-approved', `${programId}:${email}`);
+    setImmediate(() => sendPush([email], {
+      title: `You're in — ${P(programId).displayName}`,
+      body: 'Your request to join was approved. Check-in and chat are open to you now.',
+      url: base, tag: `joinok${programId}`,
+    }));
+  } else {
+    db.prepare('DELETE FROM program_membership WHERE program_id = ? AND email = ?').run(programId, email);
+    audit(req.userEmail, g.admin ? 'admin' : 'host', 'program:request-declined', `${programId}:${email}`);
+  }
+  res.redirect(base);
 }
 function runBump(programId, req, res) {
   const base = P(programId).paths.run;
@@ -5997,9 +6089,13 @@ function runGetPage(programId, req, res) {
   if (!memberOf(programId, req.userEmail)) {   // not a member yet → opt-in join prompt (Chat tab reflects joined runs, or locks)
     const me = req.userEmail, mid = applicantIdOf(me);
     const cp = chatProgramFor(req), cc = chatCountsFor(cp || 1, me, mid);
+    // joinMode drives the prompt: open → Join button; invite → explanation, no button;
+    // host → Request button, or "request sent" once a pending row exists.
+    const requested = !!db.prepare("SELECT 1 FROM program_membership WHERE program_id = ? AND email = ? AND status = 'pending'").get(programId, me);
     return res.send(runJoinPage({ email: me, runDate: programRunDate(programId), runLabel: runLabelFor(programRunDate(programId)),
       dmUnread: unreadCount(me), groupUnread: cc.group, groupMention: cc.gm, chatProgram: cp, ann: null,
-      runBase: base, theme: cfg.theme, sport: prog.displayName, sportEmoji: prog.emoji }));
+      runBase: base, theme: cfg.theme, sport: prog.displayName, sportEmoji: prog.emoji,
+      joinMode: cfg.joinMode || 'open', requested }));
   }
   setRunCookie(req, res, programId);
   if (req.headers['x-prewarm'] !== '1') joinProgramMembership(programId, req.userEmail); // operators/host appear in the member list too
@@ -6020,6 +6116,11 @@ function runGetPage(programId, req, res) {
     cap: cfg.cap, waitlistCap: cfg.waitlist, going: floor.length + offered.length, waiting: wait.length,
     canOperate: g.canOperate, isAdmin: g.admin, myState, myWaitPos, floorPlayers: floor, offeredPlayers: offered, waitPlayers: wait, hidden: !programActive(programId),
     myConfirmed, iAutoRenew,
+    // F3: operators see + act on pending join requests right on the run page.
+    pendingRequests: g.canOperate ? db.prepare(
+      `SELECT pm.email, COALESCE(a.full_name, pm.email) AS name FROM program_membership pm
+       LEFT JOIN applicants a ON a.email = pm.email
+       WHERE pm.program_id = ? AND pm.status = 'pending' ORDER BY pm.joined_at`).all(programId) : [],
     confirmBy: effectiveConfirmCutoff(cfg.confirmCutoff) ? fmtClockLabel(cfg.confirmCutoff) : '',
     bannerSrc: bannerSrcFor(programId), bannerVer: bannerVersionFor(programId),
     tipoff: startEpochFor(programId, rd), announcement: latestAnnouncementFor(programId),
@@ -6745,6 +6846,7 @@ function mountRunProgram(app, program) {
   app.get(b, requireLogin, (req, res) => runGetPage(id, req, res));
   app.get(`${b}/run.ics`, requireLogin, (req, res) => runIcs(id, req, res));
   app.post(`${b}/join-run`, requireLogin, (req, res) => runJoinRun(id, req, res));
+  app.post(`${b}/requests`, requireLogin, (req, res) => runRequests(id, req, res));   // host/admin approve-decline (F3)
   app.post(`${b}/join`, requireLogin, (req, res) => runJoin(id, req, res));
   app.post(`${b}/leave`, requireLogin, (req, res) => runLeave(id, req, res));
   app.post(`${b}/confirm`, requireLogin, (req, res) => runConfirm(id, req, res));
@@ -6846,6 +6948,7 @@ function defFromRow(row) {
       copy: derivedCopy(name, emoji),
       theme: PROGRAM_THEMES.includes(spec.theme) ? spec.theme : 'default',
       access: 'opt-in', approval: row.approval,
+      joinMode: ['open', 'invite', 'host'].includes(spec.joinMode) ? spec.joinMode : 'open',
       bannerPath: bannerFile(`prog-${slug}-banner.jpg`), bannerPublic: `/prog-${slug}-banner.jpg`,
       tiers: ['team', 'host'], offerWindow: !!spec.offerWindow,
       autoRenew: spec.autoRenew ? { from: 'members' } : null,

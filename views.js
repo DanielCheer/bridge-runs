@@ -3122,18 +3122,32 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
 // never assumes basketball, since this viewer isn't a member of THIS run.
 // Program-generic join prompt. Defaults reproduce PICKLEBALL exactly; pkJoinPage is a wrapper.
 export function runJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null,
-  runBase = '/pickleball', theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒' }) {
+  runBase = '/pickleball', theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒', joinMode = 'open', requested = false }) {
   // Admin-supplied program names: escape every interpolation (case-convert first — see runChatPage).
   const sportE = esc(sport), emojiE = esc(sportEmoji), low = esc(sport.toLowerCase()), up = esc(sport.toUpperCase());
+  const nextRun = runLabel ? ` Next run: <b>${esc(wdayFull(runDate))}, ${esc(runLabel)}</b>.` : '';
+  // Three prompts for three enforced join modes (F3): open = the historic Join button;
+  // invite = honest explanation, no button; host = Request → "request sent" once pending.
+  const joinBlock = joinMode === 'invite'
+    ? `<h3 style="margin:4px 0 8px">${sportE} is invite only</h3>
+       <p class="lead" style="margin:0 0 14px">The organizers add members themselves. Ask them to add you and this run will unlock for you automatically.${nextRun}</p>`
+    : joinMode === 'host'
+      ? (requested
+        ? `<h3 style="margin:4px 0 8px">Request sent ✓</h3>
+           <p class="lead" style="margin:0 0 14px">The organizers have your request — you'll get a notification the moment they approve it.${nextRun}</p>`
+        : `<h3 style="margin:4px 0 8px">Want in on ${low}?</h3>
+           <p class="lead" style="margin:0 0 14px">This run's organizers approve who joins. Send a request and you'll be notified when you're in.${nextRun}</p>
+           <form method="POST" action="${runBase}/join-run" class="swapform"><button class="btn primary" type="submit">${emojiE} Request to join</button></form>`)
+      : `<h3 style="margin:4px 0 8px">Want in on ${low}?</h3>
+       <p class="lead" style="margin:0 0 14px">Join to check in each week and chat with the ${low} crew — it's its own run, with its own check-in and chat.${nextRun}</p>
+      <form method="POST" action="${runBase}/join-run" class="swapform"><button class="btn primary" type="submit">${emojiE} Join ${low}</button></form>`;
   return HEAD(`Join ${sport} — The Bridge`, `has-tabs ${theme}`) + header(`<b>${up}</b>${esc(email)}`, '', ann, '') + `
     ${backToRuns}
     <div class="rule"></div>
     <div class="phead"><h1>${sportE} ${emojiE}</h1></div>
     <div class="card rail" style="margin-top:12px">
       <span class="eyebrow">Join the run</span>
-      <h3 style="margin:4px 0 8px">Want in on ${low}?</h3>
-      <p class="lead" style="margin:0 0 14px">Join to check in each week and chat with the ${low} crew — it's its own run, with its own check-in and chat.${runLabel ? ` Next run: <b>${esc(wdayFull(runDate))}, ${esc(runLabel)}</b>.` : ''}</p>
-      <form method="POST" action="${runBase}/join-run" class="swapform"><button class="btn primary" type="submit">${emojiE} Join ${low}</button></form>
+      ${joinBlock}
     </div>
   ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: chatProgram }));
 }
@@ -3169,7 +3183,7 @@ export function pastRunPage({ name = '', emoji = '', runDate = '', rows = [], dm
 // NOT rendered yet — volleyball (offerWindow:true) needs a follow-up increment for that.
 export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM', startLabel = '6 PM', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], offeredPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, myConfirmed = false, confirmBy = '', partyMsg = '', iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null,
   runBase = '/pickleball', programId = 2, theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒', dayName = 'Tuesday', pollKey = 'pickleball',
-  teamsCfg = null, teamRows = [], teamsOpen = false, penaltyState = {}, partyData = null, demoMode = false }) {
+  teamsCfg = null, teamRows = [], teamsOpen = false, penaltyState = {}, partyData = null, demoMode = false, pendingRequests = [] }) {
   // Admin-supplied program names: escape every interpolation (case-convert first — see runChatPage).
   const sportE = esc(sport), emojiE = esc(sportEmoji), low = esc(sport.toLowerCase()), up = esc(sport.toUpperCase());
   const full = going >= cap, totalFull = (going + waiting) >= (cap + waitlistCap);
@@ -3349,6 +3363,12 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
     </div>
     ${announcement ? `<div class="notice" style="margin-top:10px;display:flex;align-items:flex-start;gap:8px;justify-content:space-between"><span>📣 <b>Announcement</b> · ${esc(announcement.body)}${announcement.author ? `<span style="color:var(--muted)"> — ${esc(announcement.author)}</span>` : ''}</span>${canOperate ? `<form method="POST" action="${runBase}/announce/retract" class="swapform" style="margin:0;flex-shrink:0"><button class="btn ghost sm" type="submit" title="Retract this announcement">Retract</button></form>` : ''}</div>` : ''}
     ${hero}${demoMode && canOperate ? `<div class="notice" style="margin-top:10px;background:#fff4e5;border-color:#e0b070">🎬 <b>Demo mode.</b> Seed a full floor + waitlist, then pull a floor player (Remove in "Who's going") to fire a real auto-offer — the top waitlister moves to <b>⏳ Claiming</b>; tap <b>✓ Claim</b> to slide them onto the floor. <b>End queue</b> = run's over (roster archives, check-in closes); <b>Start queue</b> = next week opens and the auto-renewers instantly claim their guaranteed spots. Nothing here touches live data.<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><form method="POST" action="/admin/demo/seed" class="swapform" style="margin:0"><button class="btn primary sm" type="submit">${going + waiting ? '↻ Reset' : '▶ Seed'} full run</button></form><form method="POST" action="/admin/demo/endqueue" class="swapform" style="margin:0"><button class="btn sm" type="submit">⏹ End queue</button></form><form method="POST" action="/admin/demo/startqueue" class="swapform" style="margin:0"><button class="btn sm" type="submit">▶ Start queue</button></form><form method="POST" action="/admin/demo/clear" class="swapform" style="margin:0" onsubmit="return confirm('Clear the demo run?')"><button class="btn ghost sm" type="submit">Clear</button></form></div></div>` : ''}
+    ${canOperate && pendingRequests.length ? `<div class="notice warn" style="margin-top:10px">
+      <b>Join requests (${pendingRequests.length})</b>
+      ${pendingRequests.map(p => `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap"><span style="flex:1;min-width:140px">${esc(p.name)}</span>
+        <form method="POST" action="${runBase}/requests" class="swapform" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><input type="hidden" name="act" value="approve"><button class="btn sm" type="submit">Approve</button></form>
+        <form method="POST" action="${runBase}/requests" class="swapform" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><input type="hidden" name="act" value="decline"><button class="btn ghost sm" type="submit">Decline</button></form></div>`).join('')}
+    </div>` : ''}
     ${(action || runToggle) ? `<div class="controls">${action}${runToggle}</div>` : ''}
     ${myState === 'in' && !cancelled && confirmBy ? (myConfirmed
       ? `<div class="notice good" style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="flex:1;min-width:180px">✓ <b>You're confirmed</b> — see you there!</span><form method="POST" action="${runBase}/confirm" class="swapform" style="margin:0"><input type="hidden" name="un" value="1"><button class="btn ghost sm" type="submit" style="width:auto">Undo ✕</button></form></div>`
@@ -4418,6 +4438,20 @@ export function programsAdminPage({ rows = [], msg = '', form = false, themes = 
         ${r.editable ? `<a class="btn ghost sm" href="#edit-${r.id}" style="margin:0">Edit settings</a>` : ''}
         ${r.editable && !r.hasData ? `<form method="POST" action="/admin/programs/delete" style="margin:0" onsubmit="return confirm('Delete ${esc(r.name)}? It has no sign-ups or history yet.')"><input type="hidden" name="id" value="${r.id}"><button class="btn ghost sm" type="submit">Delete</button></form>` : ''}
       </div>
+      ${r.id !== 90 ? `<details style="margin-top:10px"><summary class="tally-note" style="cursor:pointer">Members &amp; hosts</summary>
+        <form method="POST" action="/admin/programs/member" class="editrow" style="margin-top:8px">
+          <input type="hidden" name="id" value="${r.id}">
+          <label style="flex:1">Member email<input name="email" type="email" placeholder="their app account email"></label>
+          <label style="width:170px">Action<select name="act">
+            <option value="add">Add as member</option>
+            <option value="host">Make host</option>
+            <option value="unhost">Remove host role</option>
+            <option value="remove">Remove from program</option>
+          </select></label>
+          <button class="btn ghost sm" type="submit">Apply</button>
+        </form>
+        <p class="tally-note" style="margin:6px 0 0">A <b>host</b> runs this program day-to-day — open/close check-in, announcements, guests, and approving join requests — without any other admin power.</p>
+      </details>` : ''}
       ${r.editable ? `<details id="edit-${r.id}" style="margin-top:10px"><summary class="tally-note" style="cursor:pointer">Settings</summary>
         ${programForm({ action: '/admin/programs/edit', id: r.id, spec: r.spec, slug: r.slug, approval: r.approval, submit: 'Save changes', DAYS, hourOpts, themes, THEME_LABEL })}
       </details>` : ''}
@@ -4464,7 +4498,12 @@ function programForm({ action, id = null, spec, slug, approval, submit, DAYS, ho
       <label style="flex:1">Waitlist<input name="waitlist" type="number" min="0" max="50" value="${esc(String(v('waitlist', 6)))}"></label>
       <label style="flex:1">Early access<input name="prereg" type="number" min="0" max="200" value="${esc(String(v('prereg', 0)))}"></label>
     </div>
-    <p class="tally-note" style="margin:0 0 10px"><b>Who can join:</b> any approved member of the church app can join this program themselves, and the run stays hidden until you publish it. (Invite-only and approval queues per program aren't built yet — ask and they can be.)</p>
+    <label>Who can join<select name="joinMode">
+      ${[['open', 'Anyone approved in the app can join themselves'],
+         ['host', 'They request — a host or admin approves'],
+         ['invite', 'Invite only — organizers add members']]
+        .map(([k, l]) => `<option value="${k}"${v('joinMode', 'open') === k ? ' selected' : ''}>${l}</option>`).join('')}
+    </select></label>
     <label>When a spot frees up<select name="seating">
       <option value="instant"${!v('offerWindow', false) ? ' selected' : ''}>Next person moves up immediately (recommended)</option>
       <option value="offer"${v('offerWindow', false) ? ' selected' : ''}>Offer it to them with a claim window</option>
