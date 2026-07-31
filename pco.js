@@ -49,27 +49,94 @@ const delSetting = (k) => stmtDelSetting.run(k);
 const audit = (action, target) => stmtAudit.run('planning-center', 'system', action, target || '');
 
 // ---------- connection state ----------
-export function pcoConnected() { return !!(getSetting('pco_app_id') && getSetting('pco_secret')); }
-const authHeader = () =>
-  'Basic ' + Buffer.from(`${getSetting('pco_app_id')}:${getSetting('pco_secret')}`).toString('base64');
+// Two ways in, same capabilities (see docs/PCO-SYNC-PHASE1-SPEC.md):
+//   PAT   — an app id + secret a PCO admin generates and hands over. One minute to set up; acts as
+//           that person, so it can die with their account.
+//   OAUTH — the church authorizes this app from Planning Center's own screen. No secret is ever
+//           sent to us, the grant belongs to the ORGANIZATION (it survives the person who clicked),
+//           and they can revoke it from their connected-apps list. Access tokens last 2h and are
+//           refreshed automatically; refresh tokens rotate on every use and are honoured 90 days.
+// OAuth wins whenever it's configured; the PAT remains for a fast pilot.
+export function pcoAuthMode() {
+  if (getSetting('pco_oauth_access') && getSetting('pco_oauth_refresh')) return 'oauth';
+  if (getSetting('pco_app_id') && getSetting('pco_secret')) return 'pat';
+  return null;
+}
+export function pcoConnected() { return pcoAuthMode() !== null; }
+const OAUTH_AUTHORIZE = () => `${API_BASE}/oauth/authorize`;
+const OAUTH_TOKEN = () => `${API_BASE}/oauth/token`;
+export const PCO_SCOPES = 'people check_ins';   // check_ins = READ-only reconciliation (see Phase 2b)
 
 class PcoAuthError extends Error {}
 class PcoRateError extends Error {}
 
+// Mark the connection unusable until an admin reconnects. Audited once per transition, never per
+// tick, so a broken connection is loud in the log exactly once.
+function flagAuthError(where) {
+  if (getSetting('pco_error') !== 'auth') {
+    setSetting('pco_error', 'auth');
+    audit('pco:auth-failed — sync paused, reconnect on /admin/pco', where);
+  }
+}
+
+// Exchange or refresh an OAuth token. `body` carries the grant. Stores the rotated refresh token —
+// PCO issues a NEW one on every refresh, so keeping the old one would break the next refresh.
+async function oauthTokenRequest(body, where) {
+  const res = await fetch(OAUTH_TOKEN(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_id: getSetting('pco_oauth_client_id'),
+      client_secret: getSetting('pco_oauth_client_secret'),
+      ...body,
+    }),
+  });
+  if (!res.ok) {
+    const detail = (await res.text()).slice(0, 200);
+    if (res.status === 400 || res.status === 401) flagAuthError(where);
+    throw new PcoAuthError(`PCO token request failed (${res.status}) ${detail}`);
+  }
+  const json = await res.json();
+  if (!json.access_token) throw new PcoAuthError('PCO token response had no access_token');
+  setSetting('pco_oauth_access', json.access_token);
+  if (json.refresh_token) setSetting('pco_oauth_refresh', json.refresh_token);
+  setSetting('pco_oauth_expires', String(Date.now() + (Number(json.expires_in) || 7200) * 1000));
+  return json;
+}
+// Refresh a little BEFORE expiry so a long sync can't die mid-run on a boundary.
+async function ensureFreshToken() {
+  if (pcoAuthMode() !== 'oauth') return;
+  const expires = Number(getSetting('pco_oauth_expires') || 0);
+  if (expires - Date.now() > 60000) return;
+  await oauthTokenRequest({ grant_type: 'refresh_token', refresh_token: getSetting('pco_oauth_refresh') }, 'refresh');
+}
+function authHeader() {
+  return pcoAuthMode() === 'oauth'
+    ? `Bearer ${getSetting('pco_oauth_access')}`
+    : 'Basic ' + Buffer.from(`${getSetting('pco_app_id')}:${getSetting('pco_secret')}`).toString('base64');
+}
+
 // One fetch wrapper owns ALL error semantics: 401 flips the connection into a visible
 // "reconnect" state (banner on /admin/pco + audit, once); 429 arms a global backoff honouring
 // Retry-After; other non-2xx throw with status+body so callers can retry or fail-loud.
-async function pcoFetch(path, { method = 'GET', body } = {}) {
+async function pcoFetch(path, { method = 'GET', body, _retried = false } = {}) {
+  await ensureFreshToken();   // no-op for a PAT; refreshes an OAuth token about to expire
   const res = await fetch(API_BASE + path, {
     method,
     headers: { Authorization: authHeader(), 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (res.status === 401 || res.status === 403) {
-    if (getSetting('pco_error') !== 'auth') {   // audit the TRANSITION, not every tick
-      setSetting('pco_error', 'auth');
-      audit('pco:auth-failed — sync paused, reconnect on /admin/pco', path);
+    // An OAuth access token can be rejected before its recorded expiry (revoked, or a clock skew).
+    // Try exactly ONE refresh-and-retry before declaring the connection broken; a PAT has nothing
+    // to refresh, so it fails immediately.
+    if (!_retried && pcoAuthMode() === 'oauth') {
+      try {
+        await oauthTokenRequest({ grant_type: 'refresh_token', refresh_token: getSetting('pco_oauth_refresh') }, path);
+        return pcoFetch(path, { method, body, _retried: true });
+      } catch { /* fall through to the hard failure below */ }
     }
+    flagAuthError(path);
     throw new PcoAuthError(`PCO auth failed (${res.status})`);
   }
   if (res.status === 429) {
@@ -307,9 +374,57 @@ export async function pcoConnect(appId, secret, autocreate, webhookSecret) {
 }
 export function pcoDisconnect() {
   for (const k of ['pco_app_id', 'pco_secret', 'pco_org', 'pco_error', 'pco_backoff_until',
-                   'pco_report', 'pco_autocreate', 'pco_webhook_secret'])
+                   'pco_report', 'pco_autocreate', 'pco_webhook_secret',
+                   'pco_oauth_access', 'pco_oauth_refresh', 'pco_oauth_expires', 'pco_oauth_state'])
     delSetting(k);
-  audit('pco:disconnected', '');
+  audit('pco:disconnected', '');   // the registered app's client id/secret are KEPT — reconnecting
+}                                  // is then one click, and they identify this app, not the church
+
+// ---------- OAuth: register the app once, then the church authorizes it ----------
+// The client id/secret identify THIS APP (created once by an Organization Administrator at
+// api.planningcenteronline.com — PCO restricted app creation to org admins in March 2023). They are
+// not the church's credentials, and no secret travels to us during an authorization.
+export function pcoSaveOAuthApp(clientId, clientSecret) {
+  if (clientId) setSetting('pco_oauth_client_id', String(clientId).trim());
+  if (clientSecret) setSetting('pco_oauth_client_secret', String(clientSecret).trim());
+  if (!clientId && !clientSecret) {
+    delSetting('pco_oauth_client_id'); delSetting('pco_oauth_client_secret');
+  }
+}
+export function pcoOAuthConfigured() {
+  return !!(getSetting('pco_oauth_client_id') && getSetting('pco_oauth_client_secret'));
+}
+// Build the URL the admin is sent to. `state` is single-use with a short TTL — it's what stops a
+// forged callback from planting someone else's authorization in this app.
+export function pcoOAuthStartUrl(redirectUri) {
+  const state = crypto.randomBytes(16).toString('base64url');
+  setSetting('pco_oauth_state', JSON.stringify({ state, at: Date.now(), redirectUri }));
+  const q = new URLSearchParams({
+    client_id: getSetting('pco_oauth_client_id'), redirect_uri: redirectUri,
+    response_type: 'code', scope: PCO_SCOPES, state,
+  });
+  return `${OAUTH_AUTHORIZE()}?${q.toString()}`;
+}
+export async function pcoOAuthCallback(code, state) {
+  let saved = null;
+  try { saved = JSON.parse(getSetting('pco_oauth_state') || 'null'); } catch {}
+  delSetting('pco_oauth_state');   // single use, success or failure
+  if (!saved || !state || state !== saved.state) return { ok: false, error: 'That authorization link expired or didn’t match — start again.' };
+  if (Date.now() - saved.at > 10 * 60 * 1000) return { ok: false, error: 'That authorization took too long — start again.' };
+  if (!code) return { ok: false, error: 'Planning Center didn’t return an authorization code.' };
+  try {
+    await oauthTokenRequest({ grant_type: 'authorization_code', code, redirect_uri: saved.redirectUri }, 'authorize');
+    delSetting('pco_error'); delSetting('pco_backoff_until');
+    const root = await pcoFetch('/people/v2?per_page=1');
+    const org = root?.data?.attributes?.name || 'Connected';
+    setSetting('pco_org', org);
+    if (!getSetting('pco_since')) setSetting('pco_since', new Date().toISOString());
+    audit('pco:connected-oauth', org);
+    return { ok: true, org };
+  } catch (e) {
+    for (const k of ['pco_oauth_access', 'pco_oauth_refresh', 'pco_oauth_expires']) delSetting(k);
+    return { ok: false, error: e.message.slice(0, 160) };
+  }
 }
 export function pcoSetAutocreate(on) { setSetting('pco_autocreate', on ? '1' : '0'); }
 
@@ -649,6 +764,11 @@ export function pcoBarcodeRows() {
 export function pcoStatus() {
   return {
     connected: pcoConnected(),
+    authMode: pcoAuthMode(),                       // 'oauth' | 'pat' | null
+    oauthConfigured: pcoOAuthConfigured(),
+    oauthClientId: getSetting('pco_oauth_client_id') || '',
+    tokenExpires: Number(getSetting('pco_oauth_expires') || 0),
+    scopes: PCO_SCOPES,
     org: getSetting('pco_org') || '',
     error: getSetting('pco_error') || '',
     autocreate: getSetting('pco_autocreate') === '1',

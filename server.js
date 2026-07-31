@@ -17,6 +17,7 @@ import {
   pcoTick, pcoDaily, pcoStatus, pcoConnect, pcoDisconnect, pcoSetAutocreate,
   pcoRunInitialLink, pcoCreateBridgeOnly, pcoQueuePatch, pcoHandleWebhook,
   pcoReconcile, pcoVerifyPasses, pcoBarcodeRows, pcoVerifyWaivers, pcoSetWaiverForm,
+  pcoSaveOAuthApp, pcoOAuthStartUrl, pcoOAuthCallback, pcoOAuthConfigured,
   pcoPushFields, pcoSetAttendanceFields, pcoSetWaiverFields, pcoSetProgramLabels,
 } from './pco.js';
 import webpush from 'web-push';
@@ -4483,7 +4484,8 @@ app.post('/admin/programs/delete', requireAdmin, (req, res) => {
 // inside pcoHandleWebhook against the stored authenticity secret (raw body needed for the
 // signature, hence the inline express.raw — the global urlencoded parser skips JSON bodies).
 app.get('/admin/pco', requireAdmin, (req, res) => {
-  res.send(pcoAdminPage({ s: pcoStatus(), msg: req.query.msg || '' }));
+  // redirectUri is shown so an admin can paste it into the PCO application — it must match exactly.
+  res.send(pcoAdminPage({ s: { ...pcoStatus(), redirectUri: pcoRedirectUri(req) }, msg: req.query.msg || '' }));
 });
 app.post('/admin/pco/connect', requireAdmin, async (req, res) => {
   const appId = String(req.body.app_id || '').trim(), secret = String(req.body.secret || '').trim();
@@ -4492,6 +4494,35 @@ app.post('/admin/pco/connect', requireAdmin, async (req, res) => {
   const r = await pcoConnect(appId, secret, !!req.body.autocreate, String(req.body.webhook_secret || '').trim());
   audit(req.userEmail, 'admin', r.ok ? 'pco:connect' : 'pco:connect-failed', appId.slice(0, 8) + '…');
   res.redirect('/admin/pco?msg=' + encodeURIComponent(r.ok ? `Connected to ${r.org}.` : `Couldn’t connect: ${r.error}`));
+});
+// ---- OAuth: the church authorizes this app from Planning Center's own screen ----
+// The redirect URI must match what was registered on the PCO application EXACTLY, so it is derived
+// from PUBLIC_URL (the Funnel/production origin) rather than the request host — a request arriving
+// on localhost must not mint a localhost redirect that PCO would reject.
+function pcoRedirectUri(req) {
+  const base = (process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+  return base + '/admin/pco/oauth/callback';
+}
+app.post('/admin/pco/oauth/app', requireAdmin, (req, res) => {
+  const id = String(req.body.client_id || '').trim(), secret = String(req.body.client_secret || '').trim();
+  if (!id || !secret)
+    return res.redirect('/admin/pco?msg=' + encodeURIComponent('Both the application (client) ID and secret are required.'));
+  pcoSaveOAuthApp(id, secret);
+  audit(req.userEmail, 'admin', 'pco:oauth-app-saved', id.slice(0, 8) + '…');
+  res.redirect('/admin/pco?msg=' + encodeURIComponent('Saved. Now press “Connect Planning Center”.'));
+});
+app.get('/admin/pco/oauth/start', requireAdmin, (req, res) => {
+  if (!pcoOAuthConfigured())
+    return res.redirect('/admin/pco?msg=' + encodeURIComponent('Add the application ID and secret first.'));
+  res.redirect(pcoOAuthStartUrl(pcoRedirectUri(req)));
+});
+app.get('/admin/pco/oauth/callback', requireAdmin, async (req, res) => {
+  // PCO reports a user-declined consent as ?error= — surface it plainly instead of a state mismatch.
+  if (req.query.error)
+    return res.redirect('/admin/pco?msg=' + encodeURIComponent('Planning Center reported: ' + String(req.query.error).slice(0, 80)));
+  const r = await pcoOAuthCallback(String(req.query.code || ''), String(req.query.state || ''));
+  audit(req.userEmail, 'admin', r.ok ? 'pco:oauth-connected' : 'pco:oauth-failed', r.ok ? r.org : (r.error || '').slice(0, 80));
+  res.redirect('/admin/pco?msg=' + encodeURIComponent(r.ok ? `Connected to ${r.org} — no secret changed hands.` : `Couldn’t connect: ${r.error}`));
 });
 app.post('/admin/pco/disconnect', requireAdmin, (req, res) => {
   pcoDisconnect();

@@ -4375,7 +4375,7 @@ export function pcoAdminPage({ s = {}, msg = '' }) {
   const rep = s.report;
   const statusCard = s.connected
     ? `<div class="card rail" style="margin-top:12px">
-        <div class="subhead" style="margin-top:0">Connected</div>
+        <div class="subhead" style="margin-top:0">Connected${s.authMode === 'oauth' ? ' — authorized by the church' : ' — via a token'}</div>
         <p style="margin:6px 0 0"><b>${esc(s.org || 'Planning Center')}</b> — People sync is live.
         ${s.linked} member${s.linked === 1 ? '' : 's'} linked · ${s.outboxPending} pending write${s.outboxPending === 1 ? '' : 's'}.</p>
         ${s.error === 'auth' ? `<p style="color:#b3261e;margin:8px 0 0"><b>⚠ Planning Center rejected the credentials — sync is paused.</b> Reconnect below with a fresh token.</p>` : ''}
@@ -4390,10 +4390,26 @@ export function pcoAdminPage({ s = {}, msg = '' }) {
         <div class="subhead" style="margin-top:0">Not connected</div>
         <p style="margin:6px 0 0">Link the church's Planning Center account and this app keeps its <b>People</b> directory in sync automatically: members are matched by email (nobody re-registers), new approved members are written back, and profile edits flow both ways. Attendance stays in this app — Planning Center doesn't accept attendance from any outside system.</p>
       </div>`;
+  const oauthCard = `
+    <div class="subhead">Connect — recommended${s.authMode === 'oauth' ? ' (in use)' : ''}</div>
+    <div class="card rail">
+      <p class="tally-note" style="margin:0 0 10px"><b>The church authorizes this app from Planning Center's own screen.</b> No password or secret is ever sent to us, the permission belongs to the <b>organization</b> (so it keeps working when staff change), and it can be revoked any time from Planning Center's connected-applications list. Access is limited to: <b>${esc(s.scopes || '')}</b>.</p>
+      <p class="tally-note" style="margin:0 0 10px">One-time setup by a Planning Center <b>Organization Administrator</b>: create an API application, and paste this exact redirect URI into it —</p>
+      <p style="margin:0 0 10px;word-break:break-all"><code>${esc(s.redirectUri || '')}</code></p>
+      <form method="POST" action="/admin/pco/oauth/app" style="margin:0 0 10px">
+        <label>Application (client) ID<input name="client_id" autocomplete="off" value="${esc(s.oauthClientId)}"></label>
+        <label>Application secret<input name="client_secret" type="password" autocomplete="off" placeholder="${s.oauthConfigured ? '•••••••• (saved)' : ''}"></label>
+        <button class="btn ghost sm" type="submit" style="margin-top:8px">Save application</button>
+      </form>
+      ${s.oauthConfigured
+        ? `<a class="btn" href="/admin/pco/oauth/start" style="margin:0">${s.authMode === 'oauth' ? 'Re-authorize' : 'Connect Planning Center'}</a>`
+        : `<p class="tally-note" style="margin:0">Save the application above to enable the connect button.</p>`}
+      ${s.authMode === 'oauth' && s.tokenExpires ? `<p class="tally-note" style="margin:10px 0 0">Connected. Access renews automatically (current token valid until ${esc(new Date(s.tokenExpires).toISOString().slice(0, 16).replace('T', ' '))} UTC).</p>` : ''}
+    </div>`;
   const connectForm = `
-    <div class="subhead">Connect${s.connected ? ' (replace credentials)' : ''}</div>
+    <div class="subhead">Connect with a token — quick alternative${s.authMode === 'pat' ? ' (in use)' : ''}</div>
     <form method="POST" action="/admin/pco/connect" class="card rail">
-      <p class="tally-note" style="margin:0 0 10px">Create a <b>Personal Access Token</b> at api.planningcenteronline.com → Personal Access Tokens, then paste both halves here. They're stored in the app's database (never in code) and ride the encrypted backup.</p>
+      <p class="tally-note" style="margin:0 0 10px">Faster to set up, and fine for a pilot: a PCO admin creates a <b>Personal Access Token</b> (api.planningcenteronline.com → Personal Access Tokens) and sends both halves. The trade-off is that it's a shared secret tied to <b>that person's account</b>, so it can stop working if they leave. Stored in the app's database (never in code) and rides the encrypted backup.</p>
       <label>Application ID<input name="app_id" autocomplete="off" placeholder="pco_app_…"></label>
       <label>Secret<input name="secret" type="password" autocomplete="off" placeholder="••••••••"></label>
       <label>Webhook authenticity secret <span style="text-transform:none;font-weight:400;color:var(--muted)">(optional — only if webhooks are set up in PCO)</span><input name="webhook_secret" autocomplete="off"></label>
@@ -4487,6 +4503,7 @@ export function pcoAdminPage({ s = {}, msg = '' }) {
     <h1 style="margin-bottom:0">Planning Center</h1>
     ${statusCard}
     ${doorCard}
+    ${oauthCard}
     ${connectForm}
     ${reportCard}
     ${attCard}
