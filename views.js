@@ -2237,7 +2237,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
         <form method="POST" action="/announce" class="swapform" style="margin-top:10px" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Posting…';">
           <textarea name="body" required maxlength="500" placeholder="e.g. No run this week — gym's booked. Back next week."></textarea>
           <div style="height:8px"></div>
-          <label class="lvl" style="margin:0 0 8px"><input type="checkbox" name="email_everyone"> Also email everyone</label>
+          <label style="margin:0 0 8px">Schedule (optional) <span style="text-transform:none;font-weight:400;color:var(--muted)">— leave empty to post now</span><input type="datetime-local" name="publish_at"></label><label style="margin:0 0 8px">Schedule (optional) <span style="text-transform:none;font-weight:400;color:var(--muted)">— leave empty to post now</span><input type="datetime-local" name="publish_at"></label><label style="margin:0 0 8px">Schedule (optional) <span style="text-transform:none;font-weight:400;color:var(--muted)">— leave empty to post now</span><input type="datetime-local" name="publish_at"></label><label style="margin:0 0 8px">Schedule (optional) <span style="text-transform:none;font-weight:400;color:var(--muted)">— leave empty to post now</span><input type="datetime-local" name="publish_at"></label><label class="lvl" style="margin:0 0 8px"><input type="checkbox" name="email_everyone"> Also email everyone</label>
           <button class="btn sm" type="submit">Post to all players</button>
         </form>
       </details>`
@@ -4407,10 +4407,79 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–
 }
 
 // ---------- STATUS PAGE (unapproved players) ----------
+// ---------- ANALYTICS (F5) — the church's trend view ----------
+// Server-rendered bars (pure divs — no chart lib, nothing external). Newcomers render as the
+// darker base slice of each bar so "how many were NEW" reads at a glance.
+export function analyticsPage({ cards = [] }) {
+  const chart = (runs) => {
+    const max = Math.max(...runs.map(r => r.n), 1);
+    return `<div style="display:flex;align-items:flex-end;gap:6px;height:120px;margin:12px 0 4px">
+      ${runs.map(r => {
+        const h = Math.round((r.n / max) * 110), nh = Math.round((r.newcomers / max) * 110);
+        return `<div title="${esc(r.run_date)}: ${r.n} (${r.newcomers} new)" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:110px">
+          <div style="height:${h - nh}px;background:#d8b98a;border-radius:4px 4px 0 0"></div>
+          <div style="height:${nh}px;background:#22615a;border-radius:${h === nh ? '4px 4px 0 0' : '0'}"></div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div style="display:flex;gap:6px">${runs.map(r => `<span style="flex:1;text-align:center;font-size:10px;color:var(--muted)">${esc(r.run_date.slice(5))}</span>`).join('')}</div>`;
+  };
+  const card = (c) => `<div class="card rail" style="margin-top:12px">
+    <div class="subhead" style="margin-top:0">${esc(c.emoji)} ${esc(c.name)}</div>
+    ${chart(c.runs)}
+    <p class="tally-note" style="margin:10px 0 0"><span style="display:inline-block;width:10px;height:10px;background:#22615a;border-radius:2px"></span> newcomers · <span style="display:inline-block;width:10px;height:10px;background:#d8b98a;border-radius:2px"></span> returning</p>
+    <p style="margin:10px 0 0">This year: <b>${c.total}</b> check-ins by <b>${c.uniques}</b> people.${c.retained != null ? ` Over the last 4 runs: <b>${c.active4}</b> played, <b>${c.retained}</b> came to 3+ (the regulars).` : ''}</p>
+  </div>`;
+  return HEAD('Analytics — The Bridge', '', { wall: false }) + header('<b>ANALYTICS</b>') + `
+    ${backBtn('/admin/people')}
+    <div class="rule"></div>
+    <span class="eyebrow">Attendance trends</span>
+    <h1 style="margin-bottom:0">How the runs are doing</h1>
+    ${cards.length ? cards.map(card).join('') : '<p class="lead" style="margin-top:12px">No attendance history yet — charts appear after the first archived run.</p>'}
+    <div class="foot" style="margin-top:24px"><a href="/admin/people">‹ Back to People &amp; invites</a></div>
+  ` + FOOT;
+}
+
+// ---------- KIOSK (F7) — big-screen live roster for the gym door ----------
+// Self-contained page (no tabs, no session assumptions): giant type readable from metres away,
+// refreshes itself every 8s by fetching its own URL and swapping the list (no SPA machinery).
+export function kioskPage({ sport, emoji, theme = '', runDate = '', dateLabel = '', cap = 0, floor = [], wait = [], cancelled = false }) {
+  const row = (p, i, cls) => `<div class="krow ${cls}"><span class="kn">${i + 1}</span><span class="km">${esc(p.name)}${p.confirmed ? ' <span class="kc">✓</span>' : ''}</span></div>`;
+  return HEAD(`${sport} — door`, `kiosk ${theme}`, { wall: false }) + `
+    <style>
+      body.kiosk{overflow:auto} body.kiosk .wrap{max-width:1100px;padding:28px}
+      .khead{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;margin-bottom:8px}
+      .khead h1{font-size:44px;margin:0} .khead .kd{font-size:22px;color:var(--muted)}
+      .kcount{font-size:26px;font-weight:800;margin:2px 0 18px}
+      .kcols{display:grid;grid-template-columns:1fr 1fr;gap:28px}
+      @media (max-width:700px){.kcols{grid-template-columns:1fr}}
+      .ksec h2{font-size:20px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 10px}
+      .krow{display:flex;gap:14px;align-items:center;padding:10px 14px;border:1px solid var(--line);border-radius:12px;margin-bottom:8px;background:#fff}
+      .krow .kn{font-weight:800;font-size:22px;min-width:34px;color:var(--muted)}
+      .krow .km{font-size:26px;font-weight:600} .kc{color:#2e7d53;font-weight:800}
+      .krow.kw .km{font-size:22px;font-weight:500}
+      .kcxl{font-size:34px;font-weight:800;margin:40px 0;text-align:center}
+    </style>
+    <div id="kbody">
+    <div class="khead"><h1>${esc(emoji)} ${esc(sport)}</h1><span class="kd">${esc(dateLabel)}</span></div>
+    ${cancelled ? `<div class="kcxl">🚫 Cancelled this week</div>` : `
+    <div class="kcount">${floor.length} / ${cap} on the floor · ${wait.length} waiting</div>
+    <div class="kcols">
+      <div class="ksec"><h2>On the floor</h2>${floor.map((p, i) => row(p, i, '')).join('') || '<p style="color:var(--muted)">Nobody yet.</p>'}</div>
+      <div class="ksec"><h2>Waitlist</h2>${wait.map((p, i) => row(p, i, 'kw')).join('') || '<p style="color:var(--muted)">Empty — spots open.</p>'}</div>
+    </div>`}
+    </div>
+    <script>setInterval(function(){fetch(location.href).then(function(r){return r.text()}).then(function(t){
+      var m=t.match(/<div id="kbody">([\\s\\S]*?)<\\/div>\\s*<script>/);
+      if(m)document.getElementById('kbody').innerHTML=m[1];
+    }).catch(function(){});},8000);</script>
+  ` + FOOT;
+}
+
 // ---------- PROGRAMS (admin) — the in-app "add a program" screen ----------
 // Plain admin tool page (statusPage idiom). Every wizard field maps to one stored choice; all the
 // formulaic wiring (paths, setting keys, notification copy, banner) is derived server-side.
-export function programsAdminPage({ rows = [], msg = '', form = false, themes = [] }) {
+export function programsAdminPage({ rows = [], msg = '', form = false, themes = [], kioskToken = '' }) {
   const DAYS = [['0', 'Sunday'], ['1', 'Monday'], ['2', 'Tuesday'], ['3', 'Wednesday'], ['4', 'Thursday'], ['5', 'Friday'], ['6', 'Saturday']];
   // Whole-hour label, local to the view: server.js's fmtClockLabel/fmtClockRange can't be imported
   // here (views is imported BY server — the reverse would be circular), and this screen only ever
@@ -4436,6 +4505,7 @@ export function programsAdminPage({ rows = [], msg = '', form = false, themes = 
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
         ${r.id === 1 ? '' : `<form method="POST" action="/admin/programs/active" class="swapform" style="margin:0"><input type="hidden" name="id" value="${r.id}"><input type="hidden" name="on" value="${r.active ? '0' : '1'}"><button class="btn ${r.active ? 'ghost ' : ''}sm" type="submit">${r.active ? 'Hide' : 'Publish'}</button></form>`}
         ${r.editable ? `<a class="btn ghost sm" href="#edit-${r.id}" style="margin:0">Edit settings</a>` : ''}
+        ${r.id !== 90 ? (kioskToken ? `<a class="btn ghost sm" style="margin:0" target="_blank" rel="noopener" href="/kiosk/${r.id}?k=${esc(kioskToken)}">📺 Kiosk link</a>` : `<form method="POST" action="/admin/kiosk" class="swapform" style="margin:0"><button class="btn ghost sm" type="submit">📺 Create kiosk links</button></form>`) : ''}
         ${r.editable && !r.hasData ? `<form method="POST" action="/admin/programs/delete" style="margin:0" onsubmit="return confirm('Delete ${esc(r.name)}? It has no sign-ups or history yet.')"><input type="hidden" name="id" value="${r.id}"><button class="btn ghost sm" type="submit">Delete</button></form>` : ''}
       </div>
       ${r.id !== 90 ? `<details style="margin-top:10px"><summary class="tally-note" style="cursor:pointer">Members &amp; hosts</summary>
@@ -4948,6 +5018,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
       <a class="btn ghost" href="/admin/export" style="margin:0" data-tour="export">⬇︎ Export &amp; backup</a>
       <a class="btn ghost" href="/admin/pco" style="margin:0">⇄ Planning Center</a>
       <a class="btn ghost" href="/admin/programs" style="margin:0">🏅 Programs</a>
+      <a class="btn ghost" href="/admin/analytics" style="margin:0">📈 Analytics</a>
     </div>
 
     <div class="subhead">Add a player</div>

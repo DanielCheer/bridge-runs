@@ -30,7 +30,7 @@ import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, exportPage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap, setProgramMeta,
   STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, demoProfileCard, pickleballPage, runPage, runsPage, pkJoinPage, runJoinPage, pastRunPage, waiverPage,
-  friendsPage, friendsSearchFragment, chatLockedPage, runChatPage, pcoAdminPage, programsAdminPage,
+  friendsPage, friendsSearchFragment, chatLockedPage, runChatPage, pcoAdminPage, programsAdminPage, kioskPage, analyticsPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -140,7 +140,7 @@ function clientIp(req) {
 // the statement is prepared once at module scope rather than per call.
 const stmtLatestAnnouncement = db.prepare(`SELECT a.*, COALESCE(ap.full_name, a.author) AS authorName
   FROM announcements a LEFT JOIN applicants ap ON ap.email = a.author
-  WHERE a.archived = 0 AND a.program_id = 1 ORDER BY a.id DESC LIMIT 1`); // authorName resolves the poster's email → name
+  WHERE a.archived = 0 AND COALESCE(a.pending,0) = 0 AND a.program_id = 1 ORDER BY a.id DESC LIMIT 1`); // authorName resolves the poster's email → name
 function latestAnnouncement() {
   // the live one players see — archived posts are history only
   return stmtLatestAnnouncement.get() || null;
@@ -243,7 +243,7 @@ const stmtAnnPanel = db.prepare(`
            COALESCE(ap.full_name, a.author) AS authorName
     FROM announcements a
     LEFT JOIN applicants ap ON ap.email = a.author
-    WHERE a.program_id = 1 AND a.id NOT IN (SELECT announcement_id FROM announcement_dismissals WHERE email = ?)
+    WHERE a.program_id = 1 AND COALESCE(a.pending,0) = 0 AND a.id NOT IN (SELECT announcement_id FROM announcement_dismissals WHERE email = ?)
     ORDER BY a.id DESC LIMIT ?`); // hoisted — runs on every authed page render (node:sqlite has no stmt cache)
 function announcementsForPanel(email, limit = 20) {
   return stmtAnnPanel.all(String(email || '').toLowerCase(), limit);
@@ -255,7 +255,7 @@ const stmtAnnLastSeen = db.prepare('SELECT last_seen_id FROM announcement_reads 
 // announcement counts.)
 const stmtAnnUnreadCount = db.prepare(`
   SELECT COUNT(*) n FROM announcements a
-  WHERE a.program_id = 1 AND a.id > ?
+  WHERE a.program_id = 1 AND COALESCE(a.pending,0) = 0 AND a.id > ?
     AND a.id NOT IN (SELECT announcement_id FROM announcement_dismissals WHERE email = ?)`);
 function announcementUnread(email) {
   if (!email) return false;
@@ -267,9 +267,9 @@ function announcementUnread(email) {
 // Upsert the viewer's last-seen id to the current MAX — clears their unread dot.
 const stmtMarkAnnSeen = db.prepare(`
   INSERT INTO announcement_reads (email, last_seen_id, updated_at)
-  VALUES (?, (SELECT COALESCE(MAX(id),0) FROM announcements WHERE program_id = 1), datetime('now'))
+  VALUES (?, (SELECT COALESCE(MAX(id),0) FROM announcements WHERE program_id = 1 AND COALESCE(pending,0) = 0), datetime('now'))
   ON CONFLICT(email) DO UPDATE SET
-    last_seen_id = (SELECT COALESCE(MAX(id),0) FROM announcements WHERE program_id = 1),
+    last_seen_id = (SELECT COALESCE(MAX(id),0) FROM announcements WHERE program_id = 1 AND COALESCE(pending,0) = 0),
     updated_at = datetime('now')`);
 function markAnnouncementsSeen(email) {
   if (email) stmtMarkAnnSeen.run(email.toLowerCase());
@@ -1531,6 +1531,15 @@ app.post('/announce', requireApprover, (req, res) => {
   // otherwise insert two rows AND fire push + email twice (a real Gmail-quota hit). Skip a
   // repeat of the same body by the same author within 10s.
   const dup = body && db.prepare("SELECT 1 FROM announcements WHERE program_id = 1 AND body = ? AND author = ? AND at >= datetime('now','-10 seconds') LIMIT 1").get(body, req.userEmail);
+  // F8: a future publish_at stores the post as PENDING — invisible everywhere, no push, no
+  // archive-the-previous — until the tick fires it at that local time, exactly like posting live.
+  const schedAt = parseScheduleAt(req.body.publish_at);
+  if (body && !dup && schedAt) {
+    db.prepare('INSERT INTO announcements (body, author, pending, publish_at, sched_email) VALUES (?,?,1,?,?)')
+      .run(body, req.userEmail, schedAt, req.body.email_everyone ? 1 : 0);
+    audit(req.userEmail, req.actorRole, 'announce:scheduled', `${schedAt} ${body.slice(0, 40)}`);
+    return res.redirect('/checkin?msg=' + encodeURIComponent(`Scheduled for ${fmtWhen(schedAt.replace('T', ' '))}.`));
+  }
   if (body && !dup) {
     db.prepare("UPDATE announcements SET archived = 1, archived_at = datetime('now') WHERE archived = 0 AND program_id = 1").run();
     db.prepare('INSERT INTO announcements (body,author) VALUES (?,?)').run(body, req.userEmail);
@@ -3504,9 +3513,11 @@ app.post('/checkin/leave', requireLogin, (req, res) => {
   const runDate = nextRunDate();
   // If they held a floor slot, offer it to the top waitlister (offer-and-confirm)
   // instead of silently auto-promoting. Capture the offeree BEFORE deleting.
+  const wlBefore = waitlistOrderFor(1, runDate);   // F4
   const offeree = offereeForFloorLeave(runDate, req.userEmail);
   db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = 1').run(runDate, req.userEmail);
   if (offeree) createOffer(runDate, offeree, req);
+  setImmediate(() => pingWaitlistShift(1, runDate, wlBefore));
   res.redirect('/checkin');
 });
 
@@ -4363,6 +4374,104 @@ app.post('/profile/logoutall', requireLogin, (req, res) => {
   res.redirect('/login?msg=' + encodeURIComponent('Signed out on every device. Sign in again below.'));
 });
 
+// ---------- ANALYTICS (F5) ----------
+// The church-facing question isn't "who came Tuesday" (rosters answer that) — it's trend, reach and
+// stickiness: is the run growing, how many are NEW, do people come back. Computed straight from the
+// permanent attendance log; per-RUN buckets (not calendar weeks) because a run is the natural unit.
+app.get('/admin/analytics', requireAdmin, (req, res) => {
+  const cards = [];
+  for (const p of PROGRAMS.values()) {
+    if (p.id === 90) continue;
+    const runs = db.prepare(`
+      SELECT a.run_date, COUNT(*) n,
+             SUM(CASE WHEN f.first = a.run_date THEN 1 ELSE 0 END) newcomers
+      FROM attendance a
+      JOIN (SELECT email, MIN(run_date) first FROM attendance WHERE program_id = ? GROUP BY email) f
+        ON f.email = a.email
+      WHERE a.program_id = ? AND a.email NOT LIKE '%@guest.local'
+      GROUP BY a.run_date ORDER BY a.run_date DESC LIMIT 12`).all(p.id, p.id).reverse();
+    if (!runs.length) continue;   // nothing to chart yet — the card would just be zeros
+    const last4 = db.prepare('SELECT DISTINCT run_date FROM attendance WHERE program_id = ? ORDER BY run_date DESC LIMIT 4').all(p.id).map(r => r.run_date);
+    const retained = last4.length < 4 ? null : db.prepare(`
+      SELECT COUNT(*) n FROM (
+        SELECT email FROM attendance WHERE program_id = ? AND run_date IN (${last4.map(() => '?').join(',')})
+        GROUP BY email HAVING COUNT(DISTINCT run_date) >= 3)`).get(p.id, ...last4).n;
+    const yr = db.prepare(`
+      SELECT COUNT(*) total, COUNT(DISTINCT email) uniques
+      FROM attendance WHERE program_id = ? AND run_date >= strftime('%Y-01-01','now') AND email NOT LIKE '%@guest.local'`).get(p.id);
+    cards.push({ name: p.displayName, emoji: p.emoji, runs, retained, total: yr.total, uniques: yr.uniques,
+      active4: last4.length < 4 ? null : db.prepare(`SELECT COUNT(DISTINCT email) n FROM attendance WHERE program_id = ? AND run_date IN (${last4.map(() => '?').join(',')})`).get(p.id, ...last4).n });
+  }
+  res.send(analyticsPage({ cards }));
+});
+
+// ---------- SCHEDULED ANNOUNCEMENTS (F8) ----------
+// 'YYYY-MM-DDTHH:MM' from a datetime-local input, kept in LOCAL time (all scheduling in this app
+// is local — cutoffs, pings, waiver dates). Returns the normalized string only if it parses and is
+// in the future; anything else means "post now".
+function parseScheduleAt(v) {
+  const s = String(v || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) return null;
+  const t = new Date(s + ':00').getTime();
+  return Number.isFinite(t) && t > schedNow() ? s : null;
+}
+const localNowMinute = () => {
+  const d = new Date(schedNow());
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+// Fire due posts (60s tick). AT the moment it fires it becomes an ordinary live announcement:
+// archive the program's previous live post, flip pending off, push — and email if that was ticked
+// when it was scheduled.
+function fireScheduledAnnouncements() {
+  const due = db.prepare(
+    "SELECT id, program_id, body, author, sched_email FROM announcements WHERE pending = 1 AND publish_at <= ? ORDER BY id").all(localNowMinute());
+  for (const a of due) {
+    db.prepare("UPDATE announcements SET archived = 1, archived_at = datetime('now') WHERE archived = 0 AND COALESCE(pending,0) = 0 AND program_id = ?").run(a.program_id);
+    db.prepare("UPDATE announcements SET pending = 0, at = datetime('now') WHERE id = ?").run(a.id);
+    audit('system', 'system', 'announce:fired', `${a.program_id}:${a.body.slice(0, 40)}`);
+    const isBball = a.program_id === 1;
+    const url = isBball ? '/checkin' : P(a.program_id)?.paths.run;
+    if (!url) continue;   // program deleted since scheduling — row fired into history, nobody pushed
+    const title = isBball ? 'The Bridge Runs' : P(a.program_id).config.copy.annTitle;
+    const targets = isBball ? approvedEmails() : programMemberEmails(a.program_id);
+    setImmediate(() => sendPush(targets.filter(e => e.toLowerCase() !== String(a.author).toLowerCase()),
+      { title, body: a.body.slice(0, 140), url, tag: isBball ? 'announce' : `${P(a.program_id).config.logTag}ann` }));
+    if (a.sched_email && emailConfigured) {
+      const recipients = isBball ? announcementRecipients() : programEmailRecipients(a.program_id);
+      setImmediate(() => { try { if (recipients.length) sendAnnouncement(recipients, a.body, a.author).catch(e => console.error(`[sched-announce] email FAILED: ${e.message}`)); } catch (e) { console.error(`[sched-announce] ${e.message}`); } });
+    }
+  }
+}
+
+// ---------- KIOSK (F7) ----------
+// A big-screen live roster for the gym door (TV/laptop): floor + waitlist, refreshing itself.
+// Auth: an admin session works directly; for a shared screen with no login, an admin mints a
+// kiosk link carrying a token (`?k=`), revocable by regenerating. Read-only by construction.
+app.get('/kiosk/:pid', (req, res) => {
+  const pid = Number(req.params.pid);
+  if (!PROGRAMS.has(pid) || pid === 90) return res.status(404).send('Not found');
+  const tokenOk = req.query.k && req.query.k === getSetting('kiosk_token');
+  if (!tokenOk && !isAdmin(currentUser(req))) return res.status(403).send('Kiosk link required.');
+  const rd = pid === 1 ? nextRunDate() : programRunDate(pid);
+  const part = partitionFor(pid, rd);
+  const floor = (P(pid).config.offerWindow ? part.floorReal : part.floor) || [];
+  const wait = (part.wait || part.waitPlayers || []);
+  res.send(kioskPage({
+    sport: P(pid).displayName, emoji: P(pid).emoji, theme: P(pid).config.theme || '',
+    runDate: rd, dateLabel: runLabelFor(rd), cap: P(pid).config.cap,
+    floor: floor.map(p => ({ name: p.name || p.email, confirmed: !!p.confirmed_at })),
+    wait: wait.map(p => ({ name: p.name || p.email })),
+    cancelled: runCancelledFor(pid, rd),
+  }));
+});
+// Admin: mint/rotate the kiosk token and get ready-to-open links.
+app.post('/admin/kiosk', requireAdmin, (req, res) => {
+  setSetting('kiosk_token', crypto.randomBytes(12).toString('base64url'));
+  audit(req.userEmail, 'admin', 'kiosk:token-rotated', '');
+  res.redirect('/admin/programs?msg=' + encodeURIComponent('Kiosk links refreshed — old screens stop working, grab the new link from a program card.'));
+});
+
 // ---------- HEALTH (S4) ----------
 // For the uptime monitor: cheap, unauthenticated, and it actually exercises the DB — a hung
 // SQLite handle should page the owner, not just a dead port. Returns no data beyond up/degraded.
@@ -4496,7 +4605,7 @@ function parseProgramForm(body, { existingSlug = null } = {}) {
   return { spec, name, slug, approval };
 }
 app.get('/admin/programs', requireAdmin, (req, res) => {
-  res.send(programsAdminPage({ rows: programAdminRows(), msg: req.query.msg || '', form: req.query.form === '1', themes: PROGRAM_THEMES }));
+  res.send(programsAdminPage({ rows: programAdminRows(), msg: req.query.msg || '', form: req.query.form === '1', themes: PROGRAM_THEMES, kioskToken: getSetting('kiosk_token') || '' }));
 });
 app.post('/admin/programs/create', requireAdmin, (req, res) => {
   const parsed = parseProgramForm(req.body);
@@ -5057,6 +5166,7 @@ setInterval(() => {
       try { p.tick(); } catch (e) { console.error(`[interval] program ${p.id} (${p.key}) tick FAILED: ${e.message}`); }
     }
   } catch (e) { console.error(`[interval] rollover/expiry FAILED: ${e.message}`); }
+  try { fireScheduledAnnouncements(); } catch (e) { console.error(`[sched-announce] tick FAILED: ${e.message}`); }
   // PCO People sync: drain the outbox + reconcile unlinked members. Async and fully
   // self-contained (own error handling, inert without credentials) — fire and forget.
   pcoTick().catch(e => console.error('[pco] tick rejected:', e.message));
@@ -5068,6 +5178,7 @@ setInterval(() => {
 if (process.env.ENABLE_TEST_TICK === '1') {
   app.post('/admin/test/tick', requireAdmin, async (req, res) => {
     for (const p of PROGRAMS.values()) p.tick();
+    try { fireScheduledAnnouncements(); } catch (e) { console.error(e.message); }
     await pcoTick();                                  // awaited so the harness can assert right after
     if (req.body && req.body.pcodaily) await pcoDaily(); // opt-in: also run the nightly delta poll
     res.json({ ok: true, now: schedNow() });
@@ -5118,7 +5229,7 @@ const stmtPkRoster = db.prepare(`
            a.id AS applicant_id, a.is_host, a.is_team, a.is_regular, COALESCE(a.dob, c.dob) AS eff_dob
     FROM checkins c LEFT JOIN applicants a ON a.email = c.email
     WHERE c.run_date = ? AND c.program_id = ? ORDER BY c.sort_order ASC, c.id ASC`);
-const stmtLatestAnnouncementById = db.prepare('SELECT id, body, author, at AS created_at FROM announcements WHERE program_id = ? AND COALESCE(archived,0) = 0 ORDER BY id DESC LIMIT 1');
+const stmtLatestAnnouncementById = db.prepare('SELECT id, body, author, at AS created_at FROM announcements WHERE program_id = ? AND COALESCE(archived,0) = 0 AND COALESCE(pending,0) = 0 ORDER BY id DESC LIMIT 1');
 function programActive(programId) { const r = stmtProgActiveById.get(programId); return !!(r && r.active); }
 function pkProgramActive() { return programActive(2); }
 // Pickleball's standing day = Tuesday (PK_DOW=2), DECOUPLED from basketball so moving the
@@ -5857,8 +5968,33 @@ function runLeave(programId, req, res) {
 // by the operator Remove button and the confirm-or-release sweep. Offer-window programs offer
 // the freed spot (claim link); simple programs auto-slide the next waitlister up (with the
 // promotion push). req may be null (scheduler) — createOffer falls back to PUBLIC_URL.
+// F4: tell waitlisters when they MOVE UP. The #1 who reaches the floor already gets the promo
+// push; this covers everyone behind them who shuffled forward (top 5 only — "#9 → #8" is noise).
+// Snapshot the order before the mutation, compare after, push the improvements.
+function waitlistOrderFor(programId, rd) {
+  // partitionFor is program-generic; offer-window programs expose waitPlayers, simple ones wait.
+  const part = partitionFor(programId, rd);
+  return (part.wait || part.waitPlayers || []).map(p => lc(p.email)).filter(e => !/@guest\.local$/.test(e));
+}
+function pingWaitlistShift(programId, rd, before) {
+  try {
+    const after = waitlistOrderFor(programId, rd);
+    for (let i = 0; i < Math.min(after.length, 5); i++) {
+      const was = before.indexOf(after[i]);
+      if (was > i) {   // strictly closer to the floor than before
+        const pos = i + 1;
+        sendPush([after[i]], {
+          title: `You're #${pos} on the waitlist`,
+          body: `You moved up for ${runWeekday(rd)}'s ${P(programId).displayName.toLowerCase()} — ${pos === 1 ? 'next spot that opens is yours' : 'getting close'}.`,
+          url: P(programId).paths.run, tag: `wlmove${programId}`,   // same tag collapses repeat moves
+        });
+      }
+    }
+  } catch (e) { console.error(`[wlmove] ping failed: ${e.message}`); }
+}
 function removeFromRun(programId, rd, em, req = null) {
   const cfg = P(programId).config;
+  const before = waitlistOrderFor(programId, rd);   // F4 snapshot
   const offeree = cfg.offerWindow ? offereeForFloorLeave(rd, em, programId) : null;   // guest priority handled inside
   if (!cfg.offerWindow) {
     // Simple model: only a FLOOR leaver frees a spot. Guest priority — a waitlisted guest is
@@ -5870,6 +6006,7 @@ function removeFromRun(programId, rd, em, req = null) {
   clearTeamAssignment(programId, rd, em);   // off the floor → off any team
   setPartyDeclinedFor(programId, rd, em);   // and out of any party so a group check-in can't re-seat them (P2-2)
   if (offeree) createOffer(rd, offeree, req, programId);
+  setImmediate(() => pingWaitlistShift(programId, rd, before));   // F4: after the dust settles
 }
 function runRemove(programId, req, res) {
   const base = P(programId).paths.run;
@@ -5935,6 +6072,13 @@ function runAnnounce(programId, req, res) {
   // limit is far too coarse to catch it, and each dup costs every member a push + email).
   if (db.prepare("SELECT 1 FROM announcements WHERE program_id = ? AND body = ? AND author = ? AND at >= datetime('now','-10 seconds') LIMIT 1").get(programId, body, author))
     return res.redirect(base);
+  const schedAt = parseScheduleAt(req.body.publish_at);   // F8 — see /announce
+  if (schedAt) {
+    db.prepare('INSERT INTO announcements (body, author, program_id, pending, publish_at, sched_email) VALUES (?,?,?,1,?,?)')
+      .run(body, author, programId, schedAt, req.body.email_everyone ? 1 : 0);
+    audit(req.userEmail, 'admin', `${cfg.logTag}:announce-scheduled`, `${schedAt} ${body.slice(0, 40)}`);
+    return res.redirect(base);
+  }
   db.prepare('INSERT INTO announcements (body, author, program_id) VALUES (?,?,?)').run(body, author, programId);
   audit(req.userEmail, 'admin', `${cfg.logTag}:announce`, body.slice(0, 60));
   setImmediate(() => sendPush(programMemberEmails(programId), { title: cfg.copy.annTitle, body: body.slice(0, 140), url: base, tag: `${cfg.logTag}ann` }));

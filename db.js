@@ -674,6 +674,17 @@ db.exec(`
   // owner of the account chooses to revoke.
   if (!cols.includes('session_ver')) db.exec('ALTER TABLE applicants ADD COLUMN session_ver INTEGER NOT NULL DEFAULT 0');
 }
+// Scheduled announcements (2026-07-31, F8): pending=1 rows are invisible to every live query and
+// fire on the 60s tick when publish_at (local 'YYYY-MM-DDTHH:MM') arrives — archive-the-previous +
+// push happen AT that moment, exactly like an immediate post. sched_email carries the "also email"
+// choice to fire time. (pk_announcements is a separate legacy table — scheduling covers the
+// program-generic `announcements` used by basketball + all mounted programs.)
+{
+  const anCols = db.prepare('PRAGMA table_info(announcements)').all().map(c => c.name);
+  if (!anCols.includes('publish_at')) db.exec('ALTER TABLE announcements ADD COLUMN publish_at TEXT');
+  if (!anCols.includes('pending')) db.exec('ALTER TABLE announcements ADD COLUMN pending INTEGER NOT NULL DEFAULT 0');
+  if (!anCols.includes('sched_email')) db.exec('ALTER TABLE announcements ADD COLUMN sched_email INTEGER NOT NULL DEFAULT 0');
+}
 // pco_outbox — queued OUTBOUND writes (profile PATCHes and the like), drained on the 60s tick.
 // A PCO outage never blocks a Bridge action; every write is replayable; a row that exhausts its
 // retries is closed with last_error + an audit row (fail-loud, never silent). Inert without creds.
