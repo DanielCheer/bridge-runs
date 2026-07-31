@@ -182,23 +182,31 @@ window.__swapWrap=function(html){
 // search…), so: visual viewport meaningfully shorter than the layout viewport → kb-open
 // (nav hidden) — plus the chat composer's engaged flag (it positions itself separately and
 // covers the installed-PWA resize mode, where both viewports shrink and overlap reads ~0).
+// MEASURE, DON'T GUESS. Earlier versions tried to infer "is the keyboard open" from viewport
+// arithmetic and a focused-input heuristic, then hid the nav. That inference is unreliable — iOS
+// Safari-in-a-tab shrinks only the VISUAL viewport, the installed app shrinks the LAYOUT viewport
+// too, and WebKit can leave a position:fixed element PAINTED at a stale anchor after the keyboard
+// goes away. Every heuristic was right in one mode and wrong in another, which is why the bar kept
+// reappearing mid-screen.
+// Instead: ask the element where it actually IS, ask the viewport where its bottom actually IS, and
+// correct exactly that difference. This is model-agnostic — if fixed already tracks the visual
+// viewport the correction is 0; if it's anchored to the layout viewport (or stale) we shift it by
+// the measured gap. It self-heals on every viewport event, so a stale paint can't survive one.
 window.__kbSync=function(){
   var vv=window.visualViewport;
-  // Overlay mode (Safari tab): the keyboard shrinks ONLY the visual viewport → overlap>50.
-  // Resize mode (installed PWA): iOS shrinks the LAYOUT viewport too → overlap reads ~0, so
-  // fall back to "a text input is focused on a touch device" (same signal the composer uses).
-  var kb=vv?Math.max(0,window.innerHeight-vv.height-vv.offsetTop):0;
-  var ae=document.activeElement;
-  var typing=!!(ae&&((ae.tagName==='TEXTAREA')||(ae.tagName==='INPUT'&&!/^(checkbox|radio|button|submit|file|range)$/.test(ae.type||''))||ae.isContentEditable));
-  var coarse=!!(window.matchMedia&&window.matchMedia('(pointer:coarse)').matches);
-  var open=kb>50||(typing&&coarse)||!!window.__composerEngaged;
+  // The chat composer owns the bottom strip while it's engaged — the nav steps aside only there.
+  var open=!!window.__composerEngaged;
   document.body.classList.toggle('kb-open',open);
-  if(!open){
-    // WebKit can leave fixed elements PAINTED at the stale keyboard-era viewport position after
-    // dismissal (they sit mid-screen until something forces a re-anchor). Nudge a composite.
-    var els=[document.querySelector('.tabs'),document.querySelector('.composer')];
-    for(var i=0;i<els.length;i++)(function(el){if(!el)return;el.style.transform='translateZ(0)';requestAnimationFrame(function(){el.style.transform='';});})(els[i]);
-  }
+  var tabs=document.querySelector('.tabs');
+  if(!tabs)return;
+  if(!vv){ tabs.style.transform=''; return; }
+  tabs.style.transform='';                              // measure unshifted
+  var want=vv.offsetTop+vv.height;                      // bottom of the VISIBLE area, in client coords
+  var have=tabs.getBoundingClientRect().bottom;         // where the bar actually renders
+  var fix=Math.round(want-have);
+  // Only correct a real discrepancy, and never more than a viewport (a wild number means the
+  // measurement is mid-transition — leave it alone rather than fling the bar off-screen).
+  if(fix<-1&&fix>-window.innerHeight)tabs.style.transform='translateY('+fix+'px)';
 };
 (function(){
   if(window.__kbWatchBound)return; window.__kbWatchBound=1;
@@ -1381,7 +1389,11 @@ const opsNav = (current, { isAdmin = false, isTeam = false } = {}) => {
 // renders identically on the basketball + pickleball pages without page-specific CSS.
 // A true "Back" — history.back() so Chat → Check-in (and any page → wherever you came from) works,
 // with a /runs fallback when there's no history (e.g. a notification deep-link or a fresh load).
-const backToRuns = `<button type="button" class="backruns" aria-label="Go back" onclick="if(window.history.length>1){window.history.back()}else{window.location.assign('/runs')}" style="display:inline-flex;align-items:center;gap:6px;background:#E86A33;color:#fff;font-family:inherit;font-weight:800;font-size:15px;line-height:1;padding:11px 18px 11px 15px;border:none;border-radius:13px;cursor:pointer;margin:14px 0 2px;box-shadow:0 3px 10px rgba(232,106,51,.32);-webkit-tap-highlight-color:transparent"><span style="font-size:22px;margin-top:-2px">‹</span>Back</button>`;
+// The orange Back button. `fallback` is where it goes when there's no history to pop — which is the
+// normal case in the installed app, where there is no browser chrome to fall back on. Caller-supplied
+// literal paths only (it lands inside an onclick).
+const backBtn = (fallback = '/runs') => `<button type="button" class="backruns" aria-label="Go back" onclick="if(window.history.length>1){window.history.back()}else{window.location.assign('${fallback}')}" style="display:inline-flex;align-items:center;gap:6px;background:#E86A33;color:#fff;font-family:inherit;font-weight:800;font-size:15px;line-height:1;padding:11px 18px 11px 15px;border:none;border-radius:13px;cursor:pointer;margin:14px 0 2px;box-shadow:0 3px 10px rgba(232,106,51,.32);-webkit-tap-highlight-color:transparent"><span style="font-size:22px;margin-top:-2px">‹</span>Back</button>`;
+const backToRuns = backBtn('/runs');
 
 // Copy-to-clipboard button for a readonly <input>/<textarea> by id. Shows
 // "Copied ✓" briefly, then restores the label. Used on the people + share pages.
@@ -4305,6 +4317,7 @@ export function programsAdminPage({ rows = [], msg = '', form = false, themes = 
   };
 
   return HEAD('Programs — The Bridge', '', { wall: false }) + header('<b>PROGRAMS</b>') + `
+    ${backBtn('/admin/people')}
     <div class="rule"></div>
     ${msg ? `<div class="notice">${esc(msg)}</div>` : ''}
     <span class="eyebrow">Every run on the platform</span>
@@ -4503,6 +4516,7 @@ export function pcoAdminPage({ s = {}, msg = '' }) {
       ${pr && pr.missing.length ? `<p class="tally-note" style="margin:10px 0 0">Still without a pass (${pr.missing.length}): ${pr.missing.slice(0, 15).map(esc).join(', ')}${pr.missing.length > 15 ? '…' : ''}</p>` : ''}
     </div>` : '';
   return HEAD('Planning Center — The Bridge', '', { wall: false }) + header('<b>PLANNING CENTER</b>') + `
+    ${backBtn('/admin/people')}
     <div class="rule"></div>
     ${msg ? `<div class="notice">${esc(msg)}</div>` : ''}
     <span class="eyebrow">People sync</span>
