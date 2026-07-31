@@ -16,7 +16,7 @@ import { sendMagicLink, sendAnnouncement, sendSpotOffer, emailConfigured } from 
 import {
   pcoTick, pcoDaily, pcoStatus, pcoConnect, pcoDisconnect, pcoSetAutocreate,
   pcoRunInitialLink, pcoCreateBridgeOnly, pcoQueuePatch, pcoHandleWebhook,
-  pcoReconcile, pcoVerifyPasses, pcoBarcodeRows, pcoVerifyWaivers, pcoSetWaiverForm,
+  pcoReconcile, pcoKioskArrivals, pcoVerifyPasses, pcoBarcodeRows, pcoVerifyWaivers, pcoSetWaiverForm,
   pcoSaveOAuthApp, pcoOAuthStartUrl, pcoOAuthCallback, pcoOAuthConfigured, pcoSetNotifier, pcoFieldsPending,
   pcoSetRosterProvider,
   pcoPushFields, pcoSetAttendanceFields, pcoSetWaiverFields, pcoSetProgramLabels,
@@ -4457,11 +4457,24 @@ app.get('/kiosk/:pid', (req, res) => {
   const part = partitionFor(pid, rd);
   const floor = (P(pid).config.offerWindow ? part.floorReal : part.floor) || [];
   const wait = (part.wait || part.waitPlayers || []);
+  // Door arrivals (PCO Phase 2b): today's station taps, from pco.js's viewer-driven cache.
+  // Roster membership is decided HERE (pco.js only maps taps → linked emails) — a tap from
+  // someone with no spot tonight is a walk-in, whether or not their account is linked.
+  const arr = pcoKioskArrivals(rd, ymdLocal(new Date(schedNow())));
+  const tappedIn = (p) => !!(arr && arr.arrived.has(lc(p.email || '')));
+  const fl = floor.map(p => ({ name: p.name || p.email, confirmed: !!p.confirmed_at, arrived: tappedIn(p) }));
+  const wl = wait.map(p => ({ name: p.name || p.email, arrived: tappedIn(p) }));
+  let door = null;
+  if (arr) {
+    const rostered = new Set([...floor, ...wait].map(p => lc(p.email || '')));
+    let walkIns = arr.unlinkedTaps;
+    for (const e of arr.arrived) if (!rostered.has(e)) walkIns++;
+    door = { live: arr.live, arrived: fl.concat(wl).filter(p => p.arrived).length, walkIns };
+  }
   res.send(kioskPage({
     sport: P(pid).displayName, emoji: P(pid).emoji, theme: P(pid).config.theme || '',
     runDate: rd, dateLabel: runLabelFor(rd), cap: P(pid).config.cap,
-    floor: floor.map(p => ({ name: p.name || p.email, confirmed: !!p.confirmed_at })),
-    wait: wait.map(p => ({ name: p.name || p.email })),
+    floor: fl, wait: wl, door,
     cancelled: runCancelledFor(pid, rd),
   }));
 });
@@ -4910,6 +4923,15 @@ app.post('/admin/pco/event', requireAdmin, (req, res) => {
   setSetting('pco_checkins_event', id);
   audit(req.userEmail, 'admin', 'pco:event-set', id);
   res.redirect('/admin/pco?msg=' + encodeURIComponent('Check-Ins event saved.'));
+});
+// Kiosk arrivals: door screens overlay today's station taps on the roster (read-only, cached
+// in pco.js). Inert without creds + a saved Check-Ins event — the toggle just flips the setting.
+app.post('/admin/pco/kioskarrivals', requireAdmin, (req, res) => {
+  setSetting('pco_kiosk_arrivals', req.body.on === '1' ? '1' : '0');
+  audit(req.userEmail, 'admin', 'pco:kioskarrivals:' + (req.body.on === '1' ? 'on' : 'off'), '');
+  res.redirect('/admin/pco?msg=' + encodeURIComponent(req.body.on === '1'
+    ? 'Kiosk screens now show who’s tapped in at the door.'
+    : 'Kiosk screens back to roster only.'));
 });
 app.post('/admin/pco/reconcile', requireAdmin, async (req, res) => {
   const date = String(req.body.date || '').trim();

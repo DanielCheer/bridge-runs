@@ -914,6 +914,58 @@ export async function pcoReconcile(dateStr) {
   return report;
 }
 
+// Kiosk arrivals — the door screen's live view of today's station taps. Viewer-driven: the
+// kiosk's own 8s self-refresh calls this on every render; it answers from cache instantly and
+// kicks ONE background refresh when the cache is older than PCO_KIOSK_POLL_MS (default 30s),
+// so a TV left on polls PCO ~2 req/30s while someone is actually watching and zero when not.
+// Taps can only exist inside the run day's LOCAL window, so any other date returns null and no
+// request is ever spent on a future run. A failed refresh keeps the last good set (a PCO blip
+// must not blank the door screen mid-run) but still stamps the clock, so a down API is retried
+// at the poll cadence — not at every 8s screen swap. `live` turns true only after a successful
+// read: the kiosk renders nothing rather than a confident "0 arrived" it never actually fetched.
+// Roster membership is NOT decided here (same split as pcoReconcile's injected provider):
+// this maps taps → linked emails; who counts as floor/waitlist/walk-in is server.js's call.
+const KIOSK_POLL_MS = Math.max(5, Number(process.env.PCO_KIOSK_POLL_MS) || 30000);
+let kioskTaps = { date: '', at: 0, set: new Set(), live: false, refreshing: false };
+async function refreshKioskTaps(dateStr, eventId) {
+  try {
+    const dayStart = new Date(dateStr + 'T00:00:00');   // LOCAL day → UTC bounds, same as pcoReconcile
+    const gte = dayStart.toISOString();
+    const lte = new Date(dayStart.getTime() + 24 * 3600 * 1000 - 1000).toISOString();
+    const tapped = new Set();
+    await eachPerson(
+      `/check-ins/v2/events/${encodeURIComponent(eventId)}/check_ins` +
+      `?where[created_at][gte]=${encodeURIComponent(gte)}&where[created_at][lte]=${encodeURIComponent(lte)}&per_page=100`,
+      (c) => { const pid = c.relationships?.person?.data?.id; if (pid) tapped.add(String(pid)); });
+    kioskTaps.set = tapped;
+    kioskTaps.live = true;
+  } catch (e) {
+    console.error(`[pco] kiosk arrivals refresh failed: ${e.message}`);
+  } finally {
+    kioskTaps.at = Date.now();
+    kioskTaps.refreshing = false;
+  }
+}
+export function pcoKioskArrivals(dateStr, todayStr) {
+  if (getSetting('pco_kiosk_arrivals') !== '1' || !pcoAuthMode()) return null;
+  const eventId = getSetting('pco_checkins_event');
+  if (!eventId || dateStr !== todayStr) return null;
+  if (kioskTaps.date !== dateStr) kioskTaps = { date: dateStr, at: 0, set: new Set(), live: false, refreshing: false };
+  if (!kioskTaps.refreshing && Date.now() - kioskTaps.at >= KIOSK_POLL_MS) {
+    kioskTaps.refreshing = true;
+    refreshKioskTaps(dateStr, eventId);   // deliberately un-awaited — the door screen never blocks on PCO
+  }
+  const linked = new Map(db.prepare('SELECT email, pco_id FROM applicants WHERE pco_id IS NOT NULL').all()
+    .map(r => [String(r.pco_id), r.email.toLowerCase()]));
+  const arrived = new Set();
+  let unlinkedTaps = 0;
+  for (const pid of kioskTaps.set) {
+    const em = linked.get(pid);
+    if (em) arrived.add(em); else unlinkedTaps++;
+  }
+  return { arrived, unlinkedTaps, live: kioskTaps.live };
+}
+
 // Verify door passes by reading them back from PCO (consumption, not emission): for every linked
 // member, store the FIRST pass code PCO actually has on file — Church Center's own pass counts,
 // so does a Bridge-issued barcode once the church imports the CSV. The profile QR renders ONLY
@@ -997,6 +1049,7 @@ export function pcoStatus() {
        FROM applicants WHERE status = 'approved' AND ${SYNTHETIC}`).get(),
     // Phase 2b surfaces
     doorMode: getSetting('pco_door_mode') === '1',
+    kioskArrivals: getSetting('pco_kiosk_arrivals') === '1',
     passEnabled: getSetting('pco_pass_enabled') === '1',
     eventId: getSetting('pco_checkins_event') || '',
     passHolders: db.prepare('SELECT COUNT(*) n FROM applicants WHERE pco_pass_code IS NOT NULL').get().n,

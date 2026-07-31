@@ -4443,8 +4443,14 @@ export function analyticsPage({ cards = [] }) {
 // ---------- KIOSK (F7) — big-screen live roster for the gym door ----------
 // Self-contained page (no tabs, no session assumptions): giant type readable from metres away,
 // refreshes itself every 8s by fetching its own URL and swapping the list (no SPA machinery).
-export function kioskPage({ sport, emoji, theme = '', runDate = '', dateLabel = '', cap = 0, floor = [], wait = [], cancelled = false }) {
-  const row = (p, i, cls) => `<div class="krow ${cls}"><span class="kn">${i + 1}</span><span class="km">${esc(p.name)}${p.confirmed ? ' <span class="kc">✓</span>' : ''}</span></div>`;
+export function kioskPage({ sport, emoji, theme = '', runDate = '', dateLabel = '', cap = 0, floor = [], wait = [], cancelled = false, door = null }) {
+  // door = { live, arrived, walkIns } when PCO kiosk-arrivals is on and today is the run day:
+  // rows gain an IN chip as the station taps people, the count line gains the building tally.
+  // `live` false = first fetch hasn't landed yet — say "starting…" rather than a false zero.
+  const row = (p, i, cls) => `<div class="krow ${cls}${p.arrived ? ' kinrow' : ''}"><span class="kn">${i + 1}</span><span class="km">${esc(p.name)}${p.confirmed ? ' <span class="kc">✓</span>' : ''}${p.arrived ? ' <span class="kin">IN</span>' : ''}</span></div>`;
+  const doorLine = !door ? '' : (door.live
+    ? ` · ${door.arrived} in the building${door.walkIns ? ` · +${door.walkIns} walk-in${door.walkIns === 1 ? '' : 's'}` : ''}`
+    : ' · door sync starting…');
   return HEAD(`${sport} — door`, `kiosk ${theme}`, { wall: false }) + `
     <style>
       body.kiosk{overflow:auto} body.kiosk .wrap{max-width:1100px;padding:28px}
@@ -4458,12 +4464,14 @@ export function kioskPage({ sport, emoji, theme = '', runDate = '', dateLabel = 
       .krow .kn{font-weight:800;font-size:22px;min-width:34px;color:var(--muted)}
       .krow .km{font-size:26px;font-weight:600} .kc{color:#2e7d53;font-weight:800}
       .krow.kw .km{font-size:22px;font-weight:500}
+      .kin{background:#2e7d53;color:#fff;font-size:15px;font-weight:800;padding:2px 9px;border-radius:8px;vertical-align:2px;letter-spacing:.05em}
+      .krow.kinrow{border-color:#2e7d53}
       .kcxl{font-size:34px;font-weight:800;margin:40px 0;text-align:center}
     </style>
     <div id="kbody">
     <div class="khead"><h1>${esc(emoji)} ${esc(sport)}</h1><span class="kd">${esc(dateLabel)}</span></div>
     ${cancelled ? `<div class="kcxl">🚫 Cancelled this week</div>` : `
-    <div class="kcount">${floor.length} / ${cap} on the floor · ${wait.length} waiting</div>
+    <div class="kcount">${floor.length} / ${cap} on the floor · ${wait.length} waiting${doorLine}</div>
     <div class="kcols">
       <div class="ksec"><h2>On the floor</h2>${floor.map((p, i) => row(p, i, '')).join('') || '<p style="color:var(--muted)">Nobody yet.</p>'}</div>
       <div class="ksec"><h2>Waitlist</h2>${wait.map((p, i) => row(p, i, 'kw')).join('') || '<p style="color:var(--muted)">Empty — spots open.</p>'}</div>
@@ -4670,6 +4678,10 @@ export function pcoAdminPage({ s = {}, msg = '' }) {
         ? '<b>🚪 Door mode is ON.</b> The church’s Check-Ins station is the confirmation — the in-app “✓ I’m coming” step is hidden and unconfirmed spots are never swept.'
         : '<b>📲 In-app confirm is ON.</b> Floor players confirm in the app by the cutoff or their spot is released. Turn on door mode when the PCO Check-Ins station runs the door — one tap there replaces the in-app step.'}</p>
       <form method="POST" action="/admin/pco/doormode" style="margin-top:10px"><input type="hidden" name="on" value="${s.doorMode ? '0' : '1'}"><button class="btn ${s.doorMode ? 'ghost ' : ''}sm" type="submit">${s.doorMode ? 'Switch back to in-app confirm' : 'Turn on door mode'}</button></form>
+      <p style="margin:14px 0 0">${s.kioskArrivals
+        ? '<b>📺 Kiosk arrivals are ON.</b> On the run day, kiosk screens mark each person <b>IN</b> as the station taps them and count walk-ins — refreshed from Check-Ins about every 30 seconds while a screen is watching.'
+        : '<b>📺 Kiosk arrivals are OFF.</b> Kiosk screens show the roster only. Turn this on and the door screen also marks who has physically tapped in at the station tonight — no extra device needed at the door.'}${s.eventId ? '' : ' <b>Needs the Check-Ins event ID below first.</b>'}</p>
+      <form method="POST" action="/admin/pco/kioskarrivals" style="margin-top:10px"><input type="hidden" name="on" value="${s.kioskArrivals ? '0' : '1'}"><button class="btn ${s.kioskArrivals ? 'ghost ' : ''}sm" type="submit">${s.kioskArrivals ? 'Stop showing arrivals' : 'Show arrivals on kiosk screens'}</button></form>
     </div>`;
   const anyFields = s.waiverFields || s.attendanceFields;
   const attCard = s.connected ? `
