@@ -4378,7 +4378,7 @@ export function pcoAdminPage({ s = {}, msg = '' }) {
         <div class="subhead" style="margin-top:0">Connected${s.authMode === 'oauth' ? ' — authorized by the church' : ' — via a token'}</div>
         <p style="margin:6px 0 0"><b>${esc(s.org || 'Planning Center')}</b> — People sync is live.
         ${s.linked} member${s.linked === 1 ? '' : 's'} linked · ${s.outboxPending} pending write${s.outboxPending === 1 ? '' : 's'}.</p>
-        ${s.error === 'auth' ? `<p style="color:#b3261e;margin:8px 0 0"><b>⚠ Planning Center rejected the credentials — sync is paused.</b> Reconnect below with a fresh token.</p>` : ''}
+        ${s.error === 'auth' ? `<p style="color:#b3261e;margin:8px 0 0"><b>⚠ Planning Center rejected the connection — sync is paused.</b> ${s.authMode === 'oauth' ? 'Press <b>Re-authorize</b> below (the church may have revoked access).' : 'Reconnect below with a fresh token.'}</p>` : ''}
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
           <form method="POST" action="/admin/pco/link"><button class="btn sm" type="submit">Match People now</button></form>
           <form method="POST" action="/admin/pco/poll"><button class="btn ghost sm" type="submit">Pull latest PCO edits</button></form>
@@ -4405,11 +4405,17 @@ export function pcoAdminPage({ s = {}, msg = '' }) {
         ? `<a class="btn" href="/admin/pco/oauth/start" style="margin:0">${s.authMode === 'oauth' ? 'Re-authorize' : 'Connect Planning Center'}</a>`
         : `<p class="tally-note" style="margin:0">Save the application above to enable the connect button.</p>`}
       ${s.authMode === 'oauth' && s.tokenExpires ? `<p class="tally-note" style="margin:10px 0 0">Connected. Access renews automatically (current token valid until ${esc(new Date(s.tokenExpires).toISOString().slice(0, 16).replace('T', ' '))} UTC).</p>` : ''}
+      <div class="subhead" style="margin-top:14px">Instant updates (optional)</div>
+      <p class="tally-note" style="margin:0 0 8px">Planning Center can notify this app the moment someone's details change there. Paste the webhook's signing secret from Planning Center and inbound changes arrive instantly instead of on the daily sync.</p>
+      <form method="POST" action="/admin/pco/webhook" class="editrow" style="margin:0">
+        <label style="flex:1">Webhook signing secret<input name="webhook_secret" autocomplete="off" placeholder="${s.webhookSet ? '•••••••• (saved — paste to replace, blank to clear)' : ''}"></label>
+        <button class="btn ghost sm" type="submit">Save</button>
+      </form>
     </div>`;
   const connectForm = `
     <div class="subhead">Connect with a token — quick alternative${s.authMode === 'pat' ? ' (in use)' : ''}</div>
     <form method="POST" action="/admin/pco/connect" class="card rail">
-      <p class="tally-note" style="margin:0 0 10px">Faster to set up, and fine for a pilot: a PCO admin creates a <b>Personal Access Token</b> (api.planningcenteronline.com → Personal Access Tokens) and sends both halves. The trade-off is that it's a shared secret tied to <b>that person's account</b>, so it can stop working if they leave. Stored in the app's database (never in code) and rides the encrypted backup.</p>
+      <p class="tally-note" style="margin:0 0 10px">Faster to set up, and fine for a pilot: a PCO admin creates a <b>Personal Access Token</b> (api.planningcenteronline.com → Personal Access Tokens) and sends both halves. The trade-off is that it's a shared secret tied to <b>that person's account</b>, so it can stop working if they leave. Stored in the app's database (never in code), and included in the app's database backups — so treat those backups as sensitive.</p>
       <label>Application ID<input name="app_id" autocomplete="off" placeholder="pco_app_…"></label>
       <label>Secret<input name="secret" type="password" autocomplete="off" placeholder="••••••••"></label>
       <label>Webhook authenticity secret <span style="text-transform:none;font-weight:400;color:var(--muted)">(optional — only if webhooks are set up in PCO)</span><input name="webhook_secret" autocomplete="off"></label>

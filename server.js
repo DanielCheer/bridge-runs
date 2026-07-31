@@ -17,7 +17,7 @@ import {
   pcoTick, pcoDaily, pcoStatus, pcoConnect, pcoDisconnect, pcoSetAutocreate,
   pcoRunInitialLink, pcoCreateBridgeOnly, pcoQueuePatch, pcoHandleWebhook,
   pcoReconcile, pcoVerifyPasses, pcoBarcodeRows, pcoVerifyWaivers, pcoSetWaiverForm,
-  pcoSaveOAuthApp, pcoOAuthStartUrl, pcoOAuthCallback, pcoOAuthConfigured,
+  pcoSaveOAuthApp, pcoOAuthStartUrl, pcoOAuthCallback, pcoOAuthConfigured, pcoSetNotifier, pcoFieldsPending,
   pcoPushFields, pcoSetAttendanceFields, pcoSetWaiverFields, pcoSetProgramLabels,
 } from './pco.js';
 import webpush from 'web-push';
@@ -4524,6 +4524,16 @@ app.get('/admin/pco/oauth/callback', requireAdmin, async (req, res) => {
   audit(req.userEmail, 'admin', r.ok ? 'pco:oauth-connected' : 'pco:oauth-failed', r.ok ? r.org : (r.error || '').slice(0, 80));
   res.redirect('/admin/pco?msg=' + encodeURIComponent(r.ok ? `Connected to ${r.org} — no secret changed hands.` : `Couldn’t connect: ${r.error}`));
 });
+// Webhook signing secret — its own form, because it used to be reachable ONLY through the PAT
+// connect form, which left webhook verification unusable for a church connected via OAuth.
+app.post('/admin/pco/webhook', requireAdmin, (req, res) => {
+  const secret = String(req.body.webhook_secret || '').trim();
+  if (secret) setSetting('pco_webhook_secret', secret); else delSetting('pco_webhook_secret');
+  audit(req.userEmail, 'admin', secret ? 'pco:webhook-secret-set' : 'pco:webhook-secret-cleared', '');
+  res.redirect('/admin/pco?msg=' + encodeURIComponent(secret
+    ? 'Webhook secret saved — Planning Center changes will arrive instantly.'
+    : 'Webhook secret cleared — inbound changes arrive on the daily sync.'));
+});
 app.post('/admin/pco/disconnect', requireAdmin, (req, res) => {
   pcoDisconnect();
   audit(req.userEmail, 'admin', 'pco:disconnect', '');
@@ -4591,9 +4601,13 @@ app.post('/admin/pco/attendance', requireAdmin, (req, res) => {
 });
 app.post('/admin/pco/attendance/push', requireAdmin, async (req, res) => {
   try {
-    const n = await pcoPushFields(200);
+    // Bounded per press: each person costs up to ~6 paced requests, so an unbounded first-enable
+    // (every linked member pending) would hold the request open for minutes. The 60s tick keeps
+    // draining the rest — pressing again is optional, not required.
+    const n = await pcoPushFields(25);
+    const left = pcoFieldsPending();
     res.redirect('/admin/pco?msg=' + encodeURIComponent(n
-      ? `Updated ${n} profile${n === 1 ? '' : 's'} in People.`
+      ? `Updated ${n} profile${n === 1 ? '' : 's'} in People.` + (left ? ` ${left} still queued — they update automatically.` : '')
       : 'Everyone in People is already up to date.'));
   } catch (e) {
     res.redirect('/admin/pco?msg=' + encodeURIComponent('Push failed: ' + e.message.slice(0, 120)));
@@ -4643,7 +4657,9 @@ app.post('/admin/pco/passes', requireAdmin, (req, res) => {
 app.post('/admin/pco/passes/verify', requireAdmin, async (req, res) => {
   try {
     const r = await pcoVerifyPasses();
-    res.redirect('/admin/pco?msg=' + encodeURIComponent(`Passes verified: ${r.withPass} working · ${r.missing.length} still need the CSV import.`));
+    res.redirect('/admin/pco?msg=' + encodeURIComponent(
+      `Passes verified: ${r.withPass} working · ${r.missing.length} still need the CSV import.`
+      + (r.more ? ' More left to check — press again.' : '')));
   } catch (e) {
     res.redirect('/admin/pco?msg=' + encodeURIComponent('Verify failed: ' + e.message.slice(0, 120)));
   }
@@ -6821,6 +6837,9 @@ app.listen(PORT, () => {
   // call. The 60s tick makes no call when there's nothing to sync, so a quiet off-season could
   // otherwise let the grant lapse and force the church to re-authorize. One call a day keeps the
   // chain rolling with a ~89-day margin. No-ops entirely when not connected.
+  // A paused PCO connection stops the keep-alive, and the refresh window is finite — so admins are
+  // pushed the moment it breaks rather than discovering it on a screen weeks later.
+  pcoSetNotifier((title, body) => sendPush(ADMINS, { title, body, url: '/admin/pco', tag: 'pcoauth' }));
   const pcoDailyRun = () => pcoDaily().catch(e => console.error(`[pco] daily sync FAILED: ${e.message}`));
   pcoDailyRun();
   setInterval(pcoDailyRun, 24 * 60 * 60 * 1000).unref();

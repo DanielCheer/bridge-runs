@@ -9,13 +9,17 @@
 // the 60s tick / daily poll / explicit admin actions — never inline with a member request, so a
 // PCO outage can't slow or block anything a player does.
 import crypto from 'node:crypto';
-import db from './db.js';
+import db, { transact } from './db.js';
 
 // Test seam: the pco-fn suite points this at a local mock. Unset in prod → the real API.
 const API_BASE = process.env.PCO_API_BASE || 'https://api.planningcenteronline.com';
 // Retry backoff unit (attempt N waits N×base). Env-tunable so the test suite isn't waiting
 // real minutes; prod default 60s keeps retries well inside PCO's 100-req/20s budget.
 const RETRY_BASE_MS = Number(process.env.PCO_RETRY_BASE_MS || 60000);
+// Minimum gap between API calls (PCO: 100 req / 20 s). 0 disables pacing — the test harness sets
+// that so a 96-assert suite doesn't take minutes.
+const PACE_MS = process.env.PCO_PACE_MS == null ? 250 : Number(process.env.PCO_PACE_MS);
+let lastCallAt = 0;
 const MAX_ATTEMPTS = 5;      // then fail-loud: close the row + audit (never silent)
 const SCAN_BATCH = 10;       // unlinked members processed per tick — polite pacing, self-healing
 // Synthetic identities that must NEVER reach the church directory.
@@ -67,15 +71,31 @@ const OAUTH_AUTHORIZE = () => `${API_BASE}/oauth/authorize`;
 const OAUTH_TOKEN = () => `${API_BASE}/oauth/token`;
 export const PCO_SCOPES = 'people check_ins';   // check_ins = READ-only reconciliation (see Phase 2b)
 
-class PcoAuthError extends Error {}
-class PcoRateError extends Error {}
+class PcoAuthError extends Error {}        // the stored credential is dead → pause, ask to reconnect
+class PcoRateError extends Error {}        // 429 → a global backoff window is armed
+class PcoPermissionError extends Error {}  // 403: the credential is FINE but lacks this product/record
+class PcoTransientError extends Error {}   // 5xx / network: their side or the wire — retry later
+// Anything here must NOT consume an outbox row's retry attempts: the row is fine, the world isn't.
+const isRetryable = (e) => e instanceof PcoAuthError || e instanceof PcoRateError
+  || e instanceof PcoTransientError || e instanceof TypeError;   // fetch throws TypeError on network failure
 
 // Mark the connection unusable until an admin reconnects. Audited once per transition, never per
 // tick, so a broken connection is loud in the log exactly once.
+// The notifier is injected by server.js (push/email live there) — pco.js must not import the app.
+let notifyAdmins = null;
+export function pcoSetNotifier(fn) { notifyAdmins = typeof fn === 'function' ? fn : null; }
 function flagAuthError(where) {
   if (getSetting('pco_error') !== 'auth') {
     setSetting('pco_error', 'auth');
     audit('pco:auth-failed — sync paused, reconnect on /admin/pco', where);
+    // A paused sync also stops the daily keep-alive, and the refresh window is finite — so this
+    // cannot wait to be noticed on an admin screen. Tell the admins the moment it happens.
+    if (notifyAdmins) {
+      try {
+        notifyAdmins('Planning Center sync paused',
+          'The connection was rejected. Open the Planning Center screen to reconnect — attendance and waiver info stop syncing until then.');
+      } catch (e) { console.error(`[pco] admin notify failed: ${e.message}`); }
+    }
   }
 }
 
@@ -93,25 +113,55 @@ async function oauthTokenRequest(body, where) {
   });
   if (!res.ok) {
     const detail = (await res.text()).slice(0, 200);
-    if (res.status === 400 || res.status === 401) flagAuthError(where);
+    if (res.status === 429) {   // the token endpoint counts against the same budget
+      const wait = (Number(res.headers.get('retry-after')) || 20) * 1000;
+      setSetting('pco_backoff_until', String(Date.now() + wait));
+      throw new PcoRateError(`PCO token endpoint rate-limited, backing off ${wait}ms`);
+    }
+    // A failed REFRESH means the stored grant is genuinely dead → pause and ask for a reconnect.
+    // A failed authorization_code exchange is a FLOW error (expired code, redirect mismatch) and
+    // must NOT condemn a working connection — e.g. a church already running on a PAT that tries
+    // the OAuth upgrade and mistimes the consent screen.
+    if (body.grant_type === 'refresh_token' && (res.status === 400 || res.status === 401)) flagAuthError(where);
     throw new PcoAuthError(`PCO token request failed (${res.status}) ${detail}`);
   }
   const json = await res.json();
   if (!json.access_token) throw new PcoAuthError('PCO token response had no access_token');
-  setSetting('pco_oauth_access', json.access_token);
-  if (json.refresh_token) setSetting('pco_oauth_refresh', json.refresh_token);
-  setSetting('pco_oauth_expires', String(Date.now() + (Number(json.expires_in) || 7200) * 1000));
+  // One transaction: a crash between these writes would leave a new access token beside a dead
+  // rotated-away refresh token, which only a re-authorization could fix.
+  transact(() => {
+    setSetting('pco_oauth_access', json.access_token);
+    if (json.refresh_token) setSetting('pco_oauth_refresh', json.refresh_token);
+    setSetting('pco_oauth_expires', String(Date.now() + (Number(json.expires_in) || 7200) * 1000));
+  });
   return json;
+}
+// SINGLE-FLIGHT refresh. The 60s tick, the daily poll, the weekly rollover push and any admin
+// button share one token row, and PCO ROTATES the refresh token on every use — so two concurrent
+// refreshes mean the loser presents an already-consumed token. That 400s, flags the connection as
+// dead, and (if PCO invalidates the token family on reuse) really does kill the grant. Everyone
+// awaits the SAME request instead, so a rotation can never race itself.
+let refreshInFlight = null;
+function refreshAccessToken(where) {
+  if (!refreshInFlight) {
+    refreshInFlight = oauthTokenRequest(
+      { grant_type: 'refresh_token', refresh_token: getSetting('pco_oauth_refresh') }, where)
+      .finally(() => { refreshInFlight = null; });
+  }
+  return refreshInFlight;
 }
 // Refresh a little BEFORE expiry so a long sync can't die mid-run on a boundary.
 async function ensureFreshToken() {
   if (pcoAuthMode() !== 'oauth') return;
   const expires = Number(getSetting('pco_oauth_expires') || 0);
   if (expires - Date.now() > 60000) return;
-  await oauthTokenRequest({ grant_type: 'refresh_token', refresh_token: getSetting('pco_oauth_refresh') }, 'refresh');
+  await refreshAccessToken('refresh');
 }
-function authHeader() {
-  return pcoAuthMode() === 'oauth'
+// `force` pins the style: 'pat' makes "Connect & test" actually test the PAT it was given, instead
+// of silently validating an existing OAuth grant and storing an untested (possibly wrong) token.
+function authHeader(force) {
+  const mode = force || pcoAuthMode();
+  return mode === 'oauth'
     ? `Bearer ${getSetting('pco_oauth_access')}`
     : 'Basic ' + Buffer.from(`${getSetting('pco_app_id')}:${getSetting('pco_secret')}`).toString('base64');
 }
@@ -119,31 +169,53 @@ function authHeader() {
 // One fetch wrapper owns ALL error semantics: 401 flips the connection into a visible
 // "reconnect" state (banner on /admin/pco + audit, once); 429 arms a global backoff honouring
 // Retry-After; other non-2xx throw with status+body so callers can retry or fail-loud.
-async function pcoFetch(path, { method = 'GET', body, _retried = false } = {}) {
-  await ensureFreshToken();   // no-op for a PAT; refreshes an OAuth token about to expire
+async function pcoFetch(path, { method = 'GET', body, auth, _retried = false } = {}) {
+  // Honour a 429 penalty on EVERY path, not just the 60s tick: an admin re-pressing a button that
+  // just got rate-limited would otherwise hammer PCO straight through the penalty window.
+  const until = Number(getSetting('pco_backoff_until') || 0);
+  if (until > Date.now())
+    throw new PcoRateError(`Planning Center asked us to wait ${Math.ceil((until - Date.now()) / 1000)}s — try again shortly.`);
+  // Pace every call. PCO allows 100 requests / 20s; the per-member loops (verify passes, field
+  // pushes) would sail past that and 429 mid-run, leaving half-written reports. 250ms ≈ 4/s keeps a
+  // wide margin. PCO_PACE_MS=0 in the harness so tests don't crawl.
+  if (PACE_MS > 0) {
+    const wait = lastCallAt + PACE_MS - Date.now();
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    lastCallAt = Date.now();
+  }
+  if (auth !== 'pat') await ensureFreshToken();   // no-op for a PAT; refreshes an OAuth token near expiry
   const res = await fetch(API_BASE + path, {
     method,
-    headers: { Authorization: authHeader(), 'Content-Type': 'application/json' },
+    headers: { Authorization: authHeader(auth), 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (res.status === 401 || res.status === 403) {
-    // An OAuth access token can be rejected before its recorded expiry (revoked, or a clock skew).
+  if (res.status === 401) {
+    // An OAuth access token can be rejected before its recorded expiry (revoked, or clock skew).
     // Try exactly ONE refresh-and-retry before declaring the connection broken; a PAT has nothing
     // to refresh, so it fails immediately.
-    if (!_retried && pcoAuthMode() === 'oauth') {
+    if (!_retried && auth !== 'pat' && pcoAuthMode() === 'oauth') {
       try {
-        await oauthTokenRequest({ grant_type: 'refresh_token', refresh_token: getSetting('pco_oauth_refresh') }, path);
-        return pcoFetch(path, { method, body, _retried: true });
+        await refreshAccessToken(path);
+        return pcoFetch(path, { method, body, auth, _retried: true });
       } catch { /* fall through to the hard failure below */ }
     }
     flagAuthError(path);
-    throw new PcoAuthError(`PCO auth failed (${res.status})`);
+    throw new PcoAuthError(`PCO auth failed (401)`);
+  }
+  if (res.status === 403) {
+    // NOT a dead credential. 403 means this token lacks permission for this product or record —
+    // e.g. the church has no Check-Ins licence, or the authorizing admin can't see that data.
+    // Pausing the whole People sync here would blame the church for a feature-level gap and stop
+    // the keep-alive with it.
+    throw new PcoPermissionError(
+      `Planning Center denied access to ${path} (403) — the connection doesn't have permission for that part of Planning Center.`);
   }
   if (res.status === 429) {
     const wait = (Number(res.headers.get('retry-after')) || 20) * 1000;
-    setSetting('pco_backoff_until', Date.now() + wait);
+    setSetting('pco_backoff_until', String(Date.now() + wait));
     throw new PcoRateError(`PCO rate-limited, backing off ${wait}ms`);
   }
+  if (res.status >= 500) throw new PcoTransientError(`PCO ${method} ${path} → ${res.status} (their side; will retry)`);
   if (!res.ok) throw new Error(`PCO ${method} ${path} → ${res.status} ${(await res.text()).slice(0, 200)}`);
   if (res.status === 204) return null;
   const clear = getSetting('pco_error'); if (clear) delSetting('pco_error'); // healthy again
@@ -261,7 +333,10 @@ async function drainOutbox() {
       }
       stmtOutboxOk.run(row.id);
     } catch (e) {
-      if (e instanceof PcoAuthError || e instanceof PcoRateError) throw e; // global pause, don't burn attempts
+      // Global/transient conditions must not consume this row's attempts: a 15-minute PCO outage or
+      // an ISP blip would otherwise dead-letter a member's queued profile edit permanently. Only a
+      // failure that is genuinely about THIS row (a 4xx on its own payload) burns an attempt.
+      if (isRetryable(e)) throw e;
       if (row.attempts + 1 >= MAX_ATTEMPTS) {
         stmtOutboxDead.run(e.message, row.id);
         audit(`pco:outbox-dead after ${MAX_ATTEMPTS} attempts — ${e.message.slice(0, 120)}`, row.email);
@@ -361,7 +436,8 @@ export async function pcoConnect(appId, secret, autocreate, webhookSecret) {
   if (webhookSecret) setSetting('pco_webhook_secret', webhookSecret);
   delSetting('pco_error'); delSetting('pco_backoff_until');
   try {
-    const root = await pcoFetch('/people/v2?per_page=1');   // cheapest authenticated call; names the org
+    // auth:'pat' — test the credential we were JUST given, not an OAuth grant that may also exist.
+    const root = await pcoFetch('/people/v2?per_page=1', { auth: 'pat' });   // cheapest authenticated call; names the org
     const org = root?.data?.attributes?.name || root?.meta?.parent?.name || 'Connected';
     setSetting('pco_org', org);
     if (!getSetting('pco_since')) setSetting('pco_since', new Date().toISOString());
@@ -398,31 +474,65 @@ export function pcoOAuthConfigured() {
 // forged callback from planting someone else's authorization in this app.
 export function pcoOAuthStartUrl(redirectUri) {
   const state = crypto.randomBytes(16).toString('base64url');
-  setSetting('pco_oauth_state', JSON.stringify({ state, at: Date.now(), redirectUri }));
+  // PKCE (S256) — recommended by PCO for confidential clients. The client_secret already makes a
+  // stolen code unusable, so this is defence in depth: it also binds the code to THIS start request.
+  const verifier = crypto.randomBytes(32).toString('base64url');
+  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+  // Keep the two most recent pending starts. A second "Connect" (impatient click, or a slow consent
+  // screen) used to overwrite the first, which then stranded a legitimate callback with a mismatch.
+  let pending = [];
+  try { pending = JSON.parse(getSetting('pco_oauth_state') || '[]'); } catch {}
+  if (!Array.isArray(pending)) pending = [];
+  pending = [{ state, at: Date.now(), redirectUri, verifier }, ...pending].slice(0, 2);
+  setSetting('pco_oauth_state', JSON.stringify(pending));
   const q = new URLSearchParams({
     client_id: getSetting('pco_oauth_client_id'), redirect_uri: redirectUri,
     response_type: 'code', scope: PCO_SCOPES, state,
+    code_challenge: challenge, code_challenge_method: 'S256',
   });
   return `${OAUTH_AUTHORIZE()}?${q.toString()}`;
 }
 export async function pcoOAuthCallback(code, state) {
-  let saved = null;
-  try { saved = JSON.parse(getSetting('pco_oauth_state') || 'null'); } catch {}
-  delSetting('pco_oauth_state');   // single use, success or failure
-  if (!saved || !state || state !== saved.state) return { ok: false, error: 'That authorization link expired or didn’t match — start again.' };
+  let pending = [];
+  try { pending = JSON.parse(getSetting('pco_oauth_state') || '[]'); } catch {}
+  if (!Array.isArray(pending)) pending = [];
+  const saved = state ? pending.find(p => p && p.state === state) : null;
+  // Consume ONLY the matching start; a sibling start stays valid so the other tab can still finish.
+  const rest = pending.filter(p => p !== saved && p && Date.now() - p.at < 10 * 60 * 1000);
+  if (rest.length) setSetting('pco_oauth_state', JSON.stringify(rest)); else delSetting('pco_oauth_state');
+  if (!saved) return { ok: false, error: 'That authorization link expired or didn’t match — start again.' };
   if (Date.now() - saved.at > 10 * 60 * 1000) return { ok: false, error: 'That authorization took too long — start again.' };
   if (!code) return { ok: false, error: 'Planning Center didn’t return an authorization code.' };
+  const hadFallback = !!(getSetting('pco_app_id') && getSetting('pco_secret'));
   try {
-    await oauthTokenRequest({ grant_type: 'authorization_code', code, redirect_uri: saved.redirectUri }, 'authorize');
+    await oauthTokenRequest({
+      grant_type: 'authorization_code', code, redirect_uri: saved.redirectUri,
+      ...(saved.verifier ? { code_verifier: saved.verifier } : {}),
+    }, 'authorize');
     delSetting('pco_error'); delSetting('pco_backoff_until');
     const root = await pcoFetch('/people/v2?per_page=1');
     const org = root?.data?.attributes?.name || 'Connected';
+    // Reconnecting a DIFFERENT organization invalidates everything keyed to the old one: cached
+    // custom-field definition ids, the delta-poll high-water mark, the form/event ids. Pushing
+    // against a foreign org's field ids would write garbage into a stranger's records.
+    const orgId = root?.data?.id ? String(root.data.id) : '';
+    const priorOrg = getSetting('pco_org_id') || '';
+    if (orgId && priorOrg && orgId !== priorOrg) {
+      for (const k of ['pco_field_ids', 'pco_since', 'pco_waiver_form', 'pco_checkins_event',
+                       'pco_report', 'pco_waiver_report', 'pco_pass_report', 'pco_checkins_report']) delSetting(k);
+      db.prepare('UPDATE applicants SET pco_att_sig = NULL WHERE pco_att_sig IS NOT NULL').run();
+      audit('pco:org-changed — cached field ids, sync marks and reports cleared; existing person links kept for review', `${priorOrg}→${orgId}`);
+    }
+    if (orgId) setSetting('pco_org_id', orgId);
     setSetting('pco_org', org);
     if (!getSetting('pco_since')) setSetting('pco_since', new Date().toISOString());
     audit('pco:connected-oauth', org);
     return { ok: true, org };
   } catch (e) {
     for (const k of ['pco_oauth_access', 'pco_oauth_refresh', 'pco_oauth_expires']) delSetting(k);
+    // A failed OAuth attempt must not leave a working PAT connection paused. (oauthTokenRequest no
+    // longer flags on this grant, but a later step — e.g. the org lookup — still can.)
+    if (hadFallback && getSetting('pco_error') === 'auth') delSetting('pco_error');
     return { ok: false, error: e.message.slice(0, 160) };
   }
 }
@@ -735,19 +845,31 @@ export async function pcoReconcile(dateStr) {
 // member, store the FIRST pass code PCO actually has on file — Church Center's own pass counts,
 // so does a Bridge-issued barcode once the church imports the CSV. The profile QR renders ONLY
 // from a verified code; members with none land on the "missing" list that feeds the CSV export.
-export async function pcoVerifyPasses() {
-  const linked = db.prepare(`SELECT email, pco_id FROM applicants WHERE pco_id IS NOT NULL AND ${SYNTHETIC}`).all();
+// One request PER MEMBER, so it is bounded and resumable: it checks only members whose pass is
+// still unknown (a code already on file doesn't change), up to `limit` per run. An unbounded sweep
+// of a few hundred members would run past PCO's 100-req/20s budget and 429 mid-loop, leaving a
+// half-written report. The counts in the report come from the DB afterwards, so they're always the
+// whole picture even though the sweep is partial.
+export async function pcoVerifyPasses(limit = 100) {
+  const todo = db.prepare(
+    `SELECT email, pco_id FROM applicants
+     WHERE pco_id IS NOT NULL AND pco_pass_code IS NULL AND ${SYNTHETIC} ORDER BY id LIMIT ?`).all(limit + 1);
+  const more = todo.length > limit;
   const setCode = db.prepare('UPDATE applicants SET pco_pass_code = ? WHERE email = ?');
-  let withPass = 0; const missing = [];
-  for (const m of linked) {
+  let checked = 0;
+  for (const m of todo.slice(0, limit)) {
     const json = await pcoFetch(`/check-ins/v2/people/${m.pco_id}/passes`);
     const code = json.data?.[0]?.attributes?.code || null;
-    setCode.run(code, m.email);
-    if (code) withPass++; else missing.push(m.email);
+    if (code) setCode.run(code, m.email);
+    checked++;
   }
-  const report = { at: new Date().toISOString(), withPass, missing };
+  const withPass = db.prepare(`SELECT COUNT(*) n FROM applicants WHERE pco_pass_code IS NOT NULL AND ${SYNTHETIC}`).get().n;
+  const missing = db.prepare(
+    `SELECT email FROM applicants WHERE pco_id IS NOT NULL AND pco_pass_code IS NULL AND ${SYNTHETIC} ORDER BY id`)
+    .all().map(r => r.email);
+  const report = { at: new Date().toISOString(), withPass, missing, checked, more };
   setSetting('pco_pass_report', JSON.stringify(report));
-  audit(`pco:verify-passes with=${withPass} missing=${missing.length}`, '');
+  audit(`pco:verify-passes checked=${checked} with=${withPass} missing=${missing.length}${more ? ' (more remain)' : ''}`, '');
   return report;
 }
 
@@ -767,6 +889,7 @@ export function pcoStatus() {
     authMode: pcoAuthMode(),                       // 'oauth' | 'pat' | null
     oauthConfigured: pcoOAuthConfigured(),
     oauthClientId: getSetting('pco_oauth_client_id') || '',
+    webhookSet: !!getSetting('pco_webhook_secret'),
     tokenExpires: Number(getSetting('pco_oauth_expires') || 0),
     scopes: PCO_SCOPES,
     org: getSetting('pco_org') || '',
