@@ -6815,4 +6815,13 @@ app.listen(PORT, () => {
   startBackups(); // snapshot the DB now + once a day
   pruneOldMedia(); pruneAuditLog();
   setInterval(() => { pruneOldMedia(); pruneAuditLog(); }, 24 * 60 * 60 * 1000).unref(); // media (1yr) + audit_log (5000) retention, boot + daily
+  // PCO daily delta poll — the inbound path when no webhook is registered, AND the thing that keeps
+  // an OAuth grant alive. Two facts make the second part load-bearing: PCO honours a refresh token
+  // for 90 days from when its access token was issued, and a refresh only happens INSIDE an API
+  // call. The 60s tick makes no call when there's nothing to sync, so a quiet off-season could
+  // otherwise let the grant lapse and force the church to re-authorize. One call a day keeps the
+  // chain rolling with a ~89-day margin. No-ops entirely when not connected.
+  const pcoDailyRun = () => pcoDaily().catch(e => console.error(`[pco] daily sync FAILED: ${e.message}`));
+  pcoDailyRun();
+  setInterval(pcoDailyRun, 24 * 60 * 60 * 1000).unref();
 });
