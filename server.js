@@ -4302,6 +4302,27 @@ app.post('/admin/people/suspend', requireAdmin, (req, res) => {
   res.redirect('/admin/people?msg=' + encodeURIComponent(on ? 'Suspended' : 'Unsuspended'));
 });
 
+// ---------- BOTTOM-NAV LOCALIZER (admin) ----------
+// The floating-nav bug only occurs in the installed iOS PWA, which nothing local can reproduce.
+// Six fixes were written for it without one measurement from the failing device. An admin
+// long-presses the masthead while the bug is on screen; this stores exactly what the device
+// reported. docs/NAV-LOCALIZER.md maps a capture to a single mechanism — read, then fix.
+// Admin-gated both ways: a member's long-press writes nothing (and shows nothing).
+const stmtGeoInsert = db.prepare('INSERT INTO geo_reports (actor, server_ver, payload) VALUES (?,?,?)');
+app.post('/debug/geo', requireAdmin, express.raw({ type: '*/*', limit: '256kb' }), (req, res) => {
+  const raw = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : JSON.stringify(req.body || {});
+  try { JSON.parse(raw); } catch { return res.status(400).end(); }   // store only valid JSON
+  // The server stamps its OWN build, so client/server version skew is computed from a trusted side.
+  const info = stmtGeoInsert.run(req.userEmail, String(BUILD_VER), raw);
+  audit(req.userEmail, 'admin', 'debug:geo-capture', String(info.lastInsertRowid));
+  res.status(204).end();
+});
+app.get('/debug/geo', requireAdmin, (req, res) => {
+  const rows = db.prepare('SELECT id, at, actor, server_ver, payload FROM geo_reports ORDER BY id DESC LIMIT 20').all();
+  res.type('application/json').send(JSON.stringify(
+    rows.map(r => ({ ...r, payload: (() => { try { return JSON.parse(r.payload); } catch { return r.payload; } })() })), null, 2));
+});
+
 // ---------- PROGRAMS (admin) — create a new run/program from the app, no deploy ----------
 // The church's answer to "can we add a youth program ourselves?": this writes a `program` row +
 // JSON spec, rebuilds the registry, and mounts the routes live. Code-defined programs (basketball,

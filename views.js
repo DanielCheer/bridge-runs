@@ -206,8 +206,96 @@ window.__kbSync=function(){
   var fix=Math.round(want-have);
   // Only correct a real discrepancy, and never more than a viewport (a wild number means the
   // measurement is mid-transition — leave it alone rather than fling the bar off-screen).
-  if(fix<-1&&fix>-window.innerHeight)tabs.style.transform='translateY('+fix+'px)';
+  // FROZEN PENDING EVIDENCE: this corrects only fix<-1 (bar BELOW the visible bottom, i.e. behind
+  // the keyboard). The reported symptom is the bar ABOVE the visible bottom (fix>0), which this
+  // deliberately does not touch — widening it, or re-adding a repaint nudge, would be another
+  // guess. The ring buffer below records what this computed on every event so the localizer can
+  // prove which mechanism is live first. See docs/NAV-LOCALIZER.md.
+  var applied='';
+  if(fix<-1&&fix>-window.innerHeight){applied='translateY('+fix+'px)';tabs.style.transform=applied;}
+  // Ring buffer (~40) — turns a single capture into a SEQUENCE, which is what distinguishes
+  // "keyboard still open" from "layout viewport stuck after dismissal" from "our transform is stale".
+  try{
+    var B=window.__geoRing||(window.__geoRing=[]);
+    var ae2=document.activeElement;
+    B.push({t:Date.now(),ih:window.innerHeight,vh:vv.height,vt:Math.round(vv.offsetTop),
+      sc:vv.scale,rb:Math.round(have),fx:fix,ap:applied,
+      ae:ae2?(ae2.tagName+(ae2.type?':'+ae2.type:'')):'',ce:!!window.__composerEngaged});
+    if(B.length>40)B.shift();
+  }catch(e){}
 };
+// ---- Bottom-nav LOCALIZER ----------------------------------------------------------------
+// Captures what the DEVICE actually reports while the bug is visible. Reads only; the endpoint is
+// admin-gated, so a member long-pressing the masthead gets nothing and writes nothing.
+// Order matters: build + queue the payload BEFORE drawing anything. If drawing the confirmation
+// overlay makes the bar snap back to the bottom, that is affirmative evidence of WebKit stale
+// paint (geometry reads fine, pixels lie) — note it in the report.
+window.__geoCapture=function(){
+  var tabs=document.querySelector('.tabs'), vv=window.visualViewport;
+  var cs=tabs?getComputedStyle(tabs):null, r=tabs?tabs.getBoundingClientRect():null;
+  // Any ancestor with a transform/filter/contain/will-change becomes a containing block for
+  // position:fixed — the original month-one cause. Structurally impossible today; recorded so a
+  // regression names itself instead of being re-diagnosed from scratch.
+  var anc=[],n=tabs?tabs.parentElement:null;
+  while(n){var s=getComputedStyle(n),hit={};
+    ['transform','translate','scale','rotate','filter','backdropFilter','perspective','contain','willChange','containerType'].forEach(function(p){
+      var v=s[p]; if(v&&v!=='none'&&v!=='normal'&&v!=='auto'&&v!=='initial')hit[p]=String(v).slice(0,40);});
+    if(Object.keys(hit).length)anc.push({el:n.tagName+(n.className?'.'+String(n.className).split(' ')[0]:''),css:hit});
+    n=n.parentElement;}
+  // NB: no regex with an escaped slash here — this file is a template literal, so \/ collapses to /
+  // and would emit a broken pattern into the client bundle (it has bitten this file before).
+  var base=function(u){var p=String(u||'').split('/');return p[p.length-1];};
+  var sheets=[];try{for(var i=0;i<document.styleSheets.length;i++){var h=document.styleSheets[i].href;if(h)sheets.push(base(h));}}catch(e){}
+  var payload={
+    when:new Date().toISOString(), path:location.pathname,
+    layout:{ih:window.innerHeight,iw:window.innerWidth,ch:document.documentElement.clientHeight,
+      cw:document.documentElement.clientWidth,sy:Math.round(window.scrollY),
+      sw:screen.width,sh:screen.height,dpr:window.devicePixelRatio},
+    visual:vv?{h:vv.height,w:vv.width,top:vv.offsetTop,left:vv.offsetLeft,pageTop:vv.pageTop,scale:vv.scale}:null,
+    bar:r?{top:Math.round(r.top),bottom:Math.round(r.bottom),height:Math.round(r.height),
+      offsetH:tabs.offsetHeight,inlineTransform:tabs.style.transform||'',
+      position:cs.position,bottomCss:cs.bottom,transform:cs.transform,visibility:cs.visibility,
+      display:cs.display,padBottom:cs.paddingBottom}:null,   // padBottom = the RESOLVED safe-area inset
+    derived:r&&vv?{visibleBottom:Math.round(vv.offsetTop+vv.height),barBottom:Math.round(r.bottom),
+      gap:Math.round((vv.offsetTop+vv.height)-r.bottom)}:null,
+    ancestors:anc,
+    mode:{standalone:navigator.standalone===true,
+      displayMode:!!(window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches),
+      ua:navigator.userAgent},
+    state:{activeEl:document.activeElement?(document.activeElement.tagName+(document.activeElement.type?':'+document.activeElement.type:'')):'',
+      bodyClass:document.body.className,composerEngaged:!!window.__composerEngaged},
+    build:{clientVer:window.__ver||'',sheets:sheets,
+      sw:(navigator.serviceWorker&&navigator.serviceWorker.controller)?base(navigator.serviceWorker.controller.scriptURL):''},
+    ring:(window.__geoRing||[]).slice(-40)
+  };
+  var body=JSON.stringify(payload);
+  var sent=false;
+  try{ sent=!!(navigator.sendBeacon&&navigator.sendBeacon('/debug/geo',new Blob([body],{type:'application/json'}))); }catch(e){}
+  if(!sent){ try{ fetch('/debug/geo',{method:'POST',headers:{'Content-Type':'application/json'},body:body,keepalive:true}); }catch(e){} }
+  // Confirmation overlay LAST — see the stale-paint note above.
+  var d=payload.derived||{}, o=document.createElement('div');
+  o.setAttribute('style','position:fixed;left:8px;right:8px;bottom:8px;z-index:99999;background:#1b1b17;color:#fff;'
+    +'font:12px/1.45 ui-monospace,Menlo,monospace;padding:10px 12px;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.4)');
+  o.textContent='geo captured · barBottom '+(d.barBottom!=null?d.barBottom:'?')+' · visibleBottom '
+    +(d.visibleBottom!=null?d.visibleBottom:'?')+' · gap '+(d.gap!=null?d.gap:'?')
+    +' · innerH '+window.innerHeight+' · vvH '+(vv?Math.round(vv.height):'?')+' · vvTop '+(vv?Math.round(vv.offsetTop):'?')
+    +' — screenshot this, then tap to dismiss';
+  o.addEventListener('click',function(){o.remove();});
+  document.body.appendChild(o);
+  setTimeout(function(){if(o.parentNode)o.remove();},20000);
+};
+(function(){
+  // Trigger: ~800ms press on the masthead. Delegated at document level so it survives the router's
+  // .wrap swaps (the masthead is inside .wrap and gets replaced on every navigation).
+  if(window.__geoBound)return; window.__geoBound=1;
+  var timer=null;
+  var start=function(e){ var t=e.target&&e.target.closest&&e.target.closest('.mast,.bl,header');
+    if(!t)return; clearTimeout(timer); timer=setTimeout(function(){ if(window.__geoCapture)window.__geoCapture(); },800); };
+  var cancel=function(){ clearTimeout(timer); };
+  document.addEventListener('touchstart',start,{passive:true});
+  document.addEventListener('touchend',cancel); document.addEventListener('touchmove',cancel,{passive:true});
+  document.addEventListener('mousedown',start); document.addEventListener('mouseup',cancel);
+})();
 (function(){
   if(window.__kbWatchBound)return; window.__kbWatchBound=1;
   var vv=window.visualViewport;

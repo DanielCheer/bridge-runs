@@ -268,6 +268,21 @@ db.exec(`
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+  -- geo_reports (2026-07-31): device geometry captures for the bottom-nav localizer. The floating
+  -- nav bug only appears in the installed iOS PWA, which no local test can reproduce — six fixes
+  -- were written without a single measurement from the failing device. An admin taps to capture the
+  -- real numbers (viewport/rect/computed style/ancestors/mode/event history) while the bug is on
+  -- screen; the decision tree in docs/NAV-LOCALIZER.md maps one capture to one mechanism.
+  -- Its own table, not audit_log: that has fixed actor/action/target columns and is pruned to 5000
+  -- rows, so stuffing JSON into the target column would be the "substring where a structured field
+  -- belongs" band-aid. Payload is JSON TEXT; rows are few (hand-triggered) and kept.
+  CREATE TABLE IF NOT EXISTS geo_reports (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    at         TEXT NOT NULL DEFAULT (datetime('now')),
+    actor      TEXT NOT NULL DEFAULT '',
+    server_ver TEXT NOT NULL DEFAULT '',
+    payload    TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS push_subscriptions (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     email      TEXT NOT NULL,
