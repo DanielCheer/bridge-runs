@@ -16,8 +16,8 @@ import { sendMagicLink, sendAnnouncement, sendSpotOffer, emailConfigured } from 
 import {
   pcoTick, pcoDaily, pcoStatus, pcoConnect, pcoDisconnect, pcoSetAutocreate,
   pcoRunInitialLink, pcoCreateBridgeOnly, pcoQueuePatch, pcoHandleWebhook,
-  pcoReconcile, pcoVerifyPasses, pcoBarcodeRows,
-  pcoPushAttendance, pcoSetAttendanceFields, pcoSetProgramLabels,
+  pcoReconcile, pcoVerifyPasses, pcoBarcodeRows, pcoVerifyWaivers, pcoSetWaiverForm,
+  pcoPushFields, pcoSetAttendanceFields, pcoSetWaiverFields, pcoSetProgramLabels,
 } from './pco.js';
 import webpush from 'web-push';
 import {
@@ -1189,6 +1189,7 @@ app.post('/apply', (req, res) => {
         .run(full_name.trim(), em, phone.trim(), experience, (where_played || '').trim(),
              waiver_ok ? 1 : 0, dob);
     }
+    if (waiver_ok) stampWaiver(em);   // permanent attestation date (the form's box is required)
     res.send(intakePage({ submitted: true }));
   } catch (e) {
     console.error(e);
@@ -1441,6 +1442,9 @@ app.post('/invite/:token', async (req, res) => {
   // DOB is never overwritten here — otherwise a known minor holding an invite link could re-claim it
   // with a fake adult DOB and unlock 1:1 DMs, defeating the set-once rule /profile enforces.
   db.prepare('UPDATE applicants SET dob = COALESCE(dob, ?) WHERE email = ?').run(dob, email);
+  // Permanent attestation date for the two branches that grant the waiver (verified claim, either
+  // existing-row or fresh-INSERT). The unverified branches grant no waiver, so they get no date.
+  if (prefilledMatch) stampWaiver(email);
   db.prepare("UPDATE invites SET used = 1, used_at = datetime('now'), used_email = ? WHERE token = ?")
     .run(email, iv.token);
   // WIRING: a team invite creates an auto-renew team member — seat them on the
@@ -1585,6 +1589,14 @@ app.get('/status', requireLogin, (req, res) => {
   res.send(statusPage({ email: req.userEmail, status }));
 });
 
+// The permanent waiver record. EVERY path that sets waiver_ok routes through here so the date is
+// captured once, in one place — the sign-up form, an invite claim, and the /waiver gate. Idempotent
+// (`waiver_at IS NULL`): re-confirming never rewrites the original attestation date, and a member
+// who was already cleared before this column existed keeps a NULL date rather than a forged one.
+const stmtStampWaiver = db.prepare(
+  "UPDATE applicants SET waiver_ok = 1, waiver_at = COALESCE(waiver_at, datetime('now')) WHERE email = ?");
+function stampWaiver(email) { if (email) stmtStampWaiver.run(String(email).toLowerCase()); }
+
 // One-time waiver gate — the join routes send a member here when waiver_ok is unset. They
 // confirm they've signed, we flip waiver_ok, and they're returned to the run to check in.
 app.get('/waiver', requireLogin, (req, res) => {
@@ -1598,7 +1610,7 @@ app.post('/waiver', requireLogin, (req, res) => {
   const next = safeNextPath(req.body.next);
   if (!a) return res.redirect('/status');
   if (!req.body.agree) return res.redirect('/waiver?next=' + encodeURIComponent(next) + '&err=' + encodeURIComponent('Please check the box to confirm you signed the waiver.'));
-  db.prepare('UPDATE applicants SET waiver_ok = 1 WHERE email = ?').run(a.email);
+  stampWaiver(a.email);
   audit(req.userEmail, 'player', 'waiver:ack', '');
   res.redirect(next);
 });
@@ -1935,7 +1947,7 @@ function ensureWeek(runDate = nextRunDate()) {
   // Attendance just changed for everyone who played → refresh their PCO People custom fields.
   // Fire-and-forget: a PCO outage must never stall the weekly rollover, and the 60s tick's slow
   // drain picks up anyone missed (signature-diffed, so it re-pushes only what actually changed).
-  pcoPushAttendance(50).catch(e => console.error(`[pco] attendance push after rollover FAILED: ${e.message}`));
+  pcoPushFields(50).catch(e => console.error(`[pco] profile-field push after rollover FAILED: ${e.message}`));
   stmtPurgeCheckins.run(t);           // then purge those now-past runs' checkins…
   stmtPurgeOptouts.run(t);            // …opt-outs…
   stmtPurgeRunState.run(t);           // …and stale open/closed state
@@ -4084,10 +4096,11 @@ app.get('/admin/people/export.csv', requireAdmin, (req, res) => {
     return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   };
   const roleOf = (a) => a.is_host ? 'Host' : a.is_team ? 'Team' : a.is_regular ? 'Core' : '';
-  const lines = [['Name', 'Email', 'Phone', 'Status', 'Role', 'Position', 'Waiver', 'Email opt-out', 'Applied'].join(',')];
+  const lines = [['Name', 'Email', 'Phone', 'Status', 'Role', 'Position', 'Waiver', 'Waiver date', 'Email opt-out', 'Applied'].join(',')];
   for (const a of rows) lines.push([
     a.full_name, a.email, a.phone, a.status, roleOf(a), a.position,
-    a.waiver_ok ? 'yes' : 'no', a.email_optout ? 'yes' : 'no', a.created_at,
+    a.waiver_ok ? 'yes' : 'no', a.waiver_at || (a.waiver_ok ? 'not recorded' : ''),
+    a.email_optout ? 'yes' : 'no', a.created_at,
   ].map(cell).join(','));
   audit(req.userEmail, 'admin', 'people:export', String(rows.length));
   const stamp = new Date().toISOString().slice(0, 10);
@@ -4508,7 +4521,35 @@ app.post('/admin/pco/auto', requireAdmin, (req, res) => {
   audit(req.userEmail, 'admin', 'pco:autocreate:' + (req.body.on === '1' ? 'on' : 'off'), '');
   res.redirect('/admin/pco');
 });
-// Phase 2 — attendance custom fields on People profiles (opt-in, church-facing reporting).
+// Phase 2 — People custom fields. Waiver status is the set worth publishing when the church's own
+// Check-Ins station holds attendance (the hybrid); attendance fields matter while Bridge is the
+// attendance record. Independent toggles so a church can run either, both, or neither.
+app.post('/admin/pco/waiver', requireAdmin, (req, res) => {
+  const on = req.body.on === '1';
+  pcoSetWaiverFields(on);
+  audit(req.userEmail, 'admin', 'pco:waiver-fields:' + (on ? 'on' : 'off'), '');
+  res.redirect('/admin/pco?msg=' + encodeURIComponent(on
+    ? 'Waiver fields ON — each member’s People profile now shows whether their waiver is on file, and when they confirmed it.'
+    : 'Waiver fields OFF — the values already in People stay as they are; nothing further is written.'));
+});
+// Verify attestations against the church's own waiver form (read-only against PCO).
+app.post('/admin/pco/waiver/form', requireAdmin, (req, res) => {
+  const id = String(req.body.form_id || '').trim();
+  if (id && !/^\d{1,12}$/.test(id))
+    return res.redirect('/admin/pco?msg=' + encodeURIComponent('The form ID is the number in the form’s Planning Center URL.'));
+  pcoSetWaiverForm(id);
+  audit(req.userEmail, 'admin', id ? 'pco:waiver-form-set' : 'pco:waiver-form-cleared', id);
+  res.redirect('/admin/pco?msg=' + encodeURIComponent(id ? 'Waiver form saved.' : 'Waiver form cleared.'));
+});
+app.post('/admin/pco/waiver/verify', requireAdmin, async (req, res) => {
+  try {
+    const r = await pcoVerifyWaivers();
+    res.redirect('/admin/pco?msg=' + encodeURIComponent(
+      `Verified ${r.verified} member${r.verified === 1 ? '' : 's'} against the waiver form · ${r.missing.length} with no submission found.`));
+  } catch (e) {
+    res.redirect('/admin/pco?msg=' + encodeURIComponent('Verify failed: ' + e.message.slice(0, 120)));
+  }
+});
 app.post('/admin/pco/attendance', requireAdmin, (req, res) => {
   const on = req.body.on === '1';
   pcoSetAttendanceFields(on);
@@ -4519,7 +4560,7 @@ app.post('/admin/pco/attendance', requireAdmin, (req, res) => {
 });
 app.post('/admin/pco/attendance/push', requireAdmin, async (req, res) => {
   try {
-    const n = await pcoPushAttendance(200);
+    const n = await pcoPushFields(200);
     res.redirect('/admin/pco?msg=' + encodeURIComponent(n
       ? `Updated ${n} profile${n === 1 ? '' : 's'} in People.`
       : 'Everyone in People is already up to date.'));

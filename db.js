@@ -146,6 +146,21 @@ if (!rsCols.includes('cancelled')) {
 if (!appCols.includes('auto_renew')) {
   db.exec('ALTER TABLE applicants ADD COLUMN auto_renew INTEGER NOT NULL DEFAULT 1');
 }
+// waiver_at (2026-07-31): the PERMANENT record of when this member attested to the waiver.
+// waiver_ok alone answers "may they play"; it can't answer "when did they agree", and the
+// audit_log row (`waiver:ack`) is pruned to the newest 5000 entries, so it was never a durable
+// record. NULL = attested before this column existed (or not at all) — legacy rows are left NULL
+// on purpose: a backfilled date would be a fabricated attestation.
+if (!appCols.includes('waiver_at')) {
+  db.exec('ALTER TABLE applicants ADD COLUMN waiver_at TEXT');
+}
+// waiver_verified_at (2026-07-31): set only when the attestation was MATCHED against the church's
+// own waiver system of record (a Planning Center form submission). waiver_at answers "when did
+// they say they signed"; this answers "when did we confirm they actually did". Two columns because
+// they are two different facts — collapsing them would let a self-report masquerade as proof.
+if (!appCols.includes('waiver_verified_at')) {
+  db.exec('ALTER TABLE applicants ADD COLUMN waiver_verified_at TEXT');
+}
 // dob (2026-07): date of birth ('YYYY-MM-DD'), captured at signup/invite. Drives the safeguarding
 // rule that a known minor (<18) can't use 1:1 direct messages. Nullable — legacy members have none
 // (treated as unknown/not-a-minor until they add it in their profile).

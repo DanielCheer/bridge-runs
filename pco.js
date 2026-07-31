@@ -276,7 +276,10 @@ export async function pcoTick() {
   try {
     await drainOutbox();
     await reconcileScan();
-    await pcoPushAttendance(5);   // slow drain: any attendance backlog self-heals across ticks
+    // Slow drain: any custom-field backlog self-heals across ticks. This is also what makes a
+    // waiver confirmation reach PCO within a minute — no hook on the waiver route needed, because
+    // the signature diff notices the change on its own.
+    await pcoPushFields(5);
   } catch (e) {
     if (!(e instanceof PcoAuthError) && !(e instanceof PcoRateError))
       console.error('[pco] tick failed:', e.message);
@@ -358,22 +361,42 @@ export async function pcoCreateBridgeOnly() {
   return { created, linked };
 }
 
-// ---------- Phase 2: attendance → People custom fields ----------
-// The church's own reporting surface: after every run, each player's PCO People profile carries
-// their YA-Sports numbers as REAL custom fields, so staff can filter Lists ("volleyball players
-// with 5+ games"), fire Workflows, and pull reports inside Planning Center. Custom fields hold a
-// CURRENT VALUE (a scoreboard, not a per-date ledger) — the per-date history stays in Bridge,
-// because PCO accepts attendance from nobody (see the Check-Ins wall). Opt-in per church via the
-// pco_attendance_fields toggle; a field definition is created once, then its id is cached.
-const FIELD_DEFS = [
+// ---------- Phase 2: Bridge facts → People custom fields ----------
+// The church's own reporting surface inside Planning Center: real custom fields (not free-text
+// notes), so staff can filter Lists, fire Workflows and pull reports. Custom fields hold a CURRENT
+// VALUE — a scoreboard, not a per-date ledger — which is exactly right for the two things worth
+// publishing. Both sets are independently toggleable:
+//
+//   WAIVER (pco_waiver_fields) — "is this member cleared to play, and since when". The per-person
+//   fact the church actually needs in its own system: a List of "waiver on file = No" is a
+//   follow-up queue, and it stays useful no matter who runs the door.
+//
+//   ATTENDANCE (pco_attendance_fields) — the games-played scoreboard. Worth publishing only while
+//   Bridge is the attendance system of record. In the Check-Ins hybrid the station's taps ARE the
+//   attendance record inside PCO natively, so this set becomes redundant bookkeeping — leave it
+//   off there and let the waiver fields have the space.
+const WAIVER_FIELDS = [
+  { key: 'waiver', name: 'YA Sports — waiver on file', type: 'string' },   // 'Yes' / 'No' — filterable in Lists
+  { key: 'waiverDate', name: 'YA Sports — waiver confirmed', type: 'date' },
+];
+const ATT_FIELDS = [
   { key: 'games', name: 'YA Sports — games attended', type: 'number' },
   { key: 'last', name: 'YA Sports — last attended', type: 'date' },
   { key: 'sports', name: 'YA Sports — sports played', type: 'string' },
 ];
+// Which field sets the church has switched on (order fixed so cached ids stay stable).
+function enabledFieldDefs() {
+  return [
+    ...(getSetting('pco_waiver_fields') === '1' ? WAIVER_FIELDS : []),
+    ...(getSetting('pco_attendance_fields') === '1' ? ATT_FIELDS : []),
+  ];
+}
 const stmtAttRows = db.prepare(
   'SELECT program_id, COUNT(*) n, MAX(run_date) last FROM attendance WHERE email = ? GROUP BY program_id');
+// pco_att_sig holds the signature of the LAST PUSHED field values (all sets, not just attendance —
+// the column predates the waiver set and is reused rather than migrated).
 const stmtAttCandidates = db.prepare(
-  `SELECT email, pco_id, pco_att_sig FROM applicants
+  `SELECT email, pco_id, pco_att_sig, waiver_ok, waiver_at, waiver_verified_at FROM applicants
    WHERE pco_id IS NOT NULL AND ${SYNTHETIC} ORDER BY id`);
 const stmtSetAttSig = db.prepare('UPDATE applicants SET pco_att_sig = ? WHERE email = ?');
 
@@ -382,21 +405,39 @@ const stmtSetAttSig = db.prepare('UPDATE applicants SET pco_att_sig = ? WHERE em
 let PROGRAM_LABELS = { 1: 'Basketball', 2: 'Pickleball', 3: 'Volleyball' };
 export function pcoSetProgramLabels(map) { if (map && Object.keys(map).length) PROGRAM_LABELS = map; }
 
-// One person's scoreboard, plus the signature that decides whether a push is needed at all.
-function attendanceFieldsFor(email) {
-  const rows = stmtAttRows.all(email).filter(r => Number(r.program_id) !== 90);   // demo program never counts
-  const games = rows.reduce((n, r) => n + r.n, 0);
-  const last = rows.reduce((m, r) => (r.last > m ? r.last : m), '');
-  const sports = rows.filter(r => r.n > 0).map(r => PROGRAM_LABELS[r.program_id] || `Program ${r.program_id}`).sort().join(', ');
-  return { values: { games: String(games), last, sports }, sig: `${games}|${last}|${sports}` };
+// One person's publishable facts + the signature that decides whether a push is needed at all.
+// Only ENABLED sets contribute, so turning a set off stops rewriting those values (the last
+// values stay in PCO — the church's data, not ours to blank) and turning one on pushes everyone.
+function profileFieldsFor(row) {
+  const values = {}; const sig = [];
+  if (getSetting('pco_waiver_fields') === '1') {
+    // Three distinct states, because "verified against the church's own waiver records" and "the
+    // member told us they signed" are not the same claim and a church record shouldn't blur them.
+    values.waiver = !row.waiver_ok ? 'No'
+      : row.waiver_verified_at ? 'Yes (verified)' : 'Yes (self-reported)';
+    // Only a REAL recorded date is published — a legacy member cleared before dates were kept
+    // publishes the Yes without inventing a date. Verification date wins when present.
+    const d = row.waiver_verified_at || row.waiver_at;
+    values.waiverDate = row.waiver_ok && d ? String(d).slice(0, 10) : '';
+    sig.push(`w:${values.waiver}:${values.waiverDate}`);
+  }
+  if (getSetting('pco_attendance_fields') === '1') {
+    const rows = stmtAttRows.all(row.email).filter(r => Number(r.program_id) !== 90);   // demo never counts
+    const games = rows.reduce((n, r) => n + r.n, 0);
+    const last = rows.reduce((m, r) => (r.last > m ? r.last : m), '');
+    const sports = rows.filter(r => r.n > 0).map(r => PROGRAM_LABELS[r.program_id] || `Program ${r.program_id}`).sort().join(', ');
+    Object.assign(values, { games: String(games), last, sports });
+    sig.push(`a:${games}|${last}|${sports}`);
+  }
+  return { values, sig: sig.join('||') };
 }
 
 // Ensure the three field definitions exist in the church's People account; cache their ids.
 // PCO allows creating definitions via the API, so setup is automatic — but if a data_type is
 // rejected we retry as plain text rather than leaving the church with a half-built sync.
-async function ensureFieldDefs() {
+async function ensureFieldDefs(defs) {
   const cached = JSON.parse(getSetting('pco_field_ids') || '{}');
-  if (FIELD_DEFS.every(f => cached[f.key])) return cached;
+  if (defs.every(f => cached[f.key])) return cached;
   const existing = new Map();
   await (async () => {
     let path = '/people/v2/field_definitions?per_page=100';
@@ -410,7 +451,7 @@ async function ensureFieldDefs() {
     }
   })();
   const ids = { ...cached };
-  for (const f of FIELD_DEFS) {
+  for (const f of defs) {
     if (ids[f.key]) continue;
     const hit = existing.get(f.name);
     if (hit) { ids[f.key] = hit; continue; }
@@ -432,15 +473,15 @@ async function ensureFieldDefs() {
   return ids;
 }
 
-// Write one person's three values, PATCHing an existing datum or POSTing a new one.
-async function pushOnePerson(pcoId, ids, values) {
+// Write one person's values, PATCHing an existing datum or POSTing a new one.
+async function pushOnePerson(pcoId, ids, values, defs) {
   const cur = await pcoFetch(`/people/v2/people/${pcoId}/field_data?per_page=100`);
   const byDef = new Map();
   for (const d of cur.data || []) {
     const defId = d.relationships?.field_definition?.data?.id || d.attributes?.field_definition_id;
     if (defId) byDef.set(String(defId), d.id);
   }
-  for (const f of FIELD_DEFS) {
+  for (const f of defs) {
     const defId = ids[f.key], value = values[f.key];
     if (!defId || value === '' || value == null) continue;   // never write a blank over a real value
     const have = byDef.get(String(defId));
@@ -456,37 +497,85 @@ async function pushOnePerson(pcoId, ids, values) {
 // Push up to `limit` people whose scoreboard CHANGED since their last push. Returns how many were
 // written. Called from the weekly rollover (all of that night's players), the 60s tick (a slow
 // drain so any backlog self-heals), and the admin "Push attendance now" button.
-export async function pcoPushAttendance(limit = 25) {
-  if (!pcoConnected() || getSetting('pco_attendance_fields') !== '1') return 0;
-  const ids = await ensureFieldDefs();
+export async function pcoPushFields(limit = 25) {
+  const defs = enabledFieldDefs();
+  if (!pcoConnected() || !defs.length) return 0;
+  const ids = await ensureFieldDefs(defs);
   let pushed = 0;
   for (const m of stmtAttCandidates.all()) {
     if (pushed >= limit) break;
-    const { values, sig } = attendanceFieldsFor(m.email);
-    if (sig === (m.pco_att_sig || '') || sig === '0||') continue;   // unchanged, or never played
-    await pushOnePerson(m.pco_id, ids, values);
+    const { values, sig } = profileFieldsFor(m);
+    if (!sig || sig === (m.pco_att_sig || '')) continue;             // nothing enabled, or unchanged
+    await pushOnePerson(m.pco_id, ids, values, defs);
     stmtSetAttSig.run(sig, m.email);
     pushed++;
   }
   if (pushed) {
     setSetting('pco_att_last', new Date().toISOString());
-    audit('pco:attendance-fields-pushed', String(pushed));
+    audit('pco:profile-fields-pushed', String(pushed));
   }
   return pushed;
 }
-export function pcoSetAttendanceFields(on) {
-  setSetting('pco_attendance_fields', on ? '1' : '0');
-  if (!on) delSetting('pco_field_ids');   // re-discover on re-enable (definitions may have changed)
+// Turning a set on/off clears the cached definition ids (the next push re-discovers or creates the
+// now-relevant ones) and the per-person signatures, so every profile is rewritten with the new
+// shape rather than being skipped as "unchanged".
+function resetFieldPushState() {
+  delSetting('pco_field_ids');
+  db.prepare('UPDATE applicants SET pco_att_sig = NULL WHERE pco_att_sig IS NOT NULL').run();
 }
+export function pcoSetAttendanceFields(on) { setSetting('pco_attendance_fields', on ? '1' : '0'); resetFieldPushState(); }
+export function pcoSetWaiverFields(on) { setSetting('pco_waiver_fields', on ? '1' : '0'); resetFieldPushState(); }
 // How many linked members are waiting for a push (drives the admin console's count).
-export function pcoAttendancePending() {
+export function pcoFieldsPending() {
+  if (!enabledFieldDefs().length) return 0;
   let n = 0;
   for (const m of stmtAttCandidates.all()) {
-    const { sig } = attendanceFieldsFor(m.email);
-    if (sig !== (m.pco_att_sig || '') && sig !== '0||') n++;
+    const { sig } = profileFieldsFor(m);
+    if (sig && sig !== (m.pco_att_sig || '')) n++;
   }
   return n;
 }
+
+// ---------- Waiver verification against the church's own records ----------
+// Bridge's waiver flag is a member ATTESTATION ("I signed it"). If the church runs its waiver as a
+// Planning Center form, the submissions are readable through the API — so the attestation can be
+// matched against the system of record and become PROOF instead of a claim. Everything here is
+// read-only against PCO; the only writes are to Bridge's own columns.
+export async function pcoVerifyWaivers() {
+  const formId = getSetting('pco_waiver_form');
+  if (!formId) throw new Error('No waiver form configured');
+  // person id → earliest submission date (the date they actually signed).
+  const signed = new Map();
+  let unmatched = 0;
+  let path = `/people/v2/forms/${encodeURIComponent(formId)}/form_submissions?per_page=100`;
+  while (path) {
+    const json = await pcoFetch(path);
+    for (const s of json.data || []) {
+      const pid = s.relationships?.person?.data?.id;
+      const when = String(s.attributes?.created_at || '').slice(0, 10);
+      if (!pid) { unmatched++; continue; }           // an anonymous submission can't be matched to a member
+      const prev = signed.get(String(pid));
+      if (!prev || (when && when < prev)) signed.set(String(pid), when);
+    }
+    const next = json.links?.next;
+    path = next ? next.replace(/^https?:\/\/[^/]+/, '') : null;
+  }
+  const stampVerified = db.prepare(
+    `UPDATE applicants SET waiver_ok = 1,
+            waiver_at = COALESCE(waiver_at, ?),
+            waiver_verified_at = ? WHERE email = ?`);
+  let verified = 0; const missing = [];
+  for (const m of stmtAttCandidates.all()) {
+    const when = signed.get(String(m.pco_id));
+    if (when) { stampVerified.run(when, when, m.email); verified++; }
+    else missing.push(m.email);
+  }
+  const report = { at: new Date().toISOString(), verified, missing, submissions: signed.size, unmatched };
+  setSetting('pco_waiver_report', JSON.stringify(report));
+  audit(`pco:waivers-verified verified=${verified} missing=${missing.length} submissions=${signed.size}`, '');
+  return report;
+}
+export function pcoSetWaiverForm(id) { if (id) setSetting('pco_waiver_form', String(id)); else delSetting('pco_waiver_form'); }
 
 // ---------- Phase 2b: Check-Ins at the door (read-side) ----------
 // PCO Check-Ins is write-walled for everyone, but READING check-ins back is open — that's the
@@ -566,11 +655,21 @@ export function pcoStatus() {
     report: JSON.parse(getSetting('pco_report') || 'null'),
     outboxPending: stmtOutboxPending.get().n,
     linked: db.prepare('SELECT COUNT(*) n FROM applicants WHERE pco_id IS NOT NULL').get().n,
-    // Phase 2 (attendance custom fields)
+    // Phase 2 (People custom fields — waiver and/or attendance)
+    waiverFields: getSetting('pco_waiver_fields') === '1',
     attendanceFields: getSetting('pco_attendance_fields') === '1',
     attendanceLast: getSetting('pco_att_last') || '',
-    attendancePending: getSetting('pco_attendance_fields') === '1' ? pcoAttendancePending() : 0,
-    fieldNames: FIELD_DEFS.map(f => f.name),
+    attendancePending: pcoFieldsPending(),
+    waiverFieldNames: WAIVER_FIELDS.map(f => f.name),
+    attFieldNames: ATT_FIELDS.map(f => f.name),
+    // Waiver verification against the church's own form records
+    waiverForm: getSetting('pco_waiver_form') || '',
+    waiverReport: JSON.parse(getSetting('pco_waiver_report') || 'null'),
+    waiverCounts: db.prepare(
+      `SELECT SUM(CASE WHEN waiver_verified_at IS NOT NULL THEN 1 ELSE 0 END) verified,
+              SUM(CASE WHEN waiver_ok = 1 AND waiver_verified_at IS NULL THEN 1 ELSE 0 END) selfReported,
+              SUM(CASE WHEN COALESCE(waiver_ok,0) = 0 THEN 1 ELSE 0 END) none
+       FROM applicants WHERE status = 'approved' AND ${SYNTHETIC}`).get(),
     // Phase 2b surfaces
     doorMode: getSetting('pco_door_mode') === '1',
     passEnabled: getSetting('pco_pass_enabled') === '1',

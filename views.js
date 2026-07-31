@@ -4419,15 +4419,39 @@ export function pcoAdminPage({ s = {}, msg = '' }) {
         : '<b>📲 In-app confirm is ON.</b> Floor players confirm in the app by the cutoff or their spot is released. Turn on door mode when the PCO Check-Ins station runs the door — one tap there replaces the in-app step.'}</p>
       <form method="POST" action="/admin/pco/doormode" style="margin-top:10px"><input type="hidden" name="on" value="${s.doorMode ? '0' : '1'}"><button class="btn ${s.doorMode ? 'ghost ' : ''}sm" type="submit">${s.doorMode ? 'Switch back to in-app confirm' : 'Turn on door mode'}</button></form>
     </div>`;
+  const anyFields = s.waiverFields || s.attendanceFields;
   const attCard = s.connected ? `
-    <div class="subhead">Attendance on People profiles</div>
+    <div class="subhead">What we write onto People profiles</div>
     <div class="card rail">
-      <p class="tally-note" style="margin:0 0 10px">After every run, each player's Planning Center profile is updated with ${(s.fieldNames || []).map(n => `<b>${esc(n)}</b>`).join(' · ')} — real custom fields, so your staff can filter Lists, trigger Workflows and pull reports inside Planning Center. The fields are created automatically the first time. Per-run history stays in this app (Planning Center accepts attendance from no outside system).</p>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <form method="POST" action="/admin/pco/attendance" style="margin:0"><input type="hidden" name="on" value="${s.attendanceFields ? '0' : '1'}"><button class="btn ${s.attendanceFields ? 'ghost ' : ''}sm" type="submit">${s.attendanceFields ? '✓ On — turn off' : 'Turn on attendance fields'}</button></form>
-        ${s.attendanceFields ? `<form method="POST" action="/admin/pco/attendance/push" style="margin:0"><button class="btn ghost sm" type="submit">Push attendance now${s.attendancePending ? ` (${s.attendancePending})` : ''}</button></form>` : ''}
+      <p class="tally-note" style="margin:0 0 12px">Real custom fields (not notes), so your staff can filter Lists, trigger Workflows and pull reports inside Planning Center. Fields are created automatically the first time, then kept current.</p>
+
+      <p style="margin:0 0 6px"><b>Waiver status</b> — ${(s.waiverFieldNames || []).map(n => `<b>${esc(n)}</b>`).join(' · ')}</p>
+      <p class="tally-note" style="margin:0 0 8px">Who is cleared to play, and the date. Written as <b>Yes (verified)</b>, <b>Yes (self-reported)</b> or <b>No</b> — so a List of “No” is your follow-up queue and “self-reported” shows who hasn't been matched to a real waiver record yet. Useful no matter who runs the door.</p>
+      <form method="POST" action="/admin/pco/waiver" style="margin:0 0 14px"><input type="hidden" name="on" value="${s.waiverFields ? '0' : '1'}"><button class="btn ${s.waiverFields ? 'ghost ' : ''}sm" type="submit">${s.waiverFields ? '✓ On — turn off' : 'Turn on waiver fields'}</button></form>
+
+      <p style="margin:0 0 6px"><b>Attendance scoreboard</b> — ${(s.attFieldNames || []).map(n => `<b>${esc(n)}</b>`).join(' · ')}</p>
+      <p class="tally-note" style="margin:0 0 8px">Games played per person. Worth publishing while this app is your attendance record — if you run Check-Ins at the door, Planning Center already holds attendance natively and this set is redundant, so leave it off.</p>
+      <form method="POST" action="/admin/pco/attendance" style="margin:0"><input type="hidden" name="on" value="${s.attendanceFields ? '0' : '1'}"><button class="btn ${s.attendanceFields ? 'ghost ' : ''}sm" type="submit">${s.attendanceFields ? '✓ On — turn off' : 'Turn on attendance fields'}</button></form>
+
+      ${anyFields ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:14px">
+        <form method="POST" action="/admin/pco/attendance/push" style="margin:0"><button class="btn sm" type="submit">Update People now${s.attendancePending ? ` (${s.attendancePending})` : ''}</button></form>
       </div>
-      ${s.attendanceFields && s.attendanceLast ? `<p class="tally-note" style="margin:10px 0 0">Last written ${esc(String(s.attendanceLast).slice(0, 16).replace('T', ' '))}${s.attendancePending ? ` · ${s.attendancePending} profile${s.attendancePending === 1 ? '' : 's'} queued (they update automatically)` : ' · everyone up to date'}.</p>` : ''}
+      ${s.attendanceLast ? `<p class="tally-note" style="margin:10px 0 0">Last written ${esc(String(s.attendanceLast).slice(0, 16).replace('T', ' '))}${s.attendancePending ? ` · ${s.attendancePending} profile${s.attendancePending === 1 ? '' : 's'} queued (they update automatically)` : ' · everyone up to date'}.</p>` : ''}` : ''}
+      <p class="tally-note" style="margin:12px 0 0">Per-run history (who was on the floor which night, waitlist and offer history) always stays in this app — Planning Center accepts attendance from no outside system.</p>
+    </div>` : '';
+  const wc = s.waiverCounts || {}, wr = s.waiverReport;
+  const waiverVerifyCard = s.connected ? `
+    <div class="subhead">Waiver verification</div>
+    <div class="card rail">
+      <p class="tally-note" style="margin:0 0 10px">Right now this app records what members <b>tell</b> us — they tick “I've signed the waiver.” If your waiver is a <b>Planning Center form</b>, we can read its submissions and confirm it against your own records, so “signed” stops being a claim. Read-only: nothing is written back to your form.</p>
+      <p style="margin:0 0 10px">Approved members: <b>${wc.verified || 0}</b> verified · <b>${wc.selfReported || 0}</b> self-reported · <b>${wc.none || 0}</b> no waiver.</p>
+      <form method="POST" action="/admin/pco/waiver/form" class="editrow" style="margin:0 0 8px">
+        <label style="flex:1">Waiver form ID<input name="form_id" value="${esc(s.waiverForm)}" inputmode="numeric" placeholder="the number in the form's URL"></label>
+        <button class="btn ghost sm" type="submit">Save</button>
+      </form>
+      ${s.waiverForm ? `<form method="POST" action="/admin/pco/waiver/verify" style="margin:0"><button class="btn sm" type="submit">Verify waivers against the form</button></form>` : ''}
+      ${wr ? `<p class="tally-note" style="margin:10px 0 0">Last check ${esc(String(wr.at).slice(0, 16).replace('T', ' '))}: matched <b>${wr.verified}</b> · ${wr.missing.length} member${wr.missing.length === 1 ? '' : 's'} with no submission${wr.unmatched ? ` · ${wr.unmatched} submission${wr.unmatched === 1 ? '' : 's'} not linked to a person` : ''}.${wr.missing.length ? ` Not found: ${wr.missing.slice(0, 12).map(esc).join(', ')}${wr.missing.length > 12 ? '…' : ''}` : ''}</p>` : ''}
+      <p class="tally-note" style="margin:10px 0 0">If the waiver lives somewhere else (a Google Form, paper), verification stays manual — tell me where it lives and I'll wire that source in the same way.</p>
     </div>` : '';
   const cr = s.checkinsReport;
   const checkinsCard = s.connected ? `
@@ -4466,6 +4490,7 @@ export function pcoAdminPage({ s = {}, msg = '' }) {
     ${connectForm}
     ${reportCard}
     ${attCard}
+    ${waiverVerifyCard}
     ${checkinsCard}
     ${passesCard}
     <div class="foot" style="margin-top:24px"><a href="/admin/people">‹ Back to People &amp; invites</a></div>
@@ -4680,7 +4705,7 @@ export function bannerPage({ err = '', bannerVer = '0', action = '/admin/banner'
 export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = '', invites = [], newInviteLink = '', msg = '', ann = null, dmUnread = 0, groupUnread = 0, groupMention = 0 }) {
   const pill = (s) => `<span class="pill ${s}">${s}</span>`;
   const rows = people.map(a => `<details class="arow"${q ? ' open' : ''}>
-    <summary><span class="an">${esc(a.full_name)}${a.is_team ? ' <span class="tag team">◆</span>' : ''}${a.is_regular ? ' <span class="tag reg">★</span>' : ''}${a.suspended ? ' <span class="tag susp">⊘ Suspended</span>' : ''}</span> ${pill(a.status)}</summary>
+    <summary><span class="an">${esc(a.full_name)}${a.is_team ? ' <span class="tag team">◆</span>' : ''}${a.is_regular ? ' <span class="tag reg">★</span>' : ''}${a.suspended ? ' <span class="tag susp">⊘ Suspended</span>' : ''}${a.status === 'approved' && !a.waiver_ok ? ' <span class="tag susp">⚠ No waiver</span>' : ''}</span> ${pill(a.status)}</summary>
     <form method="POST" action="/admin/people/edit" class="editrow swapform" style="margin-top:12px">
       <input type="hidden" name="id" value="${a.id}">
       <label>Name<input name="full_name" value="${esc(a.full_name)}"></label>
@@ -4691,6 +4716,9 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
         <button class="btn sm" type="submit">Save</button>
       </div>
     </form>
+    <p class="tally-note" style="margin:6px 0 0">Waiver: ${a.waiver_ok
+      ? `<b>on file</b>${a.waiver_at ? ` — confirmed ${esc(String(a.waiver_at).slice(0, 10))}` : ' — date not recorded (confirmed before dates were kept)'}`
+      : '<b>not on file</b> — they can’t join a run until they confirm it'}</p>
     ${a.suspended
       ? `<form method="POST" action="/admin/people/suspend" class="swapform" style="margin:6px 0 0">
            <input type="hidden" name="id" value="${a.id}"><input type="hidden" name="on" value="0">
