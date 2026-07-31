@@ -21,6 +21,7 @@ const RETRY_BASE_MS = Number(process.env.PCO_RETRY_BASE_MS || 60000);
 const PACE_MS = process.env.PCO_PACE_MS == null ? 250 : Number(process.env.PCO_PACE_MS);
 let lastCallAt = 0;
 const MAX_ATTEMPTS = 5;      // then fail-loud: close the row + audit (never silent)
+const LINK_GRACE_ATTEMPTS = 60;   // ~1h of ticks for the reconcile scan to link before a patch dead-letters
 const SCAN_BATCH = 10;       // unlinked members processed per tick — polite pacing, self-healing
 // Synthetic identities that must NEVER reach the church directory.
 const SYNTHETIC = "email NOT LIKE '%@guest.local' AND email NOT LIKE '%@demo.local'";
@@ -75,9 +76,13 @@ class PcoAuthError extends Error {}        // the stored credential is dead → 
 class PcoRateError extends Error {}        // 429 → a global backoff window is armed
 class PcoPermissionError extends Error {}  // 403: the credential is FINE but lacks this product/record
 class PcoTransientError extends Error {}   // 5xx / network: their side or the wire — retry later
-// Anything here must NOT consume an outbox row's retry attempts: the row is fine, the world isn't.
+// Anything here must NOT consume an outbox row's retry attempts or a sweep's per-person skip
+// list: the row/person is fine, the CONDITION is global (dead credential, rate limit, outage,
+// or a product-wide permission gap — a 403 on Check-Ins fails for every member identically, so
+// skipping people one by one would just convert it into a silently empty report).
 const isRetryable = (e) => e instanceof PcoAuthError || e instanceof PcoRateError
-  || e instanceof PcoTransientError || e instanceof TypeError;   // fetch throws TypeError on network failure
+  || e instanceof PcoTransientError || e instanceof PcoPermissionError
+  || e instanceof TypeError;   // fetch throws TypeError on network failure
 
 // Mark the connection unusable until an admin reconnects. Audited once per transition, never per
 // tick, so a broken connection is loud in the log exactly once.
@@ -142,6 +147,16 @@ async function oauthTokenRequest(body, where) {
 // dead, and (if PCO invalidates the token family on reuse) really does kill the grant. Everyone
 // awaits the SAME request instead, so a rotation can never race itself.
 let refreshInFlight = null;
+// Sweep mutex: the 60s tick, the weekly rollover, and every admin button can run multi-request
+// sweeps (field push, initial link, create-bridge-only). Two overlapping first-enable pushes both
+// see an empty pco_field_ids cache and both CREATE definitions → the church's People account grows
+// duplicate "YA Sports — …" fields. All sweeps queue through one chain instead.
+let sweepChain = Promise.resolve();
+function withSweepLock(fn) {
+  const run = sweepChain.then(fn, fn);
+  sweepChain = run.catch(() => {});   // the chain itself never rejects; callers still see the error
+  return run;
+}
 function refreshAccessToken(where) {
   if (!refreshInFlight) {
     refreshInFlight = oauthTokenRequest(
@@ -255,12 +270,15 @@ const joinName = (a) => [a.first_name, a.last_name].filter(Boolean).join(' ').tr
 // ---------- outbound: match / create / patch ----------
 // Find the PCO person for one email (exact address match after a name-or-email search).
 async function matchOne(email) {
-  const q = `/people/v2/people?where[search_name_or_email]=${encodeURIComponent(email)}&include=emails&per_page=25`;
-  const json = await pcoFetch(q);
-  const inc = indexIncluded(json);
-  const hits = (json.data || []).filter(p => emailsOf(p, inc).includes(email.toLowerCase()));
+  // Paginate the whole search: name_or_email ranks fuzzy NAME hits too, so with >1 page of
+  // "Grace …" people the exact grace@… email match can sit on page 2 — a first-page-only read
+  // declared the member unmatched, and autocreate would then mint a DUPLICATE person.
+  const hits = [];
+  await eachPerson(
+    `/people/v2/people?where[search_name_or_email]=${encodeURIComponent(email)}&include=emails&per_page=100`,
+    (p, inc) => { if (emailsOf(p, inc).includes(email.toLowerCase())) hits.push(p.id); });
   if (hits.length > 1) audit('pco:duplicate-emails-in-pco — linked first, review the rest', email);
-  return hits[0]?.id || null;
+  return hits[0] || null;
 }
 
 // Create a Person (+ email, + phone) in PCO for a Bridge applicant. Match-before-create is the
@@ -300,6 +318,10 @@ export function pcoQueuePatch(email, { full_name, phone } = {}) {
   if (!pcoConnected()) return;
   const a = stmtByEmail.get(email);
   if (!a || /@(guest|demo)\.local$/.test(email)) return;
+  // Only approved members belong in the church directory — the reconcile scan links only
+  // status='approved', so a patch for a pending/rejected applicant could never find a pco_id and
+  // would sit in the drain queue forever, head-of-line-blocking real members' edits.
+  if (a.status !== 'approved') return;
   stmtOutboxAdd.run('patch', email, JSON.stringify({ full_name, phone }));
 }
 
@@ -309,8 +331,16 @@ async function drainOutbox() {
       const a = stmtByEmail.get(row.email);
       if (!a) { stmtOutboxDead.run('applicant gone (deleted before sync)', row.id); continue; }
       if (!a.pco_id) {
-        // Not linked yet — the reconcile scan owns linking; requeue this patch behind it.
-        stmtOutboxRetry.run('awaiting pco_id link', Date.now() + RETRY_BASE_MS, row.id);
+        // Not linked yet — the reconcile scan owns linking; requeue this patch behind it, but only
+        // for a bounded grace window. A member who never links (autocreate off, absent from PCO)
+        // must eventually dead-letter, or their eternal rows occupy the drain's LIMIT-10 slots and
+        // freeze every later member's real edits behind them.
+        if (row.attempts + 1 >= LINK_GRACE_ATTEMPTS) {
+          stmtOutboxDead.run('never linked to a PCO person (autocreate off or not in People)', row.id);
+          audit('pco:outbox-dead — member never linked; edit will sync on next change after linking', row.email);
+        } else {
+          stmtOutboxRetry.run('awaiting pco_id link', Date.now() + RETRY_BASE_MS, row.id);
+        }
         continue;
       }
       const p = JSON.parse(row.payload || '{}');
@@ -389,9 +419,12 @@ export function pcoHandleWebhook(rawBody, signature) {
   const secret = getSetting('pco_webhook_secret');
   if (!secret) return { ok: false, code: 503 };
   const expect = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-  const got = String(signature || '');
-  if (got.length !== expect.length ||
-      !crypto.timingSafeEqual(Buffer.from(got), Buffer.from(expect))) return { ok: false, code: 401 };
+  // Compare as BUFFERS with byte lengths: a header containing a high-byte char has a JS string
+  // length that differs from its UTF-8 byte length, and timingSafeEqual THROWS on unequal buffers
+  // — turning a forged header into a 500 instead of a clean 401.
+  const gotBuf = Buffer.from(String(signature || ''), 'utf8');
+  const expectBuf = Buffer.from(expect, 'utf8');
+  if (gotBuf.length !== expectBuf.length || !crypto.timingSafeEqual(gotBuf, expectBuf)) return { ok: false, code: 401 };
   let deliveries;
   try { deliveries = JSON.parse(rawBody.toString('utf8')).data || []; }
   catch { return { ok: false, code: 400 }; }
@@ -439,7 +472,8 @@ export async function pcoConnect(appId, secret, autocreate, webhookSecret) {
     // auth:'pat' — test the credential we were JUST given, not an OAuth grant that may also exist.
     const root = await pcoFetch('/people/v2?per_page=1', { auth: 'pat' });   // cheapest authenticated call; names the org
     const org = root?.data?.attributes?.name || root?.meta?.parent?.name || 'Connected';
-    setSetting('pco_org', org);
+    applyOrgIdentity(root, org);   // same cross-org invalidation as the OAuth path — a PAT for a
+                                   // DIFFERENT org must not inherit cached field ids / sync marks
     if (!getSetting('pco_since')) setSetting('pco_since', new Date().toISOString());
     audit('pco:connected', org);
     return { ok: true, org };
@@ -448,6 +482,24 @@ export async function pcoConnect(appId, secret, autocreate, webhookSecret) {
     return { ok: false, error: e.message };
   }
 }
+// Record which ORGANIZATION this connection belongs to, and invalidate everything keyed to a
+// previous one when it changes: cached custom-field definition ids, the delta-poll high-water
+// mark, form/event ids, reports, and the per-person push signatures. Pushing with a foreign org's
+// field ids would write garbage into a stranger's records. Shared by BOTH connect paths (PAT and
+// OAuth) — the invalidation living in only one of them was exactly the kind of asymmetry that rots.
+function applyOrgIdentity(root, orgName) {
+  const orgId = root?.data?.id ? String(root.data.id) : '';
+  const priorOrg = getSetting('pco_org_id') || '';
+  if (orgId && priorOrg && orgId !== priorOrg) {
+    for (const k of ['pco_field_ids', 'pco_since', 'pco_waiver_form', 'pco_checkins_event',
+                     'pco_report', 'pco_waiver_report', 'pco_pass_report', 'pco_checkins_report']) delSetting(k);
+    db.prepare('UPDATE applicants SET pco_att_sig = NULL WHERE pco_att_sig IS NOT NULL').run();
+    audit('pco:org-changed — cached field ids, sync marks and reports cleared; existing person links kept for review', `${priorOrg}→${orgId}`);
+  }
+  if (orgId) setSetting('pco_org_id', orgId);
+  setSetting('pco_org', orgName);
+}
+
 export function pcoDisconnect() {
   for (const k of ['pco_app_id', 'pco_secret', 'pco_org', 'pco_error', 'pco_backoff_until',
                    'pco_report', 'pco_autocreate', 'pco_webhook_secret',
@@ -512,19 +564,7 @@ export async function pcoOAuthCallback(code, state) {
     delSetting('pco_error'); delSetting('pco_backoff_until');
     const root = await pcoFetch('/people/v2?per_page=1');
     const org = root?.data?.attributes?.name || 'Connected';
-    // Reconnecting a DIFFERENT organization invalidates everything keyed to the old one: cached
-    // custom-field definition ids, the delta-poll high-water mark, the form/event ids. Pushing
-    // against a foreign org's field ids would write garbage into a stranger's records.
-    const orgId = root?.data?.id ? String(root.data.id) : '';
-    const priorOrg = getSetting('pco_org_id') || '';
-    if (orgId && priorOrg && orgId !== priorOrg) {
-      for (const k of ['pco_field_ids', 'pco_since', 'pco_waiver_form', 'pco_checkins_event',
-                       'pco_report', 'pco_waiver_report', 'pco_pass_report', 'pco_checkins_report']) delSetting(k);
-      db.prepare('UPDATE applicants SET pco_att_sig = NULL WHERE pco_att_sig IS NOT NULL').run();
-      audit('pco:org-changed — cached field ids, sync marks and reports cleared; existing person links kept for review', `${priorOrg}→${orgId}`);
-    }
-    if (orgId) setSetting('pco_org_id', orgId);
-    setSetting('pco_org', org);
+    applyOrgIdentity(root, org);
     if (!getSetting('pco_since')) setSetting('pco_since', new Date().toISOString());
     audit('pco:connected-oauth', org);
     return { ok: true, org };
@@ -541,7 +581,8 @@ export function pcoSetAutocreate(on) { setSetting('pco_autocreate', on ? '1' : '
 // Initial link: pull the WHOLE People list once, match every approved member by email, and store
 // a report {matched, bridgeOnly[], pcoOnly, dupes[]} for the admin screen. Idempotent — re-running
 // refreshes the report and links anyone new.
-export async function pcoRunInitialLink() {
+export function pcoRunInitialLink() { return withSweepLock(runInitialLinkInner); }
+async function runInitialLinkInner() {
   const byEmail = new Map();   // email → pco person id (first wins; dupes flagged)
   const dupes = [];
   let pcoCount = 0;
@@ -572,7 +613,8 @@ export async function pcoRunInitialLink() {
 
 // "Create the Bridge-only members in PCO" button — walks the stored report list with
 // match-before-create (someone may have been added in PCO since the report was built).
-export async function pcoCreateBridgeOnly() {
+export function pcoCreateBridgeOnly() { return withSweepLock(createBridgeOnlyInner); }
+async function createBridgeOnlyInner() {
   const report = JSON.parse(getSetting('pco_report') || '{}');
   let created = 0, linked = 0;
   for (const email of report.bridgeOnly || []) {
@@ -723,24 +765,38 @@ async function pushOnePerson(pcoId, ids, values, defs) {
 // Push up to `limit` people whose scoreboard CHANGED since their last push. Returns how many were
 // written. Called from the weekly rollover (all of that night's players), the 60s tick (a slow
 // drain so any backlog self-heals), and the admin "Push attendance now" button.
+// Per-boot skip list for people whose PCO record errored non-retryably (e.g. destroyed in PCO —
+// the webhook deliberately keeps the link and only audits). Without it, ORDER BY id retries the
+// same dead row FIRST on every tick and everyone behind it never syncs again. In-memory on
+// purpose: a restart retries once, so a fixed record heals without any manual reset.
+const fieldSkip = new Set();
 export async function pcoPushFields(limit = 25) {
   const defs = enabledFieldDefs();
   if (!pcoConnected() || !defs.length) return 0;
-  const ids = await ensureFieldDefs(defs);
-  let pushed = 0;
-  for (const m of stmtAttCandidates.all()) {
-    if (pushed >= limit) break;
-    const { values, sig } = profileFieldsFor(m);
-    if (!sig || sig === (m.pco_att_sig || '')) continue;             // nothing enabled, or unchanged
-    await pushOnePerson(m.pco_id, ids, values, defs);
-    stmtSetAttSig.run(sig, m.email);
-    pushed++;
-  }
-  if (pushed) {
-    setSetting('pco_att_last', new Date().toISOString());
-    audit('pco:profile-fields-pushed', String(pushed));
-  }
-  return pushed;
+  return withSweepLock(async () => {
+    const ids = await ensureFieldDefs(defs);
+    let pushed = 0;
+    for (const m of stmtAttCandidates.all()) {
+      if (pushed >= limit) break;
+      if (fieldSkip.has(m.email)) continue;
+      const { values, sig } = profileFieldsFor(m);
+      if (!sig || sig === (m.pco_att_sig || '')) continue;           // nothing enabled, or unchanged
+      try {
+        await pushOnePerson(m.pco_id, ids, values, defs);
+        stmtSetAttSig.run(sig, m.email);
+        pushed++;
+      } catch (e) {
+        if (isRetryable(e)) throw e;   // global condition — stop the sweep, retry next tick
+        fieldSkip.add(m.email);        // THIS person's record is the problem — never block the rest
+        audit(`pco:field-push-skipped — ${e.message.slice(0, 100)}`, m.email);
+      }
+    }
+    if (pushed) {
+      setSetting('pco_att_last', new Date().toISOString());
+      audit('pco:profile-fields-pushed', String(pushed));
+    }
+    return pushed;
+  });
 }
 // Turning a set on/off clears the cached definition ids (the next push re-discovers or creates the
 // now-relevant ones) and the per-person signatures, so every profile is rewritten with the new
@@ -767,7 +823,8 @@ export function pcoFieldsPending() {
 // Planning Center form, the submissions are readable through the API — so the attestation can be
 // matched against the system of record and become PROOF instead of a claim. Everything here is
 // read-only against PCO; the only writes are to Bridge's own columns.
-export async function pcoVerifyWaivers() {
+export function pcoVerifyWaivers() { return withSweepLock(verifyWaiversInner); }
+async function verifyWaiversInner() {
   const formId = getSetting('pco_waiver_form');
   if (!formId) throw new Error('No waiver form configured');
   // person id → earliest submission date (the date they actually signed).
@@ -812,15 +869,31 @@ export function pcoSetWaiverForm(id) { if (id) setSetting('pco_waiver_form', Str
 //   ok      — signed up in Bridge AND tapped at the station
 //   noShows — on the Bridge roster, never tapped (guests exempt: no PCO person to tap as)
 //   walkIns — tapped at the station with no Bridge signup (named if the person is linked)
+// The roster provider is injected by server.js: "who counts as expected on the floor" is program
+// logic (partitions, caps, offer windows) that lives there. Without it, this module's own fallback
+// query would count WAITLISTERS — who correctly stayed home — as no-shows in a church-visible report.
+let rosterProvider = null;
+export function pcoSetRosterProvider(fn) { rosterProvider = typeof fn === 'function' ? fn : null; }
+
 export async function pcoReconcile(dateStr) {
   const eventId = getSetting('pco_checkins_event');
   if (!eventId) throw new Error('No Check-Ins event configured');
-  const tapped = new Set();   // pco person ids that tapped that day
+  // The tap window is the LOCAL day, converted to UTC bounds. PCO timestamps are UTC; a naive
+  // `${date}T00:00:00Z` window ends at 8 PM Eastern — a basketball run's 8:30 PM taps would all
+  // fall on the "next day" and the report would confidently declare the whole floor a no-show.
+  // Server local time == the church's local time (enforced by the hosting runbook's TZ step).
+  const dayStart = new Date(dateStr + 'T00:00:00');
+  if (isNaN(dayStart.getTime())) throw new Error('Bad reconcile date');
+  const gte = dayStart.toISOString();
+  const lte = new Date(dayStart.getTime() + 24 * 3600 * 1000 - 1000).toISOString();
+  const tapped = new Set();   // pco person ids that tapped that (local) day
   await eachPerson(
     `/check-ins/v2/events/${encodeURIComponent(eventId)}/check_ins` +
-    `?where[created_at][gte]=${dateStr}T00:00:00Z&where[created_at][lte]=${dateStr}T23:59:59Z&per_page=100`,
+    `?where[created_at][gte]=${encodeURIComponent(gte)}&where[created_at][lte]=${encodeURIComponent(lte)}&per_page=100`,
     (c) => { const pid = c.relationships?.person?.data?.id; if (pid) tapped.add(String(pid)); });
-  const roster = db.prepare(
+  // Expected = FLOOR players of the programs that ran that date (per program partition), never
+  // waitlisters and never other programs sharing the date.
+  const roster = rosterProvider ? rosterProvider(dateStr) : db.prepare(
     `SELECT email, name FROM checkins WHERE run_date = ? AND ${SYNTHETIC}`).all(dateStr);
   const linkOf = new Map(db.prepare('SELECT email, pco_id FROM applicants WHERE pco_id IS NOT NULL').all()
     .map(r => [r.email, String(r.pco_id)]));
@@ -858,7 +931,15 @@ export async function pcoVerifyPasses(limit = 100) {
   const setCode = db.prepare('UPDATE applicants SET pco_pass_code = ? WHERE email = ?');
   let checked = 0;
   for (const m of todo.slice(0, limit)) {
-    const json = await pcoFetch(`/check-ins/v2/people/${m.pco_id}/passes`);
+    if (fieldSkip.has(m.email)) continue;   // same per-boot skip: one 404-ing person mustn't wedge the sweep
+    let json;
+    try { json = await pcoFetch(`/check-ins/v2/people/${m.pco_id}/passes`); }
+    catch (e) {
+      if (isRetryable(e)) throw e;
+      fieldSkip.add(m.email);
+      audit(`pco:pass-check-skipped — ${e.message.slice(0, 100)}`, m.email);
+      continue;
+    }
     const code = json.data?.[0]?.attributes?.code || null;
     if (code) setCode.run(code, m.email);
     checked++;

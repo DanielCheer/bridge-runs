@@ -18,6 +18,7 @@ import {
   pcoRunInitialLink, pcoCreateBridgeOnly, pcoQueuePatch, pcoHandleWebhook,
   pcoReconcile, pcoVerifyPasses, pcoBarcodeRows, pcoVerifyWaivers, pcoSetWaiverForm,
   pcoSaveOAuthApp, pcoOAuthStartUrl, pcoOAuthCallback, pcoOAuthConfigured, pcoSetNotifier, pcoFieldsPending,
+  pcoSetRosterProvider,
   pcoPushFields, pcoSetAttendanceFields, pcoSetWaiverFields, pcoSetProgramLabels,
 } from './pco.js';
 import webpush from 'web-push';
@@ -1601,8 +1602,10 @@ app.get('/status', requireLogin, (req, res) => {
 // captured once, in one place — the sign-up form, an invite claim, and the /waiver gate. Idempotent
 // (`waiver_at IS NULL`): re-confirming never rewrites the original attestation date, and a member
 // who was already cleared before this column existed keeps a NULL date rather than a forged one.
+// 'localtime': this is a DATE people read ("signed July 15"), and an attestation after 8 PM
+// Eastern stamped in UTC records the NEXT day — off-by-one on a quasi-legal record.
 const stmtStampWaiver = db.prepare(
-  "UPDATE applicants SET waiver_ok = 1, waiver_at = COALESCE(waiver_at, datetime('now')) WHERE email = ?");
+  "UPDATE applicants SET waiver_ok = 1, waiver_at = COALESCE(waiver_at, datetime('now','localtime')) WHERE email = ?");
 function stampWaiver(email) { if (email) stmtStampWaiver.run(String(email).toLowerCase()); }
 
 // One-time waiver gate — the join routes send a member here when waiver_ok is unset. They
@@ -4450,8 +4453,22 @@ app.post('/admin/programs/edit', requireAdmin, (req, res) => {
   if (PROGRAM_CODE_IDS.has(id)) return res.redirect('/admin/programs?msg=' + encodeURIComponent('Basketball, pickleball, volleyball and the demo are managed in code — they can be published or hidden here, not edited.'));
   const parsed = parseProgramForm(req.body, { existingSlug: row.slug });
   if (parsed.error) return res.redirect('/admin/programs?msg=' + encodeURIComponent(parsed.error));
-  db.prepare('UPDATE program SET name=?, sport=?, slug=?, approval=?, config=? WHERE id=?')
-    .run(parsed.name, parsed.slug, parsed.slug, parsed.approval, JSON.stringify(parsed.spec), id);
+  transact(() => {
+    db.prepare('UPDATE program SET name=?, sport=?, slug=?, approval=?, config=? WHERE id=?')
+      .run(parsed.name, parsed.slug, parsed.slug, parsed.approval, JSON.stringify(parsed.spec), id);
+    // A slug rename moves the program's ENTIRE app_settings namespace (run date, season start,
+    // scheduler markers, chat sequence — all keyed <slug>_*). Without this carry, the renamed
+    // program silently loses its run date and re-fires open/lock/sweep once, and the old rows
+    // leak forever.
+    if (parsed.slug !== row.slug) {
+      for (const suf of ['run_date', 'run_base', 'season_start', 'autoopen_done', 'autoping_done',
+                         'autolock_done', 'arassess_done', 'confirmsweep_done', 'chat_seq']) {
+        const v = getSetting(`${row.slug}_${suf}`);
+        if (v != null) { setSetting(`${parsed.slug}_${suf}`, v); }
+        delSetting(`${row.slug}_${suf}`);
+      }
+    }
+  });
   buildPrograms();
   // A slug change means new paths: mount the new ones (the old routes stay registered but their
   // program is gone from the registry, so they 404 through the normal gate — never a stale run).
@@ -4655,6 +4672,19 @@ app.post('/pco/webhook', express.raw({ type: '*/*', limit: '1mb' }), (req, res) 
 // (ping / sweep / button) reads this live through effectiveConfirmCutoff(). Flip, no restart.
 app.post('/admin/pco/doormode', requireAdmin, (req, res) => {
   setSetting('pco_door_mode', req.body.on === '1' ? '1' : '0');
+  // Turning door mode OFF mid-cycle re-arms the confirm machinery for the CURRENT run date —
+  // through the same marker-migration used by date moves and un-cancels. Without this, a flip
+  // after the cutoff (station broke at 5:30, cutoff was 4:30) lets the next 60s tick see an
+  // unstamped sweep marker and drop EVERY unconfirmed floor player, none of whom ever had a
+  // confirm button on screen while door mode was on. Past-cutoff → markers stamped (no late
+  // sweep, no late ping); before the cutoff → left armed so the normal flow resumes.
+  if (req.body.on !== '1') {
+    migrateConfirmMarkers(nextRunDate(), P(1).config.confirmCutoff, 'autoping_done', 'confirmsweep_done');
+    for (const p of PROGRAMS.values()) {
+      const k = p.config.keys;
+      if (k && k.confirmsweep) migrateConfirmMarkers(programRunDate(p.id), p.config.confirmCutoff, k.autoping, k.confirmsweep);
+    }
+  }
   audit(req.userEmail, 'admin', 'pco:doormode:' + (req.body.on === '1' ? 'on' : 'off'), '');
   res.redirect('/admin/pco?msg=' + encodeURIComponent(req.body.on === '1'
     ? 'Door mode ON — the ✓ I’m-coming step is hidden and the confirm sweep is off.'
@@ -4724,11 +4754,14 @@ app.post('/admin/people/waiver', requireAdmin, (req, res) => {
   // corrects a self-report's "when I ticked the box" timestamp (which is not a signing date at
   // all). No date given → whatever is on record stands. Either way the audit row carries the date,
   // so the correction is traceable.
+  // The audit row carries the PRIOR attestation date: an admin-supplied date OVERWRITES it, and
+  // without the before-value the correction's provenance vanishes once anyone asks "what changed".
+  const prior = db.prepare('SELECT waiver_at FROM applicants WHERE email = ?').get(a.email)?.waiver_at || 'none';
   db.prepare(`UPDATE applicants SET waiver_ok = 1,
                 waiver_at = COALESCE(?, waiver_at),
-                waiver_verified_at = datetime('now') WHERE email = ?`)
+                waiver_verified_at = datetime('now','localtime') WHERE email = ?`)
     .run(signedOn || null, a.email);
-  audit(req.userEmail, 'admin', 'people:waiver-verified' + (signedOn ? `:signed-${signedOn}` : ''), a.email);
+  audit(req.userEmail, 'admin', 'people:waiver-verified' + (signedOn ? `:signed-${signedOn}:was-${prior}` : ''), a.email);
   res.redirect('/admin/people?msg=' + encodeURIComponent(`${a.full_name}'s waiver is confirmed on file.`));
 });
 
@@ -6868,6 +6901,22 @@ app.listen(PORT, () => {
   // A paused PCO connection stops the keep-alive, and the refresh window is finite — so admins are
   // pushed the moment it breaks rather than discovering it on a screen weeks later.
   pcoSetNotifier((title, body) => sendPush(ADMINS, { title, body, url: '/admin/pco', tag: 'pcoauth' }));
+  // Reconcile roster: FLOOR players only, per program partition, demo excluded. Injected because
+  // "who counts as expected" is program logic — pco.js's own fallback would count waitlisters (who
+  // correctly stayed home) and other programs sharing the date as no-shows in a church-visible report.
+  pcoSetRosterProvider((rd) => {
+    const out = [];
+    for (const { p: pid } of db.prepare('SELECT DISTINCT program_id p FROM checkins WHERE run_date = ?').all(rd)) {
+      if (pid === 90 || !PROGRAMS.has(pid)) continue;
+      const part = pid === 1 ? partitionRun(rd) : partitionFor(pid, rd);
+      const floor = (P(pid).config.offerWindow ? part.floorReal : part.floor) || [];
+      for (const f of floor) {
+        const em = String(f.email || '').toLowerCase();
+        if (!/@(guest|demo)\.local$/.test(em)) out.push({ email: em, name: f.name || em });
+      }
+    }
+    return out;
+  });
   const pcoDailyRun = () => pcoDaily().catch(e => console.error(`[pco] daily sync FAILED: ${e.message}`));
   pcoDailyRun();
   setInterval(pcoDailyRun, 24 * 60 * 60 * 1000).unref();

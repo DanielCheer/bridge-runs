@@ -269,10 +269,16 @@ window.__geoCapture=function(){
     ring:(window.__geoRing||[]).slice(-40)
   };
   var body=JSON.stringify(payload);
-  var sent=false;
-  try{ sent=!!(navigator.sendBeacon&&navigator.sendBeacon('/debug/geo',new Blob([body],{type:'application/json'}))); }catch(e){}
-  if(!sent){ try{ fetch('/debug/geo',{method:'POST',headers:{'Content-Type':'application/json'},body:body,keepalive:true}); }catch(e){} }
-  // Confirmation overlay LAST — see the stale-paint note above.
+  // fetch (not sendBeacon): the overlay must only appear when the server CONFIRMED the store.
+  // sendBeacon can't report status, so a member's accidental long-press would have shown a
+  // "captured" box for a POST the admin gate rejected — a lie, and a mystery debug box for them.
+  fetch('/debug/geo',{method:'POST',headers:{'Content-Type':'application/json'},body:body,keepalive:true})
+    .then(function(res){ if(res.ok)window.__geoOverlay(payload); })
+    .catch(function(){});
+};
+window.__geoOverlay=function(payload){
+  var vv=window.visualViewport;
+  // Confirmation overlay drawn only post-2xx — see the stale-paint note above.
   var d=payload.derived||{}, o=document.createElement('div');
   o.setAttribute('style','position:fixed;left:8px;right:8px;bottom:8px;z-index:99999;background:#1b1b17;color:#fff;'
     +'font:12px/1.45 ui-monospace,Menlo,monospace;padding:10px 12px;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.4)');
@@ -4481,8 +4487,8 @@ export function pcoAdminPage({ s = {}, msg = '' }) {
         ${s.linked} member${s.linked === 1 ? '' : 's'} linked · ${s.outboxPending} pending write${s.outboxPending === 1 ? '' : 's'}.</p>
         ${s.error === 'auth' ? `<p style="color:#b3261e;margin:8px 0 0"><b>⚠ Planning Center rejected the connection — sync is paused.</b> ${s.authMode === 'oauth' ? 'Press <b>Re-authorize</b> below (the church may have revoked access).' : 'Reconnect below with a fresh token.'}</p>` : ''}
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-          <form method="POST" action="/admin/pco/link"><button class="btn sm" type="submit">Match People now</button></form>
-          <form method="POST" action="/admin/pco/poll"><button class="btn ghost sm" type="submit">Pull latest PCO edits</button></form>
+          <form method="POST" action="/admin/pco/link" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s)return false;b.dataset.s=1;b.disabled=true;b.textContent='Working…';"><button class="btn sm" type="submit">Match People now</button></form>
+          <form method="POST" action="/admin/pco/poll" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s)return false;b.dataset.s=1;b.disabled=true;b.textContent='Working…';"><button class="btn ghost sm" type="submit">Pull latest PCO edits</button></form>
           <form method="POST" action="/admin/pco/auto"><input type="hidden" name="on" value="${s.autocreate ? '0' : '1'}"><button class="btn ghost sm" type="submit">${s.autocreate ? '✓ Auto-add new members — turn off' : 'Auto-add new members — turn on'}</button></form>
           <form method="POST" action="/admin/pco/disconnect" onsubmit="return confirm('Disconnect Planning Center? Links are kept; syncing stops.')"><button class="btn ghost sm" type="submit">Disconnect</button></form>
         </div>
@@ -4530,7 +4536,7 @@ export function pcoAdminPage({ s = {}, msg = '' }) {
       ${(rep.bridgeOnly || []).length ? `
         <p class="tally-note" style="margin:10px 0 6px">Members not yet in the church directory:</p>
         <p style="margin:0;word-break:break-all">${rep.bridgeOnly.slice(0, 30).map(esc).join(' · ')}${rep.bridgeOnly.length > 30 ? ` · +${rep.bridgeOnly.length - 30} more` : ''}</p>
-        <form method="POST" action="/admin/pco/create" style="margin-top:10px"><button class="btn sm" type="submit">Add ${rep.bridgeOnly.length} to People</button></form>` : ''}
+        <form method="POST" action="/admin/pco/create" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s)return false;b.dataset.s=1;b.disabled=true;b.textContent='Working…';" style="margin-top:10px"><button class="btn sm" type="submit">Add ${rep.bridgeOnly.length} to People</button></form>` : ''}
       ${(rep.dupes || []).length ? `<p class="tally-note" style="margin:10px 0 0">⚠ Duplicate emails inside People (linked the first, review in PCO): ${rep.dupes.slice(0, 10).map(esc).join(', ')}</p>` : ''}
     </div>` : '';
   // ---- Phase 2b cards: door mode, Check-Ins reconciliation, door passes ----
@@ -4557,7 +4563,7 @@ export function pcoAdminPage({ s = {}, msg = '' }) {
       <form method="POST" action="/admin/pco/attendance" style="margin:0"><input type="hidden" name="on" value="${s.attendanceFields ? '0' : '1'}"><button class="btn ${s.attendanceFields ? 'ghost ' : ''}sm" type="submit">${s.attendanceFields ? '✓ On — turn off' : 'Turn on attendance fields'}</button></form>
 
       ${anyFields ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:14px">
-        <form method="POST" action="/admin/pco/attendance/push" style="margin:0"><button class="btn sm" type="submit">Update People now${s.attendancePending ? ` (${s.attendancePending})` : ''}</button></form>
+        <form method="POST" action="/admin/pco/attendance/push" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s)return false;b.dataset.s=1;b.disabled=true;b.textContent='Working…';" style="margin:0"><button class="btn sm" type="submit">Update People now${s.attendancePending ? ` (${s.attendancePending})` : ''}</button></form>
       </div>
       ${s.attendanceLast ? `<p class="tally-note" style="margin:10px 0 0">Last written ${esc(String(s.attendanceLast).slice(0, 16).replace('T', ' '))}${s.attendancePending ? ` · ${s.attendancePending} profile${s.attendancePending === 1 ? '' : 's'} queued (they update automatically)` : ' · everyone up to date'}.</p>` : ''}` : ''}
       <p class="tally-note" style="margin:12px 0 0">Per-run history (who was on the floor which night, waitlist and offer history) always stays in this app — Planning Center accepts attendance from no outside system.</p>
@@ -4572,7 +4578,7 @@ export function pcoAdminPage({ s = {}, msg = '' }) {
         <label style="flex:1">Waiver form ID<input name="form_id" value="${esc(s.waiverForm)}" inputmode="numeric" placeholder="the number in the form's URL"></label>
         <button class="btn ghost sm" type="submit">Save</button>
       </form>
-      ${s.waiverForm ? `<form method="POST" action="/admin/pco/waiver/verify" style="margin:0"><button class="btn sm" type="submit">Verify waivers against the form</button></form>` : ''}
+      ${s.waiverForm ? `<form method="POST" action="/admin/pco/waiver/verify" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s)return false;b.dataset.s=1;b.disabled=true;b.textContent='Working…';" style="margin:0"><button class="btn sm" type="submit">Verify waivers against the form</button></form>` : ''}
       ${wr ? `<p class="tally-note" style="margin:10px 0 0">Last check ${esc(String(wr.at).slice(0, 16).replace('T', ' '))}: matched <b>${wr.verified}</b> · ${wr.missing.length} member${wr.missing.length === 1 ? '' : 's'} with no submission${wr.unmatched ? ` · ${wr.unmatched} submission${wr.unmatched === 1 ? '' : 's'} not linked to a person` : ''}.${wr.missing.length ? ` Not found: ${wr.missing.slice(0, 12).map(esc).join(', ')}${wr.missing.length > 12 ? '…' : ''}` : ''}</p>` : ''}
       <p class="tally-note" style="margin:10px 0 0">If the waiver lives somewhere else (a Google Form, paper), verification stays manual — tell me where it lives and I'll wire that source in the same way.</p>
     </div>` : '';
@@ -4585,7 +4591,7 @@ export function pcoAdminPage({ s = {}, msg = '' }) {
         <label style="flex:1">Check-Ins event ID<input name="event_id" value="${esc(s.eventId)}" inputmode="numeric" placeholder="the number in the event's URL"></label>
         <button class="btn ghost sm" type="submit">Save</button>
       </form>
-      ${s.eventId ? `<form method="POST" action="/admin/pco/reconcile" class="editrow" style="margin:0">
+      ${s.eventId ? `<form method="POST" action="/admin/pco/reconcile" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s)return false;b.dataset.s=1;b.disabled=true;b.textContent='Working…';" class="editrow" style="margin:0">
         <label style="flex:1">Run date<input name="date" type="date"></label>
         <button class="btn sm" type="submit">Reconcile</button>
       </form>` : ''}
@@ -4599,7 +4605,7 @@ export function pcoAdminPage({ s = {}, msg = '' }) {
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <form method="POST" action="/admin/pco/passes" style="margin:0"><input type="hidden" name="on" value="${s.passEnabled ? '0' : '1'}"><button class="btn ghost sm" type="submit">${s.passEnabled ? '✓ Profile QRs shown — hide' : 'Show profile QRs'}</button></form>
         <a class="btn ghost sm" href="/admin/pco/barcodes.csv" style="margin:0" download>⬇︎ Barcode CSV for People import</a>
-        <form method="POST" action="/admin/pco/passes/verify" style="margin:0"><button class="btn sm" type="submit">Verify passes</button></form>
+        <form method="POST" action="/admin/pco/passes/verify" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s)return false;b.dataset.s=1;b.disabled=true;b.textContent='Working…';" style="margin:0"><button class="btn sm" type="submit">Verify passes</button></form>
       </div>
       ${pr && pr.missing.length ? `<p class="tally-note" style="margin:10px 0 0">Still without a pass (${pr.missing.length}): ${pr.missing.slice(0, 15).map(esc).join(', ')}${pr.missing.length > 15 ? '…' : ''}</p>` : ''}
     </div>` : '';

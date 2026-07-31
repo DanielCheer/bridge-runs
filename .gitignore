@@ -3,6 +3,8 @@ bridge.db
 bridge.db-wal
 bridge.db-shm
 backups/
+# the snapshot-encryption key — the one file that must NEVER travel with the code or the snapshots
+backup.key
 .env
 *.log
 # user-generated content (PII: uploaded photos, voice, video, avatars) — never commit
