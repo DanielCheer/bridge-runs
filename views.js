@@ -2474,7 +2474,10 @@ export function chatPage({ me, chat, runDate = '', hours = '8:30–10:30 PM', dm
 // from the caller → a new run needs no new chat page, just its params.
 export function runChatPage({ me, chat, program = 2, theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒', base = '/pickleball/chat', pollPage = 'pkchat', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
   const members = chat.members || [];
-  const low = sport.toLowerCase();
+  // Program names are ADMIN-SUPPLIED now (in-app program creation), so every interpolation of the
+  // sport name/emoji is escaped here. Case conversion happens BEFORE escaping so an entity can't
+  // be mangled (esc-then-uppercase would turn &amp; into &AMP;).
+  const low = esc(sport.toLowerCase()), sportE = esc(sport), emojiE = esc(sportEmoji);
   const memRow = (p) => `<a class="lr" href="/u/${p.id}">
       <span class="lav">${avatarInner(p.email, p.full_name)}</span>
       <span class="lnm">${esc(p.full_name)}${p.minor ? MINOR_STAR : ''}${p.email === me ? ' <span class="tag">You</span>' : ''}</span>
@@ -2482,8 +2485,8 @@ export function runChatPage({ me, chat, program = 2, theme = 'pk', sport = 'Pick
   const membersSheet = `
     <div id="memwrap" class="wgwrap">
       <div class="wgscrim" onclick="memClose()"></div>
-      <div class="wgsheet" role="dialog" aria-modal="true" aria-label="${sport} members">
-        <div class="wgsheet-h"><b>${sport} members · ${members.length}</b><button class="wgx" type="button" onclick="memClose()" aria-label="Close">${IC_CLOSE}</button></div>
+      <div class="wgsheet" role="dialog" aria-modal="true" aria-label="${sportE} members">
+        <div class="wgsheet-h"><b>${sportE} members · ${members.length}</b><button class="wgx" type="button" onclick="memClose()" aria-label="Close">${IC_CLOSE}</button></div>
         <div class="wgsheet-b">
           ${members.length ? members.map(memRow).join('') : '<div class="subh">No members yet.</div>'}
         </div>
@@ -2494,12 +2497,12 @@ export function runChatPage({ me, chat, program = 2, theme = 'pk', sport = 'Pick
     <div class="rule"></div>
     <div class="chatsec chatsec-top">
       <div class="chatsec-h chatsec-tap" role="button" tabindex="0" onclick="memOpen()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();memOpen()}" aria-label="View ${low} members">
-        <span class="chav">${sportEmoji}</span>
-        <div class="chatsec-t"><b>${sport} Chat</b><span>${chat.memberCount} member${chat.memberCount === 1 ? '' : 's'} · talk to the ${low} run</span></div>
+        <span class="chav">${emojiE}</span>
+        <div class="chatsec-t"><b>${sportE} Chat</b><span>${chat.memberCount} member${chat.memberCount === 1 ? '' : 's'} · talk to the ${low} run</span></div>
         <span class="chatsec-chev" aria-hidden="true">›</span>
       </div>
     </div>
-    ${chatFragment({ ...chat, base, pollPage, placeholder: `Message the ${low} run`, emptyName: `${sport} Chat`, emptyMsg: `This is the start of the ${low} room — say hi ${sportEmoji}` })}
+    ${chatFragment({ ...chat, base, pollPage, placeholder: `Message the ${low} run`, emptyName: `${sportE} Chat`, emptyMsg: `This is the start of the ${low} room — say hi ${emojiE}` })}
     ${membersSheet}
     ${pvSheet()}
     ${pvScript()}
@@ -3004,15 +3007,17 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
 // Program-generic join prompt. Defaults reproduce PICKLEBALL exactly; pkJoinPage is a wrapper.
 export function runJoinPage({ email, runDate = '', runLabel = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, ann = null,
   runBase = '/pickleball', theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒' }) {
-  return HEAD(`Join ${sport} — The Bridge`, `has-tabs ${theme}`) + header(`<b>${sport.toUpperCase()}</b>${esc(email)}`, '', ann, '') + `
+  // Admin-supplied program names: escape every interpolation (case-convert first — see runChatPage).
+  const sportE = esc(sport), emojiE = esc(sportEmoji), low = esc(sport.toLowerCase()), up = esc(sport.toUpperCase());
+  return HEAD(`Join ${sport} — The Bridge`, `has-tabs ${theme}`) + header(`<b>${up}</b>${esc(email)}`, '', ann, '') + `
     ${backToRuns}
     <div class="rule"></div>
-    <div class="phead"><h1>${sport} ${sportEmoji}</h1></div>
+    <div class="phead"><h1>${sportE} ${emojiE}</h1></div>
     <div class="card rail" style="margin-top:12px">
       <span class="eyebrow">Join the run</span>
-      <h3 style="margin:4px 0 8px">Want in on ${sport.toLowerCase()}?</h3>
-      <p class="lead" style="margin:0 0 14px">Join to check in each week and chat with the ${sport.toLowerCase()} crew — it's its own run, with its own check-in and chat.${runLabel ? ` Next run: <b>${esc(wdayFull(runDate))}, ${esc(runLabel)}</b>.` : ''}</p>
-      <form method="POST" action="${runBase}/join-run" class="swapform"><button class="btn primary" type="submit">${sportEmoji} Join ${sport.toLowerCase()}</button></form>
+      <h3 style="margin:4px 0 8px">Want in on ${low}?</h3>
+      <p class="lead" style="margin:0 0 14px">Join to check in each week and chat with the ${low} crew — it's its own run, with its own check-in and chat.${runLabel ? ` Next run: <b>${esc(wdayFull(runDate))}, ${esc(runLabel)}</b>.` : ''}</p>
+      <form method="POST" action="${runBase}/join-run" class="swapform"><button class="btn primary" type="submit">${emojiE} Join ${low}</button></form>
     </div>
   ` + footWithTabs(tabNav('runs', { dm: dmUnread, group: groupUnread, groupMention, program: chatProgram }));
 }
@@ -3049,6 +3054,8 @@ export function pastRunPage({ name = '', emoji = '', runDate = '', rows = [], dm
 export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM', startLabel = '6 PM', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], offeredPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, myConfirmed = false, confirmBy = '', partyMsg = '', iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null,
   runBase = '/pickleball', programId = 2, theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒', dayName = 'Tuesday', pollKey = 'pickleball',
   teamsCfg = null, teamRows = [], teamsOpen = false, penaltyState = {}, partyData = null, demoMode = false }) {
+  // Admin-supplied program names: escape every interpolation (case-convert first — see runChatPage).
+  const sportE = esc(sport), emojiE = esc(sportEmoji), low = esc(sport.toLowerCase()), up = esc(sport.toUpperCase());
   const full = going >= cap, totalFull = (going + waiting) >= (cap + waitlistCap);
   const rmForm = (p) => `<form method="POST" action="${runBase}/remove" style="margin:0"><input type="hidden" name="email" value="${esc(p.email)}"><button class="btn leave sm" type="submit">Remove</button></form>`;
   // Tappable name → profile popup (reuses the shared pvOpen + /u/:id/card); guests (no
@@ -3108,9 +3115,9 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
   // ----- hero footer (INSIDE the card, like basketball): Post announcement (operators,
   //       LEFT) + Auto-renew pill (members, RIGHT) -----
   const annCompose = canOperate
-    ? `<details class="announce-compose"><summary>📣 Post announcement</summary><form method="POST" action="${runBase}/announce" class="swapform" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Posting…';"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all ${sport.toLowerCase()} members (pushes to their phones)"></textarea><div style="height:8px"></div><label class="lvl" style="margin:0 0 8px"><input type="checkbox" name="email_everyone"> Also email everyone</label><button class="btn sm" type="submit">Post &amp; notify</button></form></details>`
+    ? `<details class="announce-compose"><summary>📣 Post announcement</summary><form method="POST" action="${runBase}/announce" class="swapform" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Posting…';"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all ${low} members (pushes to their phones)"></textarea><div style="height:8px"></div><label class="lvl" style="margin:0 0 8px"><input type="checkbox" name="email_everyone"> Also email everyone</label><button class="btn sm" type="submit">Post &amp; notify</button></form></details>`
     : '';
-  const autoRenewPill = cancelled ? '' : `<form method="POST" action="${runBase}/autorenew" class="arform" style="margin:0"><input type="hidden" name="on" value="${iAutoRenew ? '0' : '1'}"><button class="arpill${iAutoRenew ? ' on' : ''}" type="submit" title="Auto-join the ${sport.toLowerCase()} run each week">🔁 Auto-renew${iAutoRenew ? ' · ON' : ' · OFF'}</button></form>`;
+  const autoRenewPill = cancelled ? '' : `<form method="POST" action="${runBase}/autorenew" class="arform" style="margin:0"><input type="hidden" name="on" value="${iAutoRenew ? '0' : '1'}"><button class="arpill${iAutoRenew ? ' on' : ''}" type="submit" title="Auto-join the ${low} run each week">🔁 Auto-renew${iAutoRenew ? ' · ON' : ' · OFF'}</button></form>`;
   const heroFooter = (annCompose || autoRenewPill)
     ? `<div class="hann"><div class="hann-l">${annCompose}</div>${autoRenewPill ? `<div class="hann-r">${autoRenewPill}</div>` : ''}</div>`
     : '';
@@ -3208,11 +3215,11 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
       : partyMsg === 'big' ? `<div class="notice warn" style="margin-top:10px">Your party is bigger than this run's group limit — trim it on the Friends tab.</div>` : '';
     return `${notice}<div class="infosec teamspanel" style="margin-top:20px"><div class="card">${mine}</div></div>`;
   })();
-  return HEAD(`${sport} — The Bridge`, `has-tabs ${theme}`) + header(`<b>${sport.toUpperCase()}</b>${esc(email)}`, wdayShort(runDate), ann, hours) + `
+  return HEAD(`${sport} — The Bridge`, `has-tabs ${theme}`) + header(`<b>${up}</b>${esc(email)}`, wdayShort(runDate), ann, hours) + `
     ${backToRuns}
     <div class="rule"></div>
     ${hidden ? `<div class="notice" style="margin-top:10px">🔒 <b>Hidden run</b> — only admins can see this. Flip it live when it's ready.${isAdmin ? ` <form method="POST" action="${runBase}/publish" class="swapform" style="display:inline"><button class="btn sm" type="submit" style="margin-left:6px">Make it live</button></form>` : ''}</div>` : (isAdmin ? `<div class="notice good" style="margin-top:10px">✅ <b>Live</b> — members can join. <form method="POST" action="${runBase}/publish" class="swapform" style="display:inline"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit" style="margin-left:6px">Hide again</button></form></div>` : '')}
-    <div class="phead"><h1>${sport} ${sportEmoji}</h1></div>
+    <div class="phead"><h1>${sportE} ${emojiE}</h1></div>
     ${cancelled ? `<p class="psub" style="margin:-4px 0 8px;color:var(--muted)">Cancelled this week</p>` : ''}
     <div class="gymbanner">
       <img src="${esc(bannerSrc)}?v=${esc(String(bannerVer))}" alt="The Bridge court" width="1160" height="580" fetchpriority="high">
@@ -3250,7 +3257,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
         : `<form method="POST" action="${runBase}/date" class="swapform" style="display:flex;gap:8px;align-items:center;margin:8px 0 0"><input type="date" name="date" value="${esc(runDate)}" style="font-size:16px"><button class="btn ghost sm" type="submit">Set run date</button></form>
       ${cancelled
         ? `<form method="POST" action="${runBase}/cancel" class="swapform" style="margin-top:10px"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit">Restore this run</button></form>`
-        : `<form method="POST" action="${runBase}/cancel" class="swapform" style="margin-top:10px" onsubmit="return confirm('Cancel this week\\'s ${sport.toLowerCase()}?')"><button class="btn ghost sm" type="submit">🚫 Cancel this week</button></form>`}`}
+        : `<form method="POST" action="${runBase}/cancel" class="swapform" style="margin-top:10px" onsubmit="return confirm('Cancel this week\\'s run?')"><button class="btn ghost sm" type="submit">🚫 Cancel this week</button></form>`}`}
       <div class="rule" style="margin:14px 0 12px"></div>
       <div class="clab" style="margin-bottom:2px">Season</div>
       <p class="tally-note" style="margin:6px 0 10px">${season
@@ -4336,10 +4343,7 @@ function programForm({ action, id = null, spec, slug, approval, submit, DAYS, ho
       <label style="flex:1">Waitlist<input name="waitlist" type="number" min="0" max="50" value="${esc(String(v('waitlist', 6)))}"></label>
       <label style="flex:1">Early access<input name="prereg" type="number" min="0" max="200" value="${esc(String(v('prereg', 0)))}"></label>
     </div>
-    <label>Who can join<select name="approval">
-      ${[['open', 'Anyone signed in can join'], ['invite', 'Invite only'], ['council', 'Council votes them in'], ['host', 'The host approves']]
-        .map(([k, l]) => `<option value="${k}"${approval === k ? ' selected' : ''}>${l}</option>`).join('')}
-    </select></label>
+    <p class="tally-note" style="margin:0 0 10px"><b>Who can join:</b> any approved member of the church app can join this program themselves, and the run stays hidden until you publish it. (Invite-only and approval queues per program aren't built yet — ask and they can be.)</p>
     <label>When a spot frees up<select name="seating">
       <option value="instant"${!v('offerWindow', false) ? ' selected' : ''}>Next person moves up immediately (recommended)</option>
       <option value="offer"${v('offerWindow', false) ? ' selected' : ''}>Offer it to them with a claim window</option>

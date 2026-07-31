@@ -2027,11 +2027,16 @@ app.get('/runs', requireLogin, (req, res) => {
   // that program's own dispatch (basketball / pickleball engine today) — no hardcoded pushes.
   for (const p of PROGRAMS.values()) {
     if (!p.active() && !viewerIsAdmin) continue;
-    const { part, ...hub } = p.hubCard(req); // `part` = the program's already-computed partition; strip it so it never leaks into view props
-    const card = { key: p.key, emoji: p.emoji, name: p.displayName, href: p.paths.run, ...hub };
-    card.friendsGoing = fgMap.get(p.id + '|' + card.runDate) || [];
-    card.mine = a ? myRunStatusFor(p.id, card.runDate, email, part) : null; // reuses the hub card's partition (no 2nd partition)
-    runs.push(card);
+    // Per-program isolation: the hub is the app's home page, so one program whose card computation
+    // throws must cost that CARD, never everyone's /runs. (In-app program creation means a card can
+    // now come from admin-entered config, not just code.)
+    try {
+      const { part, ...hub } = p.hubCard(req); // `part` = the program's already-computed partition; strip it so it never leaks into view props
+      const card = { key: p.key, emoji: p.emoji, name: p.displayName, href: p.paths.run, ...hub };
+      card.friendsGoing = fgMap.get(p.id + '|' + card.runDate) || [];
+      card.mine = a ? myRunStatusFor(p.id, card.runDate, email, part) : null; // reuses the hub card's partition (no 2nd partition)
+      runs.push(card);
+    } catch (e) { console.error(`[runs] hub card for program ${p.id} (${p.key}) FAILED: ${e.message}`); }
   }
 
   // ---- Home-screen redesign: "Welcome, {name}", a current-week calendar strip with a dot on
@@ -4317,6 +4322,14 @@ function programAdminRows() {
 function parseProgramForm(body, { existingSlug = null } = {}) {
   const name = String(body.name || '').trim().slice(0, 40);
   if (name.length < 2) return { error: 'Give the program a name (at least 2 characters).' };
+  // The name is a DISPLAY string that reaches page headings, aria-labels, placeholders and push
+  // copy. Restrict it to characters a program name actually needs — letters (any language),
+  // digits, spaces, and . - / + — so no markup or quote character can ever be stored. The views
+  // escape it too; this is the input contract that makes the stored value safe by construction.
+  if (!/^[\p{L}\p{N} .\-/+]{2,40}$/u.test(name))
+    return { error: 'The program name can use letters, numbers, spaces and . - / + only.' };
+  const emoji = String(body.emoji || '🏅').trim().slice(0, 4) || '🏅';
+  if (/[<>"'`&\\]/.test(emoji)) return { error: 'Pick a plain emoji for the icon.' };
   const slug = String(body.slug || '').trim().toLowerCase();
   if (!/^[a-z][a-z0-9-]{1,20}$/.test(slug)) return { error: 'The web address can only use lowercase letters, numbers and dashes (2–21 characters, starting with a letter).' };
   if (slug !== existingSlug) {
@@ -4348,10 +4361,13 @@ function parseProgramForm(body, { existingSlug = null } = {}) {
   if (teamsCount > 0 && (teamsSize < 1 || teamsSize > 30)) return { error: 'Team size must be between 1 and 30.' };
   const partySize = int(body.partySize, 0);
   if (partySize < 0 || partySize > 12) return { error: 'Group sign-up size must be between 0 and 12.' };
-  const approval = ['open', 'invite', 'council', 'host'].includes(body.approval) ? body.approval : 'open';
+  // Approval MODE is deliberately not offered by the wizard: nothing enforces it yet (every opt-in
+  // run admits any approved member), and shipping a picker whose options do nothing would be a lie
+  // in the UI. New in-app programs are stored 'open' — the behaviour that actually exists. Invite-
+  // only/council/host per program needs enforcement + a per-program member-add screen first.
+  const approval = 'open';
   const spec = {
-    displayName: name,
-    emoji: String(body.emoji || '🏅').trim().slice(0, 4) || '🏅',
+    displayName: name, emoji,
     cap, waitlist, prereg,
     dow, startHour, endHour,
     lockTime, confirmCutoff,
@@ -4424,15 +4440,25 @@ app.post('/admin/programs/delete', requireAdmin, (req, res) => {
   const used = db.prepare('SELECT (SELECT COUNT(*) FROM checkins WHERE program_id=?) c, (SELECT COUNT(*) FROM attendance WHERE program_id=?) a, (SELECT COUNT(*) FROM group_messages WHERE program_id=?) m').get(id, id, id);
   if (used.c || used.a || used.m)
     return res.redirect('/admin/programs?msg=' + encodeURIComponent(`${row.name} already has sign-ups, attendance or chat history — hide it instead of deleting, so the records survive.`));
+  // Every program_id-scoped table, so a later program can't inherit orphans if this id is reused.
+  const cfg = (PROGRAMS.get(id) || {}).config || {};
   transact(() => {
-    db.prepare('DELETE FROM program_membership WHERE program_id=?').run(id);
-    db.prepare('DELETE FROM run_state WHERE program_id=?').run(id);
-    db.prepare('DELETE FROM run_overrides WHERE program_id=?').run(id);
-    db.prepare('DELETE FROM announcements WHERE program_id=?').run(id);
-    db.prepare('DELETE FROM group_reads WHERE program_id=?').run(id);
+    for (const t of ['program_membership', 'run_state', 'run_overrides', 'announcements', 'group_reads',
+                     'regular_optout', 'team_assignments', 'group_reactions', 'votes'])
+      db.prepare(`DELETE FROM ${t} WHERE program_id=?`).run(id);
+    // Parties for this run are keyed by group, not program_id — reach them through their run rows.
+    const groups = db.prepare('SELECT id FROM signup_groups WHERE program_id=?').all(id).map(r => r.id);
+    if (groups.length) {
+      const ph = groups.map(() => '?').join(',');
+      db.prepare(`DELETE FROM signup_group_members WHERE group_id IN (${ph})`).run(...groups);
+      db.prepare('DELETE FROM signup_groups WHERE program_id=?').run(id);
+    }
     db.prepare('DELETE FROM program WHERE id=?').run(id);
   });
-  for (const k of Object.values((PROGRAMS.get(id) || { config: { keys: {} } }).config.keys)) delSetting(k);
+  // Its whole app_settings namespace: the scheduler keys AND chatSeqKey, which lives beside
+  // `keys` rather than inside it (a keys-only loop leaked <slug>_chat_seq on every delete).
+  for (const k of Object.values(cfg.keys || {})) delSetting(k);
+  if (cfg.chatSeqKey) delSetting(cfg.chatSeqKey);
   buildPrograms();
   MOUNTED_PROGRAMS.delete(id);
   audit(req.userEmail, 'admin', 'program:delete', `${id}:${row.slug}`);
@@ -4743,8 +4769,11 @@ setInterval(() => {
   try {
     // Each program runs its own per-tick work via its registry tick() — program-generic, so a new
     // run is picked up with zero scheduler code change. id order (basketball, then pickleball)
-    // preserves the original call sequence, and one try/catch keeps the original error semantics.
-    for (const p of PROGRAMS.values()) p.tick();
+    // preserves the original call sequence. Each program is isolated: with in-app program creation
+    // a single bad program must not starve every other run's rollover/expiry every 60 s.
+    for (const p of PROGRAMS.values()) {
+      try { p.tick(); } catch (e) { console.error(`[interval] program ${p.id} (${p.key}) tick FAILED: ${e.message}`); }
+    }
   } catch (e) { console.error(`[interval] rollover/expiry FAILED: ${e.message}`); }
   // PCO People sync: drain the outbox + reconcile unlinked members. Async and fully
   // self-contained (own error handling, inert without credentials) — fire and forget.
@@ -6538,6 +6567,14 @@ function defFromRow(row) {
   let spec;
   try { spec = JSON.parse(row.config || 'null'); } catch { spec = null; }
   if (!spec || !row.slug) return null;
+  // A spec that PARSES but is missing numbers would build a program whose scheduler computes an
+  // Invalid Date (dow NaN) and whose hub card throws — a 500 on /runs for every member. Only a
+  // complete spec becomes a program; an incomplete one stays inert (and visibly unmounted on the
+  // admin screen). Reachable only by hand-editing the DB — the wizard validates — but the blast
+  // radius is all-users, so the contract is enforced here rather than assumed.
+  for (const n of ['cap', 'waitlist', 'dow', 'startHour', 'endHour']) {
+    if (!Number.isFinite(spec[n])) { console.error(`[program] id=${row.id} spec missing ${n} — not mounted`); return null; }
+  }
   const slug = row.slug, name = spec.displayName || row.name, emoji = spec.emoji || '🏅';
   const k = (s) => `${slug}_${s}`;
   const features = {};
@@ -6575,6 +6612,20 @@ function defFromRow(row) {
 // silently rot the next time a route is added.
 function slugIsReserved(slug) {
   if (fs.existsSync(path.join(__dirname, 'public', slug))) return true;
+  // A slug also becomes a NAMESPACE: defFromRow derives `<slug>_run_date`, `<slug>_chat_seq`,
+  // `<slug>mention` and the rate-limit bucket from it. The code programs' namespaces do NOT match
+  // their slugs (pickleball's slug is 'pickleball' but its keys are `pk_*`), so a program created
+  // with slug 'pk' would silently SHARE pickleball's run date, open/lock/sweep markers, chat
+  // fingerprint and push tag. Reserve every live namespace token, not just route paths.
+  for (const p of PROGRAMS.values()) {
+    const cfg = p.config;
+    if (cfg.logTag && cfg.logTag === slug) return true;
+    if (cfg.mentionTag && cfg.mentionTag === `${slug}mention`) return true;
+    if (cfg.chatSeqKey && cfg.chatSeqKey === `${slug}_chat_seq`) return true;
+    for (const key of Object.values(cfg.keys || {})) {
+      if (typeof key === 'string' && key.startsWith(`${slug}_`)) return true;
+    }
+  }
   const stack = (app._router && app._router.stack) || [];
   for (const layer of stack) {
     const raw = layer.route && layer.route.path;
@@ -6627,24 +6678,32 @@ buildPrograms();
 // which keep their inline routes — e.g. volleyball via the config-driven factory. After
 // buildPrograms() so P(id) is hydrated (mountRunProgram reads program.paths.run).
 // Mounting is idempotent + incremental: a program CREATED at runtime gets its routes without a
-// restart. (Express matches layers in registration order; the terminal 4-arg error handler below
-// only runs on next(err), so routes registered after it still match normally — the program-fn
-// suite proves a freshly created program answers on its own paths in the same process.)
+// restart. Express matches layers in registration order, so normal requests reach routes added
+// later — but an error middleware only catches throws from layers registered BEFORE it. Runtime
+// mounts therefore re-append the terminal handler (see terminalError), or a throw in a
+// brand-new program's route would fall through to Express's stack-trace-leaking default.
 const MOUNTED_PROGRAMS = new Set();
 function mountPendingPrograms() {
+  let mounted = 0;
   for (const p of PROGRAMS.values()) {
-    if (p.id >= 3 && !MOUNTED_PROGRAMS.has(p.id)) { mountRunProgram(app, p); MOUNTED_PROGRAMS.add(p.id); }
+    if (p.id >= 3 && !MOUNTED_PROGRAMS.has(p.id)) { mountRunProgram(app, p); MOUNTED_PROGRAMS.add(p.id); mounted++; }
   }
+  // Boot registers the handler once, just below; only later mounts need a fresh trailing copy.
+  if (mounted && TERMINAL_REGISTERED) app.use(terminalError);
+  return mounted;
 }
-mountPendingPrograms();
 // Terminal error handler — registered LAST (after every inline + mounted route) so a sync throw
 // (or a forwarded async reject via next(e)) in ANY route lands here with a friendly 500 instead of
 // a hung socket OR Express's stack-trace-leaking default handler. Must be the last app.use (4-arg).
-app.use((err, req, res, next) => {
+function terminalError(err, req, res, next) {
   console.error(`[route-error] ${req.method} ${req.originalUrl}: ${(err && err.stack) || err}`);
   if (res.headersSent) return next(err);
   res.status(500).send('Something went wrong on our end. Please try again in a moment.');
-});
+}
+let TERMINAL_REGISTERED = false;
+mountPendingPrograms();
+app.use(terminalError);
+TERMINAL_REGISTERED = true;
 // Boot-time weekly rollover (archive/purge/auto-seat) — MUST run after buildPrograms() so the
 // unified engine's P(id).config is hydrated (ensureWeek → autoJoinTeam → seatRenewers reads it).
 ensureWeek(nextRunDate());
