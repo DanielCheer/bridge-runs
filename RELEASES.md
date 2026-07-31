@@ -11,6 +11,7 @@ Backfilled below from git history for the releases that shipped before this file
 
 | Date (local) | Tag | Commit | Summary |
 |---|---|---|---|
+| 2026-07-31 | rel-20260731-1415 | 465276c | SW coverage (cache contract + offline card in CDP) + nav geometry rig (24 invariants, decision table, pinch-zoom) + release tagging |
 | 2026-07-31 | rel-20260731-1410 | 64a13ed | Encrypted backups + delta-audit fixes (door-mode late sweep, reconcile UTC window, sweep lock, org invalidation) |
 | 2026-07-31 | rel-20260731-A *(retro)* | ffb66aa | Encrypted backups (AES-256-GCM + tested restore) + all 15 findings from the 2-day delta audit (door-mode late-sweep P1, reconcile UTC-window P1, sweep lock, org-change invalidation, outbox grace, skip lists) |
 | 2026-07-31 | — | 3085ed8 | Nav localizer (device geometry capture + decision tree); client-bundle parse gate |
