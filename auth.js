@@ -30,8 +30,18 @@ function verify(signed) {
   return value; // the email
 }
 
+// ---- Session versioning (S1) ----
+// The cookie is stateless and lives ~10 years, which meant a stolen device held a session FOREVER
+// with no kill switch. Cookies now carry the account's session VERSION; bumping the version (the
+// profile's "Sign out everywhere") invalidates every previously-issued cookie at the next request.
+// The lookup is injected by server.js (auth.js stays db-free). Legacy 2-part cookies (no version)
+// are honoured only while the account's version is still 0 — the first bump retires them all.
+let versionOf = () => 0;
+export function setSessionVersionLookup(fn) { if (typeof fn === 'function') versionOf = fn; }
+
 export function setSession(res, email) {
-  res.cookie(COOKIE, sign(email.toLowerCase()), {
+  const e = email.toLowerCase();
+  res.cookie(COOKIE, sign(`${e}|${versionOf(e)}`), {
     httpOnly: true,                         // no JS access → XSS can't read the session
     sameSite: 'lax',                        // CSRF guard; 'lax' still lets the emailed magic link log you in
     // The app is served exclusively over HTTPS (Tailscale Funnel), so the session cookie
@@ -49,7 +59,15 @@ export function setSession(res, email) {
 export function clearSession(res) { res.clearCookie(COOKIE); }
 
 export function currentUser(req) {
-  return verify(req.cookies?.[COOKIE]) || null;
+  const value = verify(req.cookies?.[COOKIE]);
+  if (!value) return null;
+  // Versioned cookie: "email|ver". Legacy cookie: bare email == version 0. Note '|' cannot appear
+  // in an email the app accepts (isValidEmail), so the split is unambiguous.
+  const sep = value.indexOf('|');
+  const email = sep < 0 ? value : value.slice(0, sep);
+  const ver = sep < 0 ? 0 : Number(value.slice(sep + 1));
+  if (!Number.isFinite(ver) || ver !== versionOf(email)) return null;   // bumped → every old cookie dies
+  return email;
 }
 export function isAdmin(email) {
   return !!email && ADMINS.includes(email.toLowerCase());

@@ -276,6 +276,18 @@ db.exec(`
   -- Its own table, not audit_log: that has fixed actor/action/target columns and is pruned to 5000
   -- rows, so stuffing JSON into the target column would be the "substring where a structured field
   -- belongs" band-aid. Payload is JSON TEXT; rows are few (hand-triggered) and kept.
+  -- audit_key_events (2026-07-31, S6): the NEVER-PRUNED record of legally/organizationally
+  -- significant actions. audit_log is an operational log trimmed to 5000 rows; waiver
+  -- attestations, role grants and admin sign-ins must outlive that. Rows are rare (hand-count per
+  -- week), so unbounded growth is a non-issue for decades.
+  CREATE TABLE IF NOT EXISTS audit_key_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    at         TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    actor      TEXT NOT NULL,
+    actor_role TEXT NOT NULL,
+    action     TEXT NOT NULL,
+    target     TEXT NOT NULL DEFAULT ''
+  );
   CREATE TABLE IF NOT EXISTS geo_reports (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     at         TEXT NOT NULL DEFAULT (datetime('now')),
@@ -656,6 +668,11 @@ db.exec(`
   // fields. Only a CHANGED signature is re-pushed, so the weekly sync costs ~4 requests per
   // person who actually played (not per member) — comfortably inside PCO's 100-req/20s budget.
   if (!cols.includes('pco_att_sig')) db.exec('ALTER TABLE applicants ADD COLUMN pco_att_sig TEXT');
+  // session_ver (2026-07-31, S1): the account's live session version. Cookies carry the version
+  // they were minted with; "Sign out everywhere" bumps this and every older cookie dies at its
+  // next request. Default 0 keeps every existing (legacy, unversioned) session valid until the
+  // owner of the account chooses to revoke.
+  if (!cols.includes('session_ver')) db.exec('ALTER TABLE applicants ADD COLUMN session_ver INTEGER NOT NULL DEFAULT 0');
 }
 // pco_outbox — queued OUTBOUND writes (profile PATCHes and the like), drained on the 60s tick.
 // A PCO outage never blocks a Bridge action; every write is replayable; a row that exhausts its

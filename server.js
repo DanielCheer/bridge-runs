@@ -24,7 +24,7 @@ import {
 import webpush from 'web-push';
 import {
   setSession, clearSession, currentUser, isAdmin,
-  requireLogin, requireAdmin, makeRequireApprover, ADMINS,
+  requireLogin, requireAdmin, makeRequireApprover, ADMINS, setSessionVersionLookup,
 } from './auth.js';
 import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, exportPage, logoutPage, APP_JS,
@@ -60,6 +60,28 @@ const stmtAudit = db.prepare('INSERT INTO audit_log (actor,actor_role,action,tar
 const stmtAnnouncementExists = db.prepare('SELECT 1 FROM announcements WHERE id = ? AND program_id = 1');
 function audit(actor, actorRole, action, target) {
   stmtAudit.run(actor, actorRole, action, target || '');
+  // KEY events also land in the never-pruned table: audit_log keeps only the newest 5000 rows, so
+  // the legally-interesting subset (waiver attestations/verifications, role grants, sign-out-all,
+  // admin logins, PCO connects) would otherwise age out while the state it explains lives on.
+  if (KEY_EVENT_RE.test(action)) stmtAuditKey.run(actor, actorRole, action, target || '');
+}
+const KEY_EVENT_RE = /^(waiver:|people:waiver|admin:role|people:approve|people:delete|people:suspend|invite:claimed|session:|pco:connected|pco:oauth-connected|pco:disconnected|program:(create|delete))/;
+const stmtAuditKey = db.prepare('INSERT INTO audit_key_events (actor,actor_role,action,target) VALUES (?,?,?,?)');
+
+// Sign-in wrapper for the REAL login sites (magic link, code, invite claim, offer-claim sign-in) —
+// NOT the per-request cookie refresh or the profile email re-sign. An admin account signing in
+// anywhere pings that admin's own devices: with sessions this long-lived, "someone else logged in
+// as me" must be visible in seconds, not discovered by accident.
+function signIn(res, email, how) {
+  setSession(res, email);
+  if (isAdmin(email)) {
+    audit(email, 'admin', 'session:admin-login', how);
+    setImmediate(() => sendPush([String(email).toLowerCase()], {
+      title: 'Admin sign-in',
+      body: `Your admin account just signed in (${how}). Wasn't you? Profile → Sign out everywhere.`,
+      url: '/profile', tag: 'adminlogin',
+    }));
+  }
 }
 
 // ---- email validation ----
@@ -311,6 +333,19 @@ function voteInfo(id, viewerEmail, pool = approverEmails(),
 }
 
 app.disable('x-powered-by');
+// One proxy hop in front of us (Tailscale Funnel terminates TLS). This makes req.protocol/req.ip
+// reflect the real client, which the rate-limit bucketing and Secure-cookie semantics assume.
+app.set('trust proxy', 1);
+// Security headers (S2). No CSP yet — the app's inline scripts/handlers would need a full nonce
+// refactor, and a hollow 'unsafe-inline' policy is a false badge; do it properly or not at all.
+app.use((req, res, next) => {
+  res.setHeader('X-Frame-Options', 'DENY');                        // nothing here belongs in an iframe (clickjacking)
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(self), geolocation=()');  // mic: voice notes
+  if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=15552000');       // 180d; https-only (harness runs plain http)
+  next();
+});
 // gzip every text response (HTML/CSS/JS/JSON). ~75% wire cut on the frequent
 // polling reloads. Placed before static so served assets are compressed too.
 app.use(compression());
@@ -1234,7 +1269,9 @@ function safeNextPath(next) {
 
 app.get('/login', (req, res) => {
   if (currentUser(req)) return res.redirect(safeNextPath(req.query.next));
-  res.send(loginPage({ next: req.query.next || '' }));
+  // `msg` is a benign notice (e.g. "signed out on every device") — rendered via the page's
+  // error slot, which is escaped in the view.
+  res.send(loginPage({ next: req.query.next || '', error: String(req.query.msg || '') }));
 });
 
 app.post('/login', async (req, res) => {
@@ -1296,7 +1333,7 @@ app.post('/auth', (req, res) => {
       error: 'That link is expired or already used — enter your email to get a fresh one. Use the same email you applied with.' }));
   }
   db.prepare('UPDATE login_tokens SET used = 1 WHERE token = ?').run(token);
-  setSession(res, row.email);
+  signIn(res, row.email, 'magic link');
   res.redirect(safeNextPath(next));
 });
 
@@ -1327,7 +1364,7 @@ app.post('/login/code', (req, res) => {
   if (!match) { db.prepare('UPDATE login_tokens SET attempts = attempts + 1 WHERE token = ?').run(row.token); return fail(GENERIC); }
 
   db.prepare('UPDATE login_tokens SET used = 1 WHERE token = ?').run(row.token);
-  setSession(res, em);
+  signIn(res, em, 'sign-in code');
   res.redirect(safeNextPath(next));
 });
 
@@ -1464,7 +1501,7 @@ app.post('/invite/:token', async (req, res) => {
 
   if (prefilledMatch) {
     // Pre-approved AND the address is proven (admin pre-filled it) — sign them in.
-    setSession(res, email);
+    signIn(res, email, 'invite claim');
     return res.redirect('/runs');
   }
 
@@ -3459,7 +3496,7 @@ app.post('/checkin/claim/:token', (req, res) => {
   // my spot") — the ✓ also shields them from the run-day confirm-or-release sweep.
   db.prepare("UPDATE checkins SET offered_at = NULL, claim_token = NULL, confirmed_at = datetime('now') WHERE id = ?").run(row.id);
   audit(row.email, 'player', 'offer:claim', row.email);
-  setSession(res, row.email);
+  signIn(res, row.email, 'spot claim');
   return res.send(claimResultPage({ ok: true, runLabel: runLabelFor(row.run_date), runDate: row.run_date, startLabel: runStartLabel(row.run_date) }));
 });
 
@@ -4303,6 +4340,40 @@ app.post('/admin/people/suspend', requireAdmin, (req, res) => {
   }
   audit(req.userEmail, 'admin', on ? 'people:suspend' : 'people:unsuspend', cur.email);
   res.redirect('/admin/people?msg=' + encodeURIComponent(on ? 'Suspended' : 'Unsuspended'));
+});
+
+// ---------- SESSIONS (S1) ----------
+// Version lookup for auth.js: applicants row for members; an app_settings fallback covers admins
+// with no applicant row (admin identity is the ADMINS env set, a row is optional).
+const stmtSessVer = db.prepare('SELECT session_ver v FROM applicants WHERE email = ?');
+setSessionVersionLookup((email) => {
+  const row = stmtSessVer.get(String(email).toLowerCase());
+  if (row) return row.v || 0;
+  return Number(getSetting('sessver_' + String(email).toLowerCase()) || 0);
+});
+// "Sign out everywhere": bump the version → every cookie ever issued for this account dies at its
+// next request, including on a lost/stolen device. Key-event audited (S6) — a revocation is
+// exactly the record someone asks about later.
+app.post('/profile/logoutall', requireLogin, (req, res) => {
+  const email = req.userEmail.toLowerCase();
+  const r = db.prepare('UPDATE applicants SET session_ver = session_ver + 1 WHERE email = ?').run(email);
+  if (!r.changes) setSetting('sessver_' + email, Number(getSetting('sessver_' + email) || 0) + 1);
+  audit(email, 'player', 'session:signout-all', '');
+  clearSession(res);
+  res.redirect('/login?msg=' + encodeURIComponent('Signed out on every device. Sign in again below.'));
+});
+
+// ---------- HEALTH (S4) ----------
+// For the uptime monitor: cheap, unauthenticated, and it actually exercises the DB — a hung
+// SQLite handle should page the owner, not just a dead port. Returns no data beyond up/degraded.
+app.get('/healthz', (req, res) => {
+  try {
+    db.prepare('SELECT 1').get();
+    res.type('text/plain').send('ok');
+  } catch (e) {
+    console.error(`[healthz] DB check failed: ${e.message}`);
+    res.status(503).type('text/plain').send('degraded');
+  }
 });
 
 // ---------- BOTTOM-NAV LOCALIZER (admin) ----------
@@ -5741,7 +5812,7 @@ function runClaimPost(programId, req, res) {
   db.prepare("UPDATE checkins SET offered_at = NULL, claim_token = NULL, confirmed_at = datetime('now') WHERE id = ?").run(row.id);   // claiming IS confirming
   audit(row.email, 'player', 'offer:claim', row.email);
   if (cfg.static) return res.redirect(base);        // demo: synthetic player slides onto the floor
-  setSession(res, row.email);                        // real program: sign the claimer in
+  signIn(res, row.email, 'spot claim');                        // real program: sign the claimer in
   return res.send(claimResultPage({ ok: true, runLabel: runLabelFor(row.run_date), runDate: row.run_date, startLabel: startLabelFor(programId) }));
 }
 function runIcs(programId, req, res) {

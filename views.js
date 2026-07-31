@@ -457,6 +457,16 @@ if('serviceWorker' in navigator&&!window.__swBound){window.__swBound=1;
 // prompt). Resolves true once the subscription is registered server-side.
 window.__pushSupported=function(){return ('serviceWorker' in navigator)&&('PushManager' in window)&&('Notification' in window);};
 window.__pushStandalone=function(){return (navigator.standalone===true)||(window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches);};
+// Where push is actually possible (F1). APPLE requires the installed (standalone) app for web
+// push — but that rule is Apple's, not the web's. Desktop Chrome/Edge/Firefox and Android support
+// push in a plain tab, and gating THEM on installation meant laptop members silently never got
+// spot offers. So: standalone required on iOS/iPadOS only. (iPadOS reports itself as MacIntel with
+// touch — that's the maxTouchPoints test.)
+window.__pushEligible=function(){
+  if(!window.__pushSupported||!window.__pushSupported())return false;
+  var ios=/iP(hone|ad|od)/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+  return !ios||window.__pushStandalone();
+};
 window.__pushEnable=function(){
   if(!window.__pushSupported())return Promise.resolve(false);
   function u8(b64){var pad='='.repeat((4-b64.length%4)%4);var s=(b64+pad).replace(/-/g,'+').replace(/_/g,'/');var raw=atob(s);var a=new Uint8Array(raw.length);for(var i=0;i<raw.length;i++)a[i]=raw.charCodeAt(i);return a;}
@@ -1576,7 +1586,7 @@ const firstRunTour = `
     var tour=document.getElementById('tour'); if(!tour||tour.__bound) return; tour.__bound=1; // bind per fresh #tour node (survives router swaps)
     var KEY='bridgeTourV1';
     var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches;
-    function supported(){ return !!(window.__pushSupported&&window.__pushSupported()&&window.__pushStandalone&&window.__pushStandalone()); }
+    function supported(){ return !!(window.__pushEligible&&window.__pushEligible()); }
     // Operator steps (Council / open-close / guest / announce / auto-renew) carry selectors
     // that exist ONLY for team+admin — the filter below drops any step whose element isn't on
     // the page, so operators get these extra spotlights automatically and players never do.
@@ -2376,7 +2386,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
             window.__pushEnable().then(function(ok){ if(ok){ if(p)p.hidden=true; try{localStorage.setItem('notifPromptDone','1');}catch(x){} } else { en.disabled=false; } });
           });
         }
-        if(!window.__pushSupported||!window.__pushSupported()||!window.__pushStandalone||!window.__pushStandalone())return;
+        if(!window.__pushEligible||!window.__pushEligible())return;
         if(Notification.permission==='denied')return;
         try{if(localStorage.getItem('notifPromptDone')==='1')return;}catch(e){}
         navigator.serviceWorker.ready.then(function(reg){return reg.pushManager.getSubscription();})
@@ -3597,6 +3607,10 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
       <span style="color:var(--muted);font-size:20px">›</span>
     </a>` : ''}
     ${passCard}
+    <form method="POST" action="/profile/logoutall" style="margin-top:12px" onsubmit="return confirm('Sign out on every device you\\'ve ever used? You\\'ll sign back in with your email.')">
+      <button class="btn ghost sm" type="submit">Sign out everywhere</button>
+      <p class="tally-note" style="margin:6px 0 0">Lost a phone, or somewhere you didn't sign out? This ends the session on <b>every</b> device at once.</p>
+    </form>
     ${inbox}
     ${annHistory}
     ${annSheet}
