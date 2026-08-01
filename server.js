@@ -5378,8 +5378,14 @@ function clearRunParties(programId, rd) {
   const ids = db.prepare('SELECT id FROM signup_groups WHERE program_id = ? AND run_date = ?').all(programId, rd).map(r => r.id);
   if (!ids.length) return;
   const ph = ids.map(() => '?').join(',');
-  db.prepare(`DELETE FROM signup_group_members WHERE group_id IN (${ph})`).run(...ids);
-  db.prepare('DELETE FROM signup_groups WHERE program_id = ? AND run_date = ?').run(programId, rd);
+  // Atomic pair — a crash between the deletes would leave member-less group rows that the
+  // one-party-per-person guards then read as a live party (P3-3, same idiom as runPartyCheckin).
+  db.exec('BEGIN');
+  try {
+    db.prepare(`DELETE FROM signup_group_members WHERE group_id IN (${ph})`).run(...ids);
+    db.prepare('DELETE FROM signup_groups WHERE program_id = ? AND run_date = ?').run(programId, rd);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
 }
 const stmtRunTeams = db.prepare('SELECT email, team_no, assigned_by FROM team_assignments WHERE program_id = ? AND run_date = ? ORDER BY team_no ASC, created_at ASC');
 function runTeamsFor(programId, rd) { return stmtRunTeams.all(programId, rd); }
