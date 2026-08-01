@@ -30,7 +30,7 @@ import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, exportPage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap, setProgramMeta,
   STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, demoProfileCard, pickleballPage, runPage, runsPage, pkJoinPage, runJoinPage, pastRunPage, waiverPage,
-  friendsPage, friendsSearchFragment, chatLockedPage, runChatPage, pcoAdminPage, programsAdminPage, kioskPage, analyticsPage,
+  friendsPage, friendsSearchFragment, chatLockedPage, runChatPage, pcoAdminPage, programsAdminPage, kioskPage, analyticsPage, auditViewerPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -4403,6 +4403,39 @@ app.get('/admin/analytics', requireAdmin, (req, res) => {
       active4: last4.length < 4 ? null : db.prepare(`SELECT COUNT(DISTINCT email) n FROM attendance WHERE program_id = ? AND run_date IN (${last4.map(() => '?').join(',')})`).get(p.id, ...last4).n });
   }
   res.send(analyticsPage({ cards }));
+});
+
+// ---------- AUDIT VIEWER (S6 follow-up) — the permanent record, readable ----------
+// audit_key_events is the never-pruned legal record (waiver verifications, role grants, admin
+// sign-ins). These are its only read surfaces; nothing here can write to the table. Filters are
+// whitelisted + bound — free text only ever reaches a LIKE parameter.
+function keyEventQuery(req) {
+  const q = String(req.query.q || '').trim().slice(0, 200);
+  const action = String(req.query.action || '').trim().slice(0, 80);
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  const from = dateRe.test(String(req.query.from || '')) ? String(req.query.from) : '';
+  const to = dateRe.test(String(req.query.to || '')) ? String(req.query.to) : '';
+  const where = [], params = [];
+  if (q) { where.push('(actor LIKE ? OR target LIKE ?)'); params.push(`%${q}%`, `%${q}%`); }
+  if (action) { where.push('action = ?'); params.push(action); }
+  if (from) { where.push('at >= ?'); params.push(from + ' 00:00:00'); }
+  if (to) { where.push('at <= ?'); params.push(to + ' 23:59:59'); }
+  return { q, action, from, to, sql: where.length ? ' WHERE ' + where.join(' AND ') : '', params };
+}
+app.get('/admin/audit', requireAdmin, (req, res) => {
+  const f = keyEventQuery(req);
+  const page = Math.max(0, parseInt(req.query.page, 10) || 0);
+  const total = db.prepare('SELECT COUNT(*) n FROM audit_key_events' + f.sql).get(...f.params).n;
+  const rows = db.prepare('SELECT * FROM audit_key_events' + f.sql + ' ORDER BY id DESC LIMIT 101 OFFSET ?').all(...f.params, page * 100);
+  const actions = db.prepare('SELECT DISTINCT action FROM audit_key_events ORDER BY action').all().map((r) => r.action);
+  res.send(auditViewerPage({ rows: rows.slice(0, 100), hasMore: rows.length > 100, page, total, actions, q: f.q, action: f.action, from: f.from, to: f.to }));
+});
+app.get('/admin/audit.csv', requireAdmin, (req, res) => {
+  const f = keyEventQuery(req);
+  const rows = db.prepare('SELECT at, actor, actor_role, action, target FROM audit_key_events' + f.sql + ' ORDER BY id DESC').all(...f.params);
+  const lines = ['When,Actor,Role,Action,Target', ...rows.map((r) => [r.at, r.actor, r.actor_role, r.action, r.target].map(csvCell).join(','))];
+  res.setHeader('Content-Disposition', 'attachment; filename="key-events.csv"');
+  res.type('text/csv').send('\uFEFF' + lines.join('\r\n')); // BOM = Excel reads UTF-8
 });
 
 // ---------- SCHEDULED ANNOUNCEMENTS (F8) ----------

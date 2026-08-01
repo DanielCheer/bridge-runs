@@ -4440,6 +4440,49 @@ export function analyticsPage({ cards = [] }) {
   ` + FOOT;
 }
 
+// ---------- AUDIT VIEWER — the S6 permanent record, readable + exportable ----------
+// audit_key_events' only read surface. Server-rendered GET filters (native form, no SPA), 100/page,
+// CSV link carries the active filters. Every cell esc()'d; the page never mutates anything.
+export function auditViewerPage({ rows = [], actions = [], q = '', action = '', from = '', to = '', page = 0, hasMore = false, total = 0 }) {
+  const qs = (p) => {
+    const u = new URLSearchParams();
+    if (q) u.set('q', q); if (action) u.set('action', action);
+    if (from) u.set('from', from); if (to) u.set('to', to);
+    if (p) u.set('page', String(p));
+    const s = u.toString(); return s ? '?' + s : '';
+  };
+  const row = (r) => `<tr><td style="white-space:nowrap">${esc(r.at)}</td><td>${esc(r.actor)}<span class="tally-note"> · ${esc(r.actor_role)}</span></td><td>${esc(r.action)}</td><td style="word-break:break-all">${esc(r.target)}</td></tr>`;
+  return HEAD('Audit record — The Bridge', '', { wall: false }) + header('<b>AUDIT RECORD</b>') + `
+    <style>.audit-t{width:100%;border-collapse:collapse;font-size:13px}.audit-t th{text-align:left;color:var(--muted);padding:4px 8px}.audit-t td{padding:6px 8px;border-top:1px solid var(--line);vertical-align:top}</style>
+    ${backBtn('/admin/people')}
+    <div class="rule"></div>
+    <span class="eyebrow">Permanent record</span>
+    <h1 style="margin-bottom:0">Key events</h1>
+    <p class="lead" style="margin-top:8px">Waiver verifications, role changes and admin sign-ins — kept forever, separate from the operational log that trims itself. Read-only.</p>
+    <div class="card rail" style="margin-top:12px">
+      <form method="GET" action="/admin/audit" class="editrow" style="align-items:flex-end;flex-wrap:wrap">
+        <label style="flex:2;min-width:160px">Person / target<input name="q" value="${esc(q)}" placeholder="email or text"></label>
+        <label style="flex:2;min-width:160px">Action<select name="action"><option value="">All actions</option>${actions.map((a) => `<option value="${esc(a)}"${a === action ? ' selected' : ''}>${esc(a)}</option>`).join('')}</select></label>
+        <label style="flex:1;min-width:130px">From<input type="date" name="from" value="${esc(from)}"></label>
+        <label style="flex:1;min-width:130px">To<input type="date" name="to" value="${esc(to)}"></label>
+        <button class="btn sm" type="submit">Filter</button>
+      </form>
+      <p class="tally-note" style="margin:10px 0 0">${total} event${total === 1 ? '' : 's'}${(q || action || from || to) ? ' match' : ' on record'} · <a href="/admin/audit.csv${qs(0)}" download>⬇︎ CSV of this view</a></p>
+    </div>
+    <div class="card rail" style="margin-top:12px;overflow-x:auto">
+      ${rows.length ? `<table class="audit-t">
+        <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th></tr></thead>
+        <tbody>${rows.map(row).join('')}</tbody>
+      </table>` : '<p style="margin:0;color:var(--muted)">Nothing matches.</p>'}
+      ${(page > 0 || hasMore) ? `<div style="display:flex;gap:10px;margin-top:12px">
+        ${page > 0 ? `<a class="btn ghost sm" href="/admin/audit${qs(page - 1)}">‹ Newer</a>` : ''}
+        ${hasMore ? `<a class="btn ghost sm" href="/admin/audit${qs(page + 1)}">Older ›</a>` : ''}
+      </div>` : ''}
+    </div>
+    <div class="foot" style="margin-top:24px"><a href="/admin/people">‹ Back to People &amp; invites</a></div>
+  ` + FOOT;
+}
+
 // ---------- KIOSK (F7) — big-screen live roster for the gym door ----------
 // Self-contained page (no tabs, no session assumptions): giant type readable from metres away,
 // refreshes itself every 8s by fetching its own URL and swapping the list (no SPA machinery).
@@ -5031,6 +5074,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
       <a class="btn ghost" href="/admin/pco" style="margin:0">⇄ Planning Center</a>
       <a class="btn ghost" href="/admin/programs" style="margin:0">🏅 Programs</a>
       <a class="btn ghost" href="/admin/analytics" style="margin:0">📈 Analytics</a>
+      <a class="btn ghost" href="/admin/audit" style="margin:0">🗂 Audit</a>
     </div>
 
     <div class="subhead">Add a player</div>
