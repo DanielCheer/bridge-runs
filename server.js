@@ -3569,17 +3569,20 @@ app.post('/checkin/guest', requireApprover, (req, res) => {
 app.post('/checkin/remove', requireApprover, (req, res) => {
   const runDate = nextRunDate();
   const target = String(req.body.email || '').toLowerCase();
+  const wlBefore = waitlistOrderFor(1, runDate);   // F4 snapshot — an operator removal shifts the list too
   // Removing a floor occupant frees a slot → offer it onward (capture before delete).
   const offeree = offereeForFloorLeave(runDate, target);
   db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = 1').run(runDate, target);
   if (offeree) createOffer(runDate, offeree, req);
   audit(req.userEmail, req.actorRole, 'checkin:remove', target);
+  setImmediate(() => pingWaitlistShift(1, runDate, wlBefore));   // F4
   res.redirect('/checkin');
 });
 
 app.post('/checkin/promote', requireApprover, (req, res) => {
   const runDate = nextRunDate();
   const email = String(req.body.email || '').toLowerCase();
+  const wlBefore = waitlistOrderFor(1, runDate);   // F4 snapshot — promoting a waitlister shifts those behind up
   // float this player above everyone currently checked in → they slot into the run,
   // bumping the last person in the run down to the top of the waitlist if it was full
   const { m } = db.prepare('SELECT MIN(sort_order) m FROM checkins WHERE run_date = ? AND program_id = 1').get(runDate);
@@ -3591,6 +3594,7 @@ app.post('/checkin/promote', requireApprover, (req, res) => {
   db.prepare('UPDATE checkins SET sort_order = ?, offered_at = NULL, claim_token = NULL WHERE run_date = ? AND email = ? AND program_id = 1')
     .run(newOrder, runDate, email);
   audit(req.userEmail, req.actorRole, 'checkin:promote', email);
+  setImmediate(() => pingWaitlistShift(1, runDate, wlBefore));   // F4: improvements only — a bump-down never pings
   res.redirect('/checkin');
 });
 
@@ -5164,6 +5168,7 @@ function autoRunState() {
     // Guests exempt — an operator vouched them in and they have no account to confirm from.
     if (now >= cutoffAt && getSetting('confirmsweep_done') !== rd && !runIsCancelled(rd)) {
       setSetting('confirmsweep_done', rd);
+      const wlBefore = waitlistOrderFor(1, rd);   // F4 snapshot — the sweep shifts the whole list at once
       const drop = partitionRun(rd).floorReal.filter(p => !p.guest && !p.confirmed_at);
       for (const p of drop) {
         const offeree = offereeForFloorLeave(rd, p.email);
@@ -5172,6 +5177,7 @@ function autoRunState() {
         if (offeree) createOffer(rd, offeree, null, 1);
       }
       if (drop.length) {
+        setImmediate(() => pingWaitlistShift(1, rd, wlBefore));   // F4 (generic sweep pings via removeFromRun)
         setImmediate(() => sendPush(drop.map(p => p.email), {
           title: 'Your spot was released',
           body: `You didn't confirm for ${runLabelFor(rd)} by ${cutoffLabel}, so your spot went to the next in line.`,
@@ -6004,6 +6010,7 @@ function runLeave(programId, req, res) {
   const base = P(programId).paths.run, cfg = P(programId).config;
   const g = programGate(programId, req, res); if (!g) return;
   const rd = programRunDate(programId);
+  const wlBefore = waitlistOrderFor(programId, rd);   // F4 snapshot — self-leave shifts everyone behind up
   const offeree = cfg.offerWindow ? offereeForFloorLeave(rd, req.userEmail, programId) : null;   // guest priority handled inside
   if (!cfg.offerWindow) {
     // Simple model: guest priority first (owner rule), then the member promotion push.
@@ -6015,6 +6022,7 @@ function runLeave(programId, req, res) {
   clearTeamAssignment(programId, rd, req.userEmail);   // off the floor → off any team
   setPartyDeclinedFor(programId, rd, req.userEmail);   // and out of any party so a group check-in can't re-seat them (P2-2)
   if (offeree) createOffer(rd, offeree, req, programId);
+  setImmediate(() => pingWaitlistShift(programId, rd, wlBefore));   // F4: after the dust settles
   res.redirect(base);
 }
 // Operator pulls someone off the floor for THIS cycle (no sit-out recorded — an operator action,
