@@ -11,6 +11,7 @@ Backfilled below from git history for the releases that shipped before this file
 
 | Date (local) | Tag | Commit | Summary |
 |---|---|---|---|
+| 2026-08-03 | rel-20260803-1650 | b893e34 | Chat rooms: back chevron in the room header → the room's run page (all programs); DM threads already had one; CDP 52/52 + chat suites green |
 | 2026-08-03 | rel-20260803-1643 | b0b1f67 | Sheet backdrops fully transparent — the stuck grey shadow is removed for good (owner decision); tap-to-close + drag unchanged; CDP 52/52 |
 | 2026-08-03 | rel-20260803-1601 | 1431c7d | Metrics layer — run_summary at archive (demand/fill-speed/offers), identity-free metrics_events (push/tap/install/join), last-seen actives, analytics pulse + demand lines; SW v2; metrics-fn 23/23 + full board |
 | 2026-07-31 | rel-20260731-2049 | 0c332c2 | Audit-record viewer (/admin/audit + filtered CSV), F4 pings on all four waitlist-shifting paths, clearRunParties atomic — full board green (14 suites + CDP) |
