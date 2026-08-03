@@ -266,6 +266,13 @@ window.__geoCapture=function(){
       bodyClass:document.body.className,composerEngaged:!!window.__composerEngaged},
     build:{clientVer:window.__ver||'',sheets:sheets,
       sw:(navigator.serviceWorker&&navigator.serviceWorker.controller)?base(navigator.serviceWorker.controller.scriptURL):''},
+    tour:(function(){var t=document.getElementById('tour');if(!t)return null;
+      var on=-1,ds=document.querySelectorAll('#tourdots i');for(var k=0;k<ds.length;k++)if(ds[k].className==='on')on=k;
+      var res='';try{res=sessionStorage.getItem('__tourResume')||'';}catch(e){}
+      var seen='';try{seen=localStorage.getItem('bridgeTourV1')||'';}catch(e){}
+      return {hidden:!!t.hidden,ttl:(document.getElementById('tourttl')||{}).textContent||'',on:on,dots:ds.length,
+        bridge:!!document.getElementById('tourbridge'),catchBg:(document.getElementById('tourcatch')||{style:{}}).style.background||'',
+        overflow:document.body.style.overflow||'',resume:res,seen:seen};})(),
     ring:(window.__geoRing||[]).slice(-40)
   };
   var body=JSON.stringify(payload);
