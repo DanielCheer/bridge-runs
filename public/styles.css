@@ -674,8 +674,12 @@ textarea#phones{width:100%;background:#fff;border:1px solid var(--line);border-r
    seam). Start the scrim below the safe area AND lay an OPAQUE cream cover over the strip so iOS
    samples cream (not the dark content just beneath it) — deterministic, no grey can leak up.
    Owner decision 2026-07-16. */
-.wgscrim{position:absolute;top:env(safe-area-inset-top,0px);left:0;right:0;bottom:0;background:rgba(18,20,14,.55)}
-.wgwrap::before{content:'';position:absolute;top:0;left:0;right:0;height:env(safe-area-inset-top,0px);background:var(--bg);z-index:2;pointer-events:none}
+/* Owner decision 2026-08-03: the sheet backdrop is INVISIBLE — no dim, ever. The grey wash kept
+   rendering as a stuck full-page shadow on device (repeated fix attempts incl. the 07-16
+   safe-area cream strip, now removed with it). The element STAYS: it is the tap-outside-to-close
+   catcher and the drag-to-close logic touches it — a stuck wrapper is now invisible and
+   self-heals on the first tap. The sheet's own box-shadow carries the depth. */
+.wgscrim{position:absolute;top:env(safe-area-inset-top,0px);left:0;right:0;bottom:0;background:transparent}
 .wgsheet{position:absolute;left:0;right:0;bottom:0;max-width:580px;margin:0 auto;height:80vh;display:flex;flex-direction:column;background:var(--bg);border-radius:22px 22px 0 0;box-shadow:0 -20px 50px -20px rgba(0,0,0,.45);animation:wgup .22s cubic-bezier(.2,.7,.2,1)}
 @keyframes wgup{from{transform:translateY(24px);opacity:.4}to{transform:none;opacity:1}}
 @media (prefers-reduced-motion:reduce){.wgsheet{animation:none}}
@@ -1119,8 +1123,9 @@ html:not(.noanim) .tab.on .ic{transform:translateY(-1px)}
 .btn.is-busy::after{content:"";width:15px;height:15px;margin-left:8px;border-radius:50%;
   border:2px solid rgba(255,255,255,.5);border-top-color:#fff;animation:btnspin .7s linear infinite}
 
-/* who's-going sheet: scrim fades, sheet slides down on close */
-html:not(.noanim) .wgscrim{animation:a-rise var(--t-fast) ease both}
+/* who's-going sheet: sheet slides down on close. (The scrim no longer animates — it is
+   transparent by owner decision, and its a-rise fill:both opacity pin was part of the
+   stuck-grey mechanism.) */
 @keyframes wgdown{from{transform:none}to{transform:translateY(100%)}}
 .wgsheet.closing{animation:wgdown 200ms var(--ez-out) both}
 .wgwrap .wgsheet{will-change:transform}
