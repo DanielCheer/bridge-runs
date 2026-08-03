@@ -67,6 +67,15 @@ function audit(actor, actorRole, action, target) {
 }
 const KEY_EVENT_RE = /^(waiver:|people:waiver|admin:role|people:approve|people:delete|people:suspend|invite:claimed|session:|pco:connected|pco:oauth-connected|pco:disconnected|program:(create|delete|host-granted|host-revoked|request-approved|request-declined|member-removed))/;
 const stmtAuditKey = db.prepare('INSERT INTO audit_key_events (actor,actor_role,action,target) VALUES (?,?,?,?)');
+// ---- metrics layer (2026-08-03): append-only product events, identity-free ----
+// One insert per event, never on a hot read path, and NEVER an email in the row — kinds, counts
+// and run keys only. A metrics failure must never break the action it measures: fail-loud to the
+// console, swallow the throw. (Not audit(): these are product stats, not an accountability trail.)
+const stmtMetric = db.prepare('INSERT INTO metrics_events (kind, program_id, run_date, n, meta) VALUES (?,?,?,?,?)');
+function metric(kind, { programId = null, runDate = null, n = 1, meta = '' } = {}) {
+  try { stmtMetric.run(kind, programId, runDate, n, String(meta).slice(0, 120)); }
+  catch (e) { console.error(`[metrics] ${kind} write failed: ${e.message}`); }
+}
 
 // Sign-in wrapper for the REAL login sites (magic link, code, invite claim, offer-claim sign-in) —
 // NOT the per-request cookie refresh or the profile email re-sign. An admin account signing in
@@ -218,6 +227,7 @@ function sendPush(emails, { title, body, url, tag, badge }) {
   if (!list.length) return;
   const ph = list.map(() => '?').join(',');
   const subs = db.prepare(`SELECT * FROM push_subscriptions WHERE email IN (${ph})`).all(...list);
+  if (subs.length) metric('push_send', { n: subs.length, meta: tag || '' });   // devices targeted, by tag — no identities
   const payload = JSON.stringify({ title, body, url, tag, badge });
   for (const s of subs) {
     webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload)
@@ -407,10 +417,34 @@ app.use(express.static(path.join(__dirname, 'public'), { maxAge: '7d', immutable
 // Sliding session: any request carrying a valid cookie gets its ~10-year window
 // pushed forward, so a player who keeps showing up never has to sign in again.
 // Static assets are served above and never reach this.
+// Piggybacked engagement pulse (metrics layer): the SAME resolved identity feeds two throttled
+// touches — last_seen_at at most once per LOCAL day per account (in-memory day map; a restart
+// costs one extra write per user), and a push_tap row when the SW-appended ?from=push marker
+// arrives. No other request writes anything — /poll's zero-write contract holds after the first
+// touch of the day.
+const lastSeenDay = new Map();
+const stmtTouchSeen = db.prepare("UPDATE applicants SET last_seen_at = datetime('now','localtime') WHERE email = ?");
 app.use((req, res, next) => {
   const email = currentUser(req);
-  if (email) setSession(res, email);
+  if (email) {
+    setSession(res, email);
+    const d = ymdLocal();
+    if (lastSeenDay.get(email) !== d) {
+      lastSeenDay.set(email, d);
+      try { stmtTouchSeen.run(email); } catch (e) { console.error(`[metrics] last-seen touch failed: ${e.message}`); }
+    }
+    if (req.query.from === 'push') metric('push_tap', { meta: String(req.path).slice(0, 80) });
+  }
   next();
+});
+
+// PWA install beacon (metrics layer): the client fires navigator.sendBeacon here on the
+// `appinstalled` event — the only way the server ever learns an install happened. Signed-in
+// only (beacons carry same-origin cookies) so an anonymous crawler can't inflate the count;
+// no identity is stored, just the fact.
+app.post('/metrics/install', (req, res) => {
+  if (currentUser(req)) metric('pwa_install');
+  res.status(204).end();
 });
 
 // PWA manifest — controls the icon + name when players "Add to Home Screen".
@@ -1682,6 +1716,8 @@ function setRunOpen(runDate, open) {
   db.prepare(`INSERT INTO run_state (run_date, is_open, program_id) VALUES (?, ?, 1)
               ON CONFLICT(run_date, program_id) DO UPDATE SET is_open = excluded.is_open`)
     .run(runDate, open ? 1 : 0);
+  // First open stamps the fill-speed anchor (metrics layer); a later re-open never resets it.
+  if (open) db.prepare("UPDATE run_state SET opened_at = datetime('now','localtime') WHERE run_date = ? AND program_id = 1 AND opened_at IS NULL").run(runDate);
 }
 // Run cancellation (per run_date). Cancelling closes the run too — a cancelled run can't
 // be open for check-in. Un-cancelling leaves it CLOSED (the host re-opens deliberately).
@@ -1911,6 +1947,7 @@ function createOffer(runDate, w, req, programId = 1) {
   const base = process.env.PUBLIC_URL || (req ? `${req.protocol}://${req.get('host')}` : `http://localhost:${PORT}`);
   const link = `${base}${P(programId).paths.run}/claim/${token}`;
   audit('system', 'system', 'offer:send', w.email);
+  if (!P(programId).config.static) metric('offer_send', { programId, runDate });   // durable funnel count (demo excluded) — audit_log ages out at 5000 rows
   // A STATIC/demo program's players are synthetic (@demo.local) — the offer row + claim token are
   // still created (so the money-moment shows on the roster and the claim button works), but never
   // send a real email/push to a fake address.
@@ -1959,8 +1996,40 @@ function expireAndReoffer(runDate, req, programId = 1) {
     const offeree = seatWaitingGuest(programId, runDate) ? null : topOfferee(part, ex.email);
     db.prepare('DELETE FROM checkins WHERE id = ?').run(ex.id);
     audit('system', 'system', 'offer:expire', ex.email);
+    if (!P(programId).config.static) metric('offer_expire', { programId, runDate });
     if (offeree) createOffer(runDate, offeree, req, programId);
   }
+}
+
+// ---- run_summary writer (metrics layer) — call at archive time, BEFORE the purge ----
+// Everything here reads state that is deleted moments later (checkins timing + waitlist order,
+// run_state.opened_at/cancelled); offer counts come from metrics_events, which is already
+// durable, so a re-run can't double-count. INSERT OR IGNORE on PK(run_date, program_id) makes
+// the whole write idempotent. A metrics failure must never stall the rollover: fail-loud to the
+// console, swallow the throw. floor_n matches the attendance archive (non-guests); filled_at is
+// the cap-th non-guest check-in — the "floor full" moment measured from opened_at.
+function writeRunSummary(programId, rd) {
+  try {
+    const cfg = P(programId).config;
+    if (cfg.static) return;   // the demo program has no real weeks
+    const part = partitionFor(programId, rd);
+    const floor = (cfg.offerWindow ? part.floorReal : part.floor) || [];
+    const wait = (part.wait || part.waitPlayers || []);
+    const isGuest = (p) => /@guest\.local$/.test(p.email || '');
+    const floorN = floor.filter((p) => !isGuest(p)).length;
+    const guestN = floor.filter(isGuest).length + wait.filter(isGuest).length;
+    const waitN = wait.filter((p) => !isGuest(p)).length;
+    const times = db.prepare(`SELECT created_at FROM checkins WHERE run_date = ? AND program_id = ? AND email NOT LIKE '%@guest.local' ORDER BY created_at ASC`)
+      .all(rd, programId).map((r) => r.created_at);
+    const st = db.prepare('SELECT opened_at, cancelled FROM run_state WHERE run_date = ? AND program_id = ?').get(rd, programId);
+    const oc = (k) => db.prepare('SELECT COALESCE(SUM(n),0) s FROM metrics_events WHERE kind = ? AND run_date = ? AND program_id = ?').get(k, rd, programId).s;
+    db.prepare(`INSERT OR IGNORE INTO run_summary
+      (run_date, program_id, floor_n, wait_n, guest_n, cap, cancelled, opened_at, first_checkin_at, filled_at, offers_sent, offers_claimed, offers_expired)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(rd, programId, floorN, waitN, guestN, cfg.cap ?? null, (st && st.cancelled) ? 1 : 0, (st && st.opened_at) || null,
+        times[0] || null, (cfg.cap && times.length >= cfg.cap) ? times[cfg.cap - 1] : null,
+        oc('offer_send'), oc('offer_claim'), oc('offer_expire'));
+  } catch (e) { console.error(`[metrics] run_summary write failed for ${programId}/${rd}: ${e.message}`); }
 }
 
 // Weekly rollover work — archive last week's final floor into the permanent
@@ -2000,6 +2069,10 @@ function ensureWeek(runDate = nextRunDate()) {
   // attendance and purge it — corrupting the season board + losing the roster. Cutting off at
   // today archives only runs that have actually ended.
   const t = ymdLocal();
+  // Metrics layer: one summary row per ended run, written while its checkins/run_state still
+  // exist. UNION picks up cancelled/zero-join weeks that have a state row but no checkins.
+  for (const r of db.prepare(`SELECT run_date FROM checkins WHERE run_date < ? AND program_id = 1
+    UNION SELECT run_date FROM run_state WHERE run_date < ? AND program_id = 1`).all(t, t)) writeRunSummary(1, r.run_date);
   stmtArchiveAttendance.run(t, CAP);  // archive the final floor of every run that has ended
   // Attendance just changed for everyone who played → refresh their PCO People custom fields.
   // Fire-and-forget: a PCO outage must never stall the weekly rollover, and the 60s tick's slow
@@ -3470,8 +3543,9 @@ app.post('/checkin/join', requireLogin, (req, res) => {
     const isLateRegular = runOpen && a.is_regular && !a.is_team && !already;
     // Joining ON run day IS confirming (same reasoning as claim=confirm) — otherwise a held
     // late-regular released at 4 PM would be swept "unconfirmed" at 4:30 with zero warning.
-    db.prepare("INSERT OR IGNORE INTO checkins (run_date,email,name,held,confirmed_at) VALUES (?,?,?,?, CASE WHEN ? = 1 THEN datetime('now') END)")
+    const ins = db.prepare("INSERT OR IGNORE INTO checkins (run_date,email,name,held,confirmed_at) VALUES (?,?,?,?, CASE WHEN ? = 1 THEN datetime('now') END)")
       .run(runDate, email, a.full_name, isLateRegular ? 1 : 0, runDate === ymdLocal() ? 1 : 0);
+    if (ins.changes) metric('checkin_join', { programId: 1, runDate });   // self check-ins were the one common action with no durable trace
   } catch (e) { console.error(e); }
   res.redirect('/checkin');
 });
@@ -3505,6 +3579,7 @@ app.post('/checkin/claim/:token', (req, res) => {
   // my spot") — the ✓ also shields them from the run-day confirm-or-release sweep.
   db.prepare("UPDATE checkins SET offered_at = NULL, claim_token = NULL, confirmed_at = datetime('now') WHERE id = ?").run(row.id);
   audit(row.email, 'player', 'offer:claim', row.email);
+  metric('offer_claim', { programId: 1, runDate: row.run_date, meta: `mins=${Math.round((Date.now() - row.offered_at) / 60000)}` });
   signIn(res, row.email, 'spot claim');
   return res.send(claimResultPage({ ok: true, runLabel: runLabelFor(row.run_date), runDate: row.run_date, startLabel: runStartLabel(row.run_date) }));
 });
@@ -4383,6 +4458,15 @@ app.post('/profile/logoutall', requireLogin, (req, res) => {
 // stickiness: is the run growing, how many are NEW, do people come back. Computed straight from the
 // permanent attendance log; per-RUN buckets (not calendar weeks) because a run is the natural unit.
 app.get('/admin/analytics', requireAdmin, (req, res) => {
+  // Engagement pulse (metrics layer): actives from last_seen_at, notification volume + taps and
+  // installs from metrics_events. Display-ready strings computed HERE so the view stays dumb.
+  const pulse = {
+    wau: db.prepare("SELECT COUNT(*) n FROM applicants WHERE last_seen_at >= datetime('now','localtime','-7 days')").get().n,
+    mau: db.prepare("SELECT COUNT(*) n FROM applicants WHERE last_seen_at >= datetime('now','localtime','-30 days')").get().n,
+    pushes30: db.prepare("SELECT COALESCE(SUM(n),0) s FROM metrics_events WHERE kind='push_send' AND at >= datetime('now','localtime','-30 days')").get().s,
+    taps30: db.prepare("SELECT COUNT(*) n FROM metrics_events WHERE kind='push_tap' AND at >= datetime('now','localtime','-30 days')").get().n,
+    installs: db.prepare("SELECT COUNT(*) n FROM metrics_events WHERE kind='pwa_install'").get().n,
+  };
   const cards = [];
   for (const p of PROGRAMS.values()) {
     if (p.id === 90) continue;
@@ -4403,10 +4487,22 @@ app.get('/admin/analytics', requireAdmin, (req, res) => {
     const yr = db.prepare(`
       SELECT COUNT(*) total, COUNT(DISTINCT email) uniques
       FROM attendance WHERE program_id = ? AND run_date >= strftime('%Y-01-01','now') AND email NOT LIKE '%@guest.local'`).get(p.id);
-    cards.push({ name: p.displayName, emoji: p.emoji, runs, retained, total: yr.total, uniques: yr.uniques,
+    // Demand + fill-speed from run_summary (metrics layer) — appears once summaries exist.
+    const rs = db.prepare(`SELECT COUNT(*) runs, AVG(wait_n) avgWait,
+        SUM(offers_sent) osent, SUM(offers_claimed) oclaim,
+        AVG(CASE WHEN opened_at IS NOT NULL AND filled_at IS NOT NULL
+            THEN (julianday(filled_at) - julianday(opened_at)) * 1440 END) fillMins
+      FROM run_summary WHERE program_id = ? AND cancelled = 0`).get(p.id);
+    const demand = rs && rs.runs ? {
+      runs: rs.runs,
+      avgWait: (rs.avgWait ?? 0).toFixed(1),
+      fillMins: rs.fillMins != null ? String(Math.round(rs.fillMins)) : null,
+      claimPct: rs.osent ? String(Math.round((rs.oclaim / rs.osent) * 100)) : null,
+    } : null;
+    cards.push({ name: p.displayName, emoji: p.emoji, runs, retained, total: yr.total, uniques: yr.uniques, demand,
       active4: last4.length < 4 ? null : db.prepare(`SELECT COUNT(DISTINCT email) n FROM attendance WHERE program_id = ? AND run_date IN (${last4.map(() => '?').join(',')})`).get(p.id, ...last4).n });
   }
-  res.send(analyticsPage({ cards }));
+  res.send(analyticsPage({ cards, pulse }));
 });
 
 // ---------- AUDIT VIEWER (S6 follow-up) — the permanent record, readable ----------
@@ -5341,7 +5437,11 @@ function pkRunDate() { return programRunDate(2); }
 // Run-state read/write — program-generic (bind program_id); the pk* names stay thin wrappers.
 function runOpenFor(programId, rd) { const r = stmtRunOpenById.get(rd, programId); return !!(r && r.is_open); }
 function runCancelledFor(programId, rd) { const r = stmtRunCancelledById.get(rd, programId); return !!(r && r.cancelled); }
-function setRunStateFor(programId, rd, field, val) { db.prepare(`INSERT INTO run_state (run_date, ${field}, program_id) VALUES (?, ?, ?) ON CONFLICT(run_date, program_id) DO UPDATE SET ${field} = excluded.${field}`).run(rd, val ? 1 : 0, programId); }
+function setRunStateFor(programId, rd, field, val) {
+  db.prepare(`INSERT INTO run_state (run_date, ${field}, program_id) VALUES (?, ?, ?) ON CONFLICT(run_date, program_id) DO UPDATE SET ${field} = excluded.${field}`).run(rd, val ? 1 : 0, programId);
+  // First open stamps the fill-speed anchor (metrics layer, same rule as basketball's setRunOpen).
+  if (field === 'is_open' && val) db.prepare("UPDATE run_state SET opened_at = datetime('now','localtime') WHERE run_date = ? AND program_id = ? AND opened_at IS NULL").run(rd, programId);
+}
 function pkIsOpen(rd) { return runOpenFor(2, rd); }
 function pkIsCancelled(rd) { return runCancelledFor(2, rd); }
 function pkSetState(rd, field, val) { return setRunStateFor(2, rd, field, val); }
@@ -5852,6 +5952,7 @@ function ensureWeekFor(programId) {
     // placement (a party that WAITED isn't credited just because a member sits early in sort order).
     const part = partitionFor(programId, rd);
     const floor = cfg.offerWindow ? part.floorReal : part.floor;
+    writeRunSummary(programId, rd);   // metrics layer: before the purge erases the evidence
     for (const p of floor) if (!/@guest\.local$/.test(p.email)) stmtRollArchiveIns.run(rd, p.email, p.name, programId);
     stmtRollDelCheckinsByDate.run(rd, programId); stmtRollDelStateByDate.run(rd, programId);
     clearRunTeams(programId, rd);   // archived run → drop its team assignments
@@ -5859,6 +5960,9 @@ function ensureWeekFor(programId) {
   }
   // Sweep stale run_state for past runs that had NO check-ins (a zero-join or cancelled week never
   // appears in pastDates above, so its is_open/cancelled row would leak forever).
+  // Metrics layer first: those zero-join/cancelled weeks still get their summary row (zeros +
+  // the cancelled flag) before the state that proves they happened is swept.
+  for (const r of db.prepare('SELECT run_date FROM run_state WHERE program_id = ? AND run_date < ?').all(programId, today)) writeRunSummary(programId, r.run_date);
   stmtRollSweepState.run(today, programId);
   stmtRollSweepOptout.run(today, programId);   // sit-outs are per-week → clear past ones so renewal resumes
   // Parties for past runs that never reached check-in (invited-only, no checkins → not in pastDates) also leak; sweep them.
@@ -5988,8 +6092,9 @@ function runJoin(programId, req, res) {
   db.prepare('DELETE FROM regular_optout WHERE run_date = ? AND email = ? AND program_id = ?').run(rd, req.userEmail, programId); // re-joining clears any sit-out
   // Joining ON run day IS confirming (claim=confirm reasoning) — a same-day joiner must not be
   // swept "unconfirmed" at the cutoff they signed up within.
-  db.prepare("INSERT OR IGNORE INTO checkins (run_date, email, name, program_id, confirmed_at) VALUES (?,?,?,?, CASE WHEN ? = 1 THEN datetime('now') END)")
+  const ins = db.prepare("INSERT OR IGNORE INTO checkins (run_date, email, name, program_id, confirmed_at) VALUES (?,?,?,?, CASE WHEN ? = 1 THEN datetime('now') END)")
     .run(rd, req.userEmail, g.a.full_name, programId, rd === ymdLocal() ? 1 : 0);
+  if (ins.changes) metric('checkin_join', { programId, runDate: rd });
   res.redirect(base);
 }
 function runCancel(programId, req, res) {
@@ -6109,6 +6214,7 @@ function runClaimPost(programId, req, res) {
   }
   db.prepare("UPDATE checkins SET offered_at = NULL, claim_token = NULL, confirmed_at = datetime('now') WHERE id = ?").run(row.id);   // claiming IS confirming
   audit(row.email, 'player', 'offer:claim', row.email);
+  if (!cfg.static) metric('offer_claim', { programId, runDate: row.run_date, meta: `mins=${Math.round((Date.now() - row.offered_at) / 60000)}` });
   if (cfg.static) return res.redirect(base);        // demo: synthetic player slides onto the floor
   signIn(res, row.email, 'spot claim');                        // real program: sign the claimer in
   return res.send(claimResultPage({ ok: true, runLabel: runLabelFor(row.run_date), runDate: row.run_date, startLabel: startLabelFor(programId) }));

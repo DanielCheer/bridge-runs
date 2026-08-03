@@ -641,6 +641,7 @@ ${VSTEPS_CSS}
   // app are NEVER walled, so the demo laptop + installed phones are unaffected.
   if(!standalone&&coarse&&(ios||android)){document.documentElement.className+=' walled';}
   window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__bip=e;});
+  window.addEventListener('appinstalled',function(){try{navigator.sendBeacon('/metrics/install');}catch(_){}});
 }catch(e){}})();</script>`;
 
 // Overlay body + a script that shows the iOS visual steps (adding an "Open in Safari"
@@ -4410,7 +4411,7 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–
 // ---------- ANALYTICS (F5) — the church's trend view ----------
 // Server-rendered bars (pure divs — no chart lib, nothing external). Newcomers render as the
 // darker base slice of each bar so "how many were NEW" reads at a glance.
-export function analyticsPage({ cards = [] }) {
+export function analyticsPage({ cards = [], pulse = null }) {
   const chart = (runs) => {
     const max = Math.max(...runs.map(r => r.n), 1);
     return `<div style="display:flex;align-items:flex-end;gap:6px;height:120px;margin:12px 0 4px">
@@ -4429,12 +4430,20 @@ export function analyticsPage({ cards = [] }) {
     ${chart(c.runs)}
     <p class="tally-note" style="margin:10px 0 0"><span style="display:inline-block;width:10px;height:10px;background:#22615a;border-radius:2px"></span> newcomers · <span style="display:inline-block;width:10px;height:10px;background:#d8b98a;border-radius:2px"></span> returning</p>
     <p style="margin:10px 0 0">This year: <b>${c.total}</b> check-ins by <b>${c.uniques}</b> people.${c.retained != null ? ` Over the last 4 runs: <b>${c.active4}</b> played, <b>${c.retained}</b> came to 3+ (the regulars).` : ''}</p>
+    ${c.demand ? `<p style="margin:10px 0 0">Demand (${c.demand.runs} summarized run${c.demand.runs === 1 ? '' : 's'}): avg <b>${esc(c.demand.avgWait)}</b> waitlisted${c.demand.fillMins != null ? ` · floor fills in ~<b>${esc(c.demand.fillMins)} min</b>` : ''}${c.demand.claimPct != null ? ` · <b>${esc(c.demand.claimPct)}%</b> of freed spots claimed` : ''}.</p>` : ''}
   </div>`;
   return HEAD('Analytics — The Bridge', '', { wall: false }) + header('<b>ANALYTICS</b>') + `
     ${backBtn('/admin/people')}
     <div class="rule"></div>
     <span class="eyebrow">Attendance trends</span>
     <h1 style="margin-bottom:0">How the runs are doing</h1>
+    ${pulse && (pulse.mau || pulse.pushes30 || pulse.installs) ? `<div class="card rail" style="margin-top:12px">
+      <div class="subhead" style="margin-top:0">📡 Engagement pulse</div>
+      <p style="margin:0">Active members: <b>${pulse.wau}</b> this week · <b>${pulse.mau}</b> this month.
+      Notifications (30d): <b>${pulse.pushes30}</b> sent to devices${pulse.taps30 ? ` · <b>${pulse.taps30}</b> opened from a notification` : ''}.
+      Home-screen installs recorded: <b>${pulse.installs}</b>.</p>
+      <p class="tally-note" style="margin:8px 0 0">Counting started Aug 2026 — actives need a day of traffic, installs count from now on.</p>
+    </div>` : ''}
     ${cards.length ? cards.map(card).join('') : '<p class="lead" style="margin-top:12px">No attendance history yet — charts appear after the first archived run.</p>'}
     <div class="foot" style="margin-top:24px"><a href="/admin/people">‹ Back to People &amp; invites</a></div>
   ` + FOOT;

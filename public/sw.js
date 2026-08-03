@@ -6,7 +6,7 @@
      • immutable icons → cache-first (instant, they never change),
      • everything else (avatars, chat media, /poll, APIs) → passthrough, never cached.
    Bump CACHE to invalidate old entries. */
-const CACHE = 'bridge-static-v1';
+const CACHE = 'bridge-static-v2';
 const ICONS = ['/icon-192.png', '/icon-512.png', '/apple-touch-icon.png', '/favicon.ico'];
 
 self.addEventListener('install', (e) => {
@@ -104,7 +104,9 @@ self.addEventListener('push', (e) => {
 
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const target = (e.notification.data && e.notification.data.url) || '/checkin';
+  const raw = (e.notification.data && e.notification.data.url) || '/checkin';
+  // ?from=push = tap-through marker: the server's engagement middleware counts it (identity-free).
+  const target = raw + (raw.includes('?') ? '&' : '?') + 'from=push';
   e.waitUntil((async () => {
     const all = await clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const c of all) {

@@ -288,6 +288,41 @@ db.exec(`
     action     TEXT NOT NULL,
     target     TEXT NOT NULL DEFAULT ''
   );
+  -- run_summary (2026-08-03, metrics layer): ONE aggregate row per finished run, written at
+  -- archive time from data that is purged moments later (checkins timing, waitlist size,
+  -- run_state). This is the permanent record of DEMAND (wait_n), FILL SPEED (opened_at →
+  -- filled_at) and offer outcomes — the numbers the checkins purge used to destroy weekly.
+  -- Aggregates only: no emails, no names. Never pruned; ~52 rows/program/year.
+  CREATE TABLE IF NOT EXISTS run_summary (
+    run_date   TEXT NOT NULL,
+    program_id INTEGER NOT NULL DEFAULT 1,
+    floor_n    INTEGER NOT NULL DEFAULT 0,   -- archived floor size (matches attendance)
+    wait_n     INTEGER NOT NULL DEFAULT 0,   -- non-guest waitlisters at archive (unmet demand)
+    guest_n    INTEGER NOT NULL DEFAULT 0,
+    cap        INTEGER,                      -- cap at archive time (caps are editable)
+    cancelled  INTEGER NOT NULL DEFAULT 0,
+    opened_at  TEXT,                         -- first check-in open (run_state.opened_at)
+    first_checkin_at TEXT,                   -- earliest checkins.created_at
+    filled_at  TEXT,                         -- created_at of the cap-th check-in (floor-full moment)
+    offers_sent INTEGER NOT NULL DEFAULT 0, offers_claimed INTEGER NOT NULL DEFAULT 0, offers_expired INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    PRIMARY KEY (run_date, program_id)
+  );
+  -- metrics_events (2026-08-03): append-only engagement/product events. Deliberately carries NO
+  -- emails — kinds + counts + run keys only, so it stays outside the PII surface (see
+  -- docs/PII-RETENTION.md). Rows are tiny and rare (dozens/week); offer rows are rolled into
+  -- run_summary at archive, the rest serve the analytics pulse.
+  CREATE TABLE IF NOT EXISTS metrics_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    at         TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    kind       TEXT NOT NULL,                -- push_send | push_tap | pwa_install | checkin_join | offer_send | offer_claim | offer_expire
+    program_id INTEGER,
+    run_date   TEXT,
+    n          INTEGER NOT NULL DEFAULT 1,   -- batch size (push_send) or 1
+    meta       TEXT NOT NULL DEFAULT ''      -- push tag / path / mins-to-claim — never an identity
+  );
+  CREATE INDEX IF NOT EXISTS idx_metrics_kind_at ON metrics_events (kind, at);
+  CREATE INDEX IF NOT EXISTS idx_metrics_run ON metrics_events (run_date, program_id, kind);
   CREATE TABLE IF NOT EXISTS geo_reports (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     at         TEXT NOT NULL DEFAULT (datetime('now')),
@@ -673,6 +708,19 @@ db.exec(`
   // next request. Default 0 keeps every existing (legacy, unversioned) session valid until the
   // owner of the account chooses to revoke.
   if (!cols.includes('session_ver')) db.exec('ALTER TABLE applicants ADD COLUMN session_ver INTEGER NOT NULL DEFAULT 0');
+  // last_seen_at (2026-08-03, metrics layer): coarse daily activity stamp — updated at most once
+  // per LOCAL day by the engagement middleware, so WAU/MAU is computable without an event log.
+  // Personal data: covered in docs/PII-RETENTION.md, deleted with the account like the rest of
+  // the applicants row.
+  if (!cols.includes('last_seen_at')) db.exec('ALTER TABLE applicants ADD COLUMN last_seen_at TEXT');
+}
+// run_state.opened_at (2026-08-03, metrics layer): when check-in FIRST opened for this run —
+// the anchor for "the floor filled in N minutes". Stamped by the two open funnels (setRunOpen /
+// setRunStateFor) only when not already set; carried into run_summary at archive, purged with
+// the row.
+{
+  const cols = db.prepare('PRAGMA table_info(run_state)').all().map(c => c.name);
+  if (!cols.includes('opened_at')) db.exec('ALTER TABLE run_state ADD COLUMN opened_at TEXT');
 }
 // Scheduled announcements (2026-07-31, F8): pending=1 rows are invisible to every live query and
 // fire on the 60s tick when publish_at (local 'YYYY-MM-DDTHH:MM') arrives — archive-the-previous +
