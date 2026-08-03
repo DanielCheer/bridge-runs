@@ -1030,6 +1030,11 @@ body.kb-open .wrap{padding-bottom:calc(100px + var(--kb, 0px))}
 /* Tappable header → opens the members overlay. Full-width tap target with a chevron
    affordance; presses down like the other .lr/.tab controls. */
 .chatsec-tap{width:100%;text-align:left;cursor:pointer;border-radius:14px;padding:6px 8px;transition:background .15s ease}
+/* Back to the room's run page — a SIBLING of the members tap-region (nesting it inside would
+   fire memOpen on the same tap). 44px-tall target, router-intercepted for a smooth swap. */
+.chatback{flex:none;display:flex;align-items:center;justify-content:center;width:40px;height:44px;font-size:30px;line-height:1;color:var(--ink);font-weight:700;text-decoration:none;border-radius:12px;-webkit-tap-highlight-color:transparent}
+.chatback:active{background:rgba(34,97,90,.08)}
+.chatsec-h .chatsec-tap{display:flex;align-items:center;gap:12px;flex:1;min-width:0}
 .chatsec-tap:hover{background:rgba(34,97,90,.05)}
 .chatsec-tap:active{transform:scale(.99)}
 .chatsec-tap .chatsec-t{flex:1}

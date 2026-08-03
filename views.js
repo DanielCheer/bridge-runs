@@ -393,12 +393,12 @@ window.__pollStop=function(){window.__pollPage=null;window.__pollOnChange=null;}
   }
   window.__go=go; // exposed so the team tour can drive a smooth router swap between pages
   document.addEventListener('pointerdown',function(e){
-    var a=e.target&&e.target.closest&&e.target.closest('.tabs a[href],.opsnav a[href],.jc[href],.backruns[href],.hchat[href],.ftab[href],.mrow[href],.bk[href],.pbback[href],.pback[href]');
+    var a=e.target&&e.target.closest&&e.target.closest('.tabs a[href],.opsnav a[href],.jc[href],.backruns[href],.hchat[href],.ftab[href],.mrow[href],.bk[href],.pbback[href],.pback[href],.chatback[href]');
     if(a)warm(a.getAttribute('href'));
   },{passive:true,capture:true});
   document.addEventListener('click',function(e){
     if(e.defaultPrevented||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;
-    var a=e.target&&e.target.closest&&e.target.closest('.tabs a[href],.opsnav a[href],.jc[href],.backruns[href],.hchat[href],.ftab[href],.mrow[href],.bk[href],.pbback[href],.pback[href]');
+    var a=e.target&&e.target.closest&&e.target.closest('.tabs a[href],.opsnav a[href],.jc[href],.backruns[href],.hchat[href],.ftab[href],.mrow[href],.bk[href],.pbback[href],.pback[href],.chatback[href]');
     if(!a)return;
     if(a.hasAttribute('data-full'))return;   // opt out of the SPA swap → normal full navigation (e.g. apply form)
     if(a.target&&a.target!==''&&a.target!=='_self')return;
@@ -2561,10 +2561,13 @@ export function chatPage({ me, chat, runDate = '', hours = '8:30–10:30 PM', dm
   return HEAD('Run Chat — The Bridge', 'has-chat') + header('', wdayShort(runDate), ann, hours) + WELCOME_MODAL + `
     <div class="rule"></div>
     <div class="chatsec chatsec-top">
-      <div class="chatsec-h chatsec-tap" role="button" tabindex="0" onclick="memOpen()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();memOpen()}" aria-label="View run members">
-        <span class="chav">${GROUP_ICON}</span>
-        <div class="chatsec-t"><b>Run Chat</b><span>${chat.memberCount} member${chat.memberCount === 1 ? '' : 's'} · talk to the whole run</span></div>
-        <span class="chatsec-chev" aria-hidden="true">›</span>
+      <div class="chatsec-h">
+        <a class="chatback" href="/checkin" aria-label="Back to the run">‹</a>
+        <div class="chatsec-tap" role="button" tabindex="0" onclick="memOpen()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();memOpen()}" aria-label="View run members">
+          <span class="chav">${GROUP_ICON}</span>
+          <div class="chatsec-t"><b>Run Chat</b><span>${chat.memberCount} member${chat.memberCount === 1 ? '' : 's'} · talk to the whole run</span></div>
+          <span class="chatsec-chev" aria-hidden="true">›</span>
+        </div>
       </div>
     </div>
     ${chatFragment(chat)}
@@ -2613,10 +2616,13 @@ export function runChatPage({ me, chat, program = 2, theme = 'pk', sport = 'Pick
     ${backToRuns}
     <div class="rule"></div>
     <div class="chatsec chatsec-top">
-      <div class="chatsec-h chatsec-tap" role="button" tabindex="0" onclick="memOpen()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();memOpen()}" aria-label="View ${low} members">
-        <span class="chav">${emojiE}</span>
-        <div class="chatsec-t"><b>${sportE} Chat</b><span>${chat.memberCount} member${chat.memberCount === 1 ? '' : 's'} · talk to the ${low} run</span></div>
-        <span class="chatsec-chev" aria-hidden="true">›</span>
+      <div class="chatsec-h">
+        <a class="chatback" href="${esc(base.replace(/\/chat$/, ''))}" aria-label="Back to the ${low} run">‹</a>
+        <div class="chatsec-tap" role="button" tabindex="0" onclick="memOpen()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();memOpen()}" aria-label="View ${low} members">
+          <span class="chav">${emojiE}</span>
+          <div class="chatsec-t"><b>${sportE} Chat</b><span>${chat.memberCount} member${chat.memberCount === 1 ? '' : 's'} · talk to the ${low} run</span></div>
+          <span class="chatsec-chev" aria-hidden="true">›</span>
+        </div>
       </div>
     </div>
     ${chatFragment({ ...chat, base, pollPage, placeholder: `Message the ${low} run`, emptyName: `${sportE} Chat`, emptyMsg: `This is the start of the ${low} room — say hi ${emojiE}` })}
