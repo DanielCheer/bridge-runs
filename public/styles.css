@@ -794,12 +794,16 @@ ol.ig li b{font-weight:700}
    while only the page content moves. Poll refreshes and form re-renders never animate (the
    router only flags navigations). Unsupported browsers keep the instant swap. */
 @supports (view-transition-name: x) {
+  /* Only the TAB BAR is pinned out of the fade: it is identical and opaque on every page, so
+     freezing its snapshots reads as a perfectly still bar. The masthead is NOT pinned (2026-08-04
+     overlap fix): pages have DIFFERENT top bars (run mast vs profile's Back/Save header), and a
+     frozen old-mast snapshot sat at full opacity over the new header for the whole transition.
+     Chrome only counts as chrome when it's the same everywhere — the top isn't, so it rides the
+     content fade. */
   .tabs{view-transition-name:bridge-tabs}
-  .mast{view-transition-name:bridge-mast}
   ::view-transition-old(root){animation:vt-out .14s ease both}
   ::view-transition-new(root){animation:vt-in .2s ease both}
-  ::view-transition-old(bridge-tabs),::view-transition-new(bridge-tabs),
-  ::view-transition-old(bridge-mast),::view-transition-new(bridge-mast){animation:none}
+  ::view-transition-old(bridge-tabs),::view-transition-new(bridge-tabs){animation:none}
   @media (prefers-reduced-motion:reduce){
     ::view-transition-old(root),::view-transition-new(root),::view-transition-group(*){animation:none!important}
   }
