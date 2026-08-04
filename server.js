@@ -4642,10 +4642,13 @@ const localNowMinute = () => {
 // armed timeout targets the NEXT due publish_at exactly, so a 7:00 post fires AT 7:00, not at
 // the first 60s tick after it. The tick still calls fireScheduledAnnouncements as the safety net
 // (a lost timer — crash, clock jump — costs at most the old minute of lag, never the post).
-// Re-armed on boot, on schedule, on cancel, and after every fire. Real clock on purpose: the
-// harness drives firing through the test tick, not this timer.
+// Re-armed on boot, on schedule, on cancel, and after every fire. Under TEST_NOW the timer never
+// arms AT ALL: it computes its delay from the real clock while the due check reads the test clock,
+// so a pinned-past TEST_NOW would arm 0ms → fire → nothing due → re-arm 0ms, a hot spin. The
+// harness fires through /admin/test/tick instead — which is the documented design.
 let schedFireTimer = null;
 function armScheduleTimer() {
+  if (TEST_NOW != null) return;
   if (schedFireTimer) { clearTimeout(schedFireTimer); schedFireTimer = null; }
   const next = db.prepare('SELECT MIN(publish_at) m FROM announcements WHERE pending = 1').get().m;
   if (!next) return;
@@ -4654,18 +4657,27 @@ function armScheduleTimer() {
     schedFireTimer = null;
     try { fireScheduledAnnouncements(); } catch (e) { console.error(`[announce] timed fire failed: ${e.message}`); armScheduleTimer(); }
   }, Math.max(0, Math.min(ms + 250, 2147000000)));   // +250ms lands just past the minute boundary; clamp ≈24d re-arms itself
+  schedFireTimer.unref();   // the 60s tick (also unref'd) is the delivery guarantee; never pin the event loop
 }
 function fireScheduledAnnouncements() {
   const due = db.prepare(
-    "SELECT id, program_id, body, author, sched_email FROM announcements WHERE pending = 1 AND publish_at <= ? ORDER BY id").all(localNowMinute());
+    "SELECT id, program_id, body, author, sched_email FROM announcements WHERE pending = 1 AND publish_at <= ? ORDER BY publish_at, id").all(localNowMinute());
+  // ORDER BY publish_at (not id): on a catch-up batch (downtime, same-minute posts) the
+  // LAST-firing post stays live — that must be the latest-scheduled one, not the highest id.
   for (const a of due) {
-    db.prepare("UPDATE announcements SET archived = 1, archived_at = datetime('now') WHERE archived = 0 AND COALESCE(pending,0) = 0 AND program_id = ?").run(a.program_id);
-    // Fire = INSERT a FRESH row + drop the pending one (P3-1): the unread-bell dot is
-    // `id > last_seen_id` and the panel orders by id DESC, so flipping pending=0 in place kept
-    // the OLD id — no dot, wrong order, for anyone who'd seen a later post meanwhile.
-    db.prepare('INSERT INTO announcements (body, author, program_id) VALUES (?,?,?)').run(a.body, a.author, a.program_id);
-    db.prepare('DELETE FROM announcements WHERE id = ?').run(a.id);
-    audit('system', 'system', 'announce:fired', `${a.program_id}:${a.body.slice(0, 40)}`);
+    // Fire = INSERT a FRESH row + drop the pending one: the unread-bell dot is `id > last_seen_id`
+    // and the panel orders by id DESC, so flipping pending=0 in place kept the OLD id — no dot,
+    // wrong order, for anyone who'd seen a later post meanwhile. Archive+insert+delete commit as
+    // ONE transaction: a mid-fire throw (transient SQLITE_BUSY) must not leave the fresh row live
+    // with the pending row intact, or the next tick fires it AGAIN (duplicate rows + push).
+    try {
+      db.exec('BEGIN');
+      db.prepare("UPDATE announcements SET archived = 1, archived_at = datetime('now') WHERE archived = 0 AND COALESCE(pending,0) = 0 AND program_id = ?").run(a.program_id);
+      db.prepare('INSERT INTO announcements (body, author, program_id) VALUES (?,?,?)').run(a.body, a.author, a.program_id);
+      db.prepare('DELETE FROM announcements WHERE id = ?').run(a.id);
+      audit('system', 'system', 'announce:fired', `${a.program_id}:${a.body.slice(0, 40)}`);
+      db.exec('COMMIT');
+    } catch (e) { try { db.exec('ROLLBACK'); } catch (_) {} console.error(`[announce] fire failed for #${a.id}: ${e.message}`); continue; }
     const isBball = a.program_id === 1;
     const url = isBball ? '/checkin' : P(a.program_id)?.paths.run;
     if (!url) continue;   // program deleted since scheduling — row fired into history, nobody pushed
@@ -5617,15 +5629,16 @@ function clearRunParties(programId, rd) {
   } catch (e) { db.exec('ROLLBACK'); throw e; }
 }
 const stmtRunTeams = db.prepare('SELECT email, team_no, assigned_by FROM team_assignments WHERE program_id = ? AND run_date = ? ORDER BY team_no ASC, created_at ASC');
-function runTeamsFor(programId, rd) {
+function runTeamsFor(programId, rd, part = null) {
   const rows = stmtRunTeams.all(programId, rd);
   if (!rows.length) return rows;
   // Team seats are FLOOR seats. Every REMOVAL path clears the assignment, but a floor→waitlist
   // slide (offer churn, operator bump, waitlist cycling) is not a removal — it left the slider
   // holding a team seat from the waitlist, so teams read "full" while a floor player had no seat
   // (2026-08-04: demo-12 waitlisted with a Team 3 chair, Andre unassigned). Self-heal at the one
-  // read chokepoint: non-floor assignments are dropped, not displayed.
-  const part = partitionFor(programId, rd);
+  // read chokepoint: non-floor assignments are dropped, not displayed. Callers that already
+  // hold the partition pass it in — the run-page render was computing it twice.
+  part = part || partitionFor(programId, rd);
   const floor = new Set((((P(programId).config.offerWindow ? part.floorReal : part.floor)) || []).map((p) => lc(p.email)));
   const stale = rows.filter((r) => !floor.has(lc(r.email)));
   for (const s of stale) clearTeamAssignment(programId, rd, s.email);
@@ -5653,8 +5666,8 @@ function assignTeam(programId, rd, email, teamNo, by = '') {
 // after close was invisible to the whole teams area and could never get a chair, though they
 // physically play). Guests have no session, so self-join stays members-only by construction;
 // operators assign them and auto-fill balances them like anyone on the floor.
-function teamFloor(programId, rd) {
-  const cfg = P(programId).config, part = partitionFor(programId, rd);
+function teamFloor(programId, rd, part = null) {
+  const cfg = P(programId).config; part = part || partitionFor(programId, rd);
   return (cfg.offerWindow ? part.floorReal : part.floor);
 }
 // A floor player self-joins / switches a team (only once teams are open + they're on the floor).
@@ -5680,7 +5693,10 @@ function runTeamAssign(programId, req, res) {
   if (!teamsFeature(programId)) return res.redirect(base);
   const rd = programRunDate(programId), em = String(req.body.email || '').toLowerCase(), n = String(req.body.team || '');
   if (n === '0' || n === '') clearTeamAssignment(programId, rd, em);
-  else assignTeam(programId, rd, em, n, req.userEmail);
+  // Floor check mirrors runTeamJoin: without it an arbitrary email seats, holds a chair in
+  // assignTeam's size guard, then silently vanishes on the next render's self-heal — a phantom
+  // assignment. (Clearing above stays unconditional: clearing a stale row is always safe.)
+  else if (teamFloor(programId, rd).some((p) => lc(p.email) === em)) assignTeam(programId, rd, em, n, req.userEmail);
   res.redirect(base);
 }
 // Operator/admin: forgive a member's auto-renew penalty — clear strikes + lift any pause. The safety
@@ -5706,9 +5722,10 @@ function teamFillCore(programId, rd, by) {
   const t = teamsFeature(programId); if (!t) return;
   const counts = {}; for (let i = 1; i <= t.count; i++) counts[i] = 0;
   const assigned = new Set();
-  for (const r of runTeamsFor(programId, rd)) { counts[r.team_no] = (counts[r.team_no] || 0) + 1; assigned.add(r.email); }
+  const part = partitionFor(programId, rd);   // shared by the heal + the floor scan below
+  for (const r of runTeamsFor(programId, rd, part)) { counts[r.team_no] = (counts[r.team_no] || 0) + 1; assigned.add(r.email); }
   // Units in floor order: parties as blocks, solos as singletons.
-  const floor = teamFloor(programId, rd).filter(p => !assigned.has(p.email));
+  const floor = teamFloor(programId, rd, part).filter(p => !assigned.has(p.email));
   const units = [], byGroup = new Map();
   for (const p of floor) {
     if (p.group_id) {
@@ -6646,7 +6663,7 @@ function runGetPage(programId, req, res) {
     pkMsg: req.query.pkset ? String(req.query.pkset) : (req.query.pkerr || ''),
     dmUnread: unreadCount(req.userEmail), groupUnread: chatUnreadFor(programId, req.userEmail), groupMention: chatMentionUnreadFor(programId, req.userEmail, g.a ? g.a.id : 0), ann: annPanel(req.userEmail),
     runBase: base, programId, theme: cfg.theme, sport: prog.displayName, sportEmoji: prog.emoji, dayName: DAY_NAMES[cfg.dow], pollKey: prog.key,
-    teamsCfg: teamsFeature(programId), teamRows: teamsFeature(programId) ? runTeamsFor(programId, rd) : [], teamsOpen: teamsFeature(programId) ? teamsOpen(programId, rd) : false,
+    teamsCfg: teamsFeature(programId), teamRows: teamsFeature(programId) ? runTeamsFor(programId, rd, part) : [], teamsOpen: teamsFeature(programId) ? teamsOpen(programId, rd) : false,
     penaltyState: g.canOperate ? penaltyStateFor(programId) : {},   // operator-only: {email: {strikes, until}} for the roster badge + forgive button
     partyData: cfg.static ? null : partyPanelFor(programId, rd, req.userEmail),   // queue-with-friends card (null unless groupQueue; the STATIC demo must never surface the admin's REAL party)
     partyMsg: req.query.partyfull ? 'full' : (req.query.partybig ? 'big' : ''),   // party check-in outcome notice (P3-4: the redirect params were silent)

@@ -50,6 +50,9 @@ const fmtWhen = (sqlUtc) => {
 const SPLASH_HEAD = `<script>(function(){try{if(sessionStorage.getItem('splashed'))document.documentElement.className+=' splashed';}catch(e){}})();</script>
 <style>
 #splash{position:fixed;inset:0;z-index:9999;background:#F8F5EF;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:46px;opacity:1;transition:opacity .5s ease}
+html.theme-midnight #splash{background:#111827}
+html.theme-midnight #splash .tt b{color:#EAEDF4}
+html.theme-midnight #splash .tt .sb,html.theme-midnight #splash .tt .ck{color:#43907E}
 html.splashed #splash{display:none}
 #splash.hide{opacity:0;pointer-events:none}
 #splash .bw{position:relative;display:grid;place-items:center}
@@ -183,7 +186,12 @@ window.__swapWrap=function(html,animate){
     // stay hard cuts, or the app would flash on every background update. Falls back to the
     // instant swap where the API is missing, the tab is hidden, or the user prefers less motion.
     var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches;
-    if(animate&&document.startViewTransition&&!reduce&&!document.hidden){ document.startViewTransition(mutate); }
+    if(animate&&document.startViewTransition&&!reduce&&!document.hidden){
+      // The mutate runs ASYNC here, after we've already returned true (and the caller pushed
+      // state) — a throw can't reach the caller's hard-nav fallback, so fall back ourselves:
+      // location reflects the NEW page at that point, a hard load of it lands correctly.
+      document.startViewTransition(function(){ try{mutate();}catch(e){try{window.location.href=location.pathname+location.search;}catch(e2){}} });
+    }
     else{ mutate(); }
     return true;
   }catch(e){return false;}
@@ -393,18 +401,21 @@ window.__pollStop=function(){window.__pollPage=null;window.__pollOnChange=null;}
     // a scroll would wipe the unread badge for messages you never saw.
     try{ cache[href]={t:Date.now(),p:fetch(href,{credentials:'same-origin',headers:{'X-Prewarm':'1'}}).then(function(r){return r.text().then(function(t){return {ok:r.ok,url:r.url,redirected:r.redirected,text:t};});})}; }catch(e){} }
   function hard(href){ try{window.location.href=href;}catch(e){} }
-  function paint(res,href,push,type){
-    // Plain instant swap — NO View Transition. iOS Safari leaves stuck ::view-transition
-    // snapshots (old masthead ghosting over the new page), so we skip startViewTransition
-    // entirely; __swapWrap replaces .wrap in one synchronous repaint = clean, no overlap.
+  function paint(res,href,push,type,animate){
+    // The swap animates via a View Transition inside __swapWrap when animate !== false.
+    // popstate passes false: iOS already played its native edge-swipe animation — a second
+    // crossfade over the same page reads as a double-flash.
     if(push)history.pushState({r:1},'',href); else history.replaceState({r:1},'',href);
     window.scrollTo(0,0);
-    if(!window.__swapWrap(res.text,true)){hard(href);}
+    if(!window.__swapWrap(res.text,animate!==false)){hard(href);}
   }
   function mkres(r){ return r.text().then(function(t){return {ok:r.ok,url:r.url,redirected:r.redirected,text:t};}); }
-  function go(href,push){
+  var navSeq=0; // navigation generation token: only the LATEST go() may paint — without it a
+  // slow tab fetch resolving after a faster later one repaints (and re-pushes) the stale page.
+  function go(href,push,animate){
     var abs; try{abs=new URL(href,location.href);}catch(e){hard(href);return;}
     if(abs.origin!==location.origin){hard(href);return;}
+    var seq=++navSeq;
     var type=push?window.__navDir(location.pathname,abs.pathname):null;
     warm(href); // (re)fills a fresh entry if the current one is missing or stale
     var e=cache[href]; delete cache[href];
@@ -412,13 +423,14 @@ window.__pollStop=function(){window.__pollPage=null;window.__pollOnChange=null;}
     if(!pr){ try{pr=fetch(href,{credentials:'same-origin'}).then(mkres);}catch(e){hard(href);return;} }
     if(window.__pollStop)window.__pollStop();   // park poll so its onChange can't clobber mid-swap
     pr.then(function(res){
+      if(seq!==navSeq)return;   // a newer navigation superseded this one — its paint wins
       if(!res||typeof res.text!=='string'){hard(href);return;}
       if(res.redirected&&res.url){var u;try{u=new URL(res.url);}catch(e){u=null;} if(u&&u.pathname!==abs.pathname){hard(res.url);return;}}
-      paint(res,href,push,type);
+      paint(res,href,push,type,animate);
       // Actually LANDED on chat → now mark it read (the prewarm skipped it). Beacon =
       // fire-and-forget; the badge clears on the next poll tick.
       if(abs.pathname.endsWith('/chat')&&navigator.sendBeacon){try{navigator.sendBeacon(abs.pathname+'/seen');}catch(e){}} // any run's chat room (/chat, /pickleball/chat, /volleyball/chat, …) — P2-1
-    }).catch(function(){hard(href);});
+    }).catch(function(){if(seq===navSeq)hard(href);});
   }
   window.__go=go; // exposed so the team tour can drive a smooth router swap between pages
   document.addEventListener('pointerdown',function(e){
@@ -438,7 +450,7 @@ window.__pollStop=function(){window.__pollPage=null;window.__pollOnChange=null;}
     if(abs.pathname===location.pathname&&abs.search===location.search)return;   // current tab → no-op
     go(href,true);
   });
-  window.addEventListener('popstate',function(){ go(location.pathname+location.search,false); });
+  window.addEventListener('popstate',function(){ go(location.pathname+location.search,false,false); });
 })();
 // Run-page action forms (I'm in / Sit out / Open / Close / guest / teams / who's-going sheet actions):
 // POST via fetch + swap .wrap in place so the page never navigates (scroll kept, instant feedback,
@@ -706,11 +718,16 @@ const WALL_BODY = `<div id="installwall" role="dialog" aria-modal="true" aria-la
 })();</script>`;
 
 const HEAD = (title, bodyClass = '', { wall = true } = {}) => `<!doctype html><html lang="en"><head>
-<script>/* User theme bootstrap — BEFORE styles load so there is no flash. Class lives on <html>
-(the router swap replaces body.className, html survives). Whitelisted; Classic = no class. */
-try{var t=localStorage.getItem('bridgeTheme');if(t&&/^(midnight)$/.test(t))document.documentElement.className='theme-'+t;}catch(e){}</script>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#F8F5EF">
+<script>/* User theme bootstrap — BEFORE styles load so there is no flash. Class lives on <html>
+(the router swap replaces body.className, html survives). Whitelisted; a stale value from a
+removed theme is cleaned up so the picker's highlight matches reality. Classic = no class.
+Runs AFTER the theme-color meta above so it can restamp the browser/PWA chrome tint too. */
+try{var t=localStorage.getItem('bridgeTheme');
+if(t&&/^(midnight)$/.test(t)){document.documentElement.className='theme-'+t;
+var m=document.querySelector('meta[name=theme-color]');if(m)m.setAttribute('content','#111827');}
+else if(t)localStorage.removeItem('bridgeTheme');}catch(e){}</script>
 <link rel="icon" href="/favicon.ico?v=2" sizes="any">
 <link rel="icon" type="image/png" href="/icon-192.png?v=2">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2">
@@ -2643,7 +2660,6 @@ export function runChatPage({ me, chat, program = 2, theme = 'pk', sport = 'Pick
       </div>
     </div>`;
   return HEAD(`${sport} Chat — The Bridge`, `has-chat ${theme}`) + header('', '', ann, '') + WELCOME_MODAL + `
-    ${backToRuns}
     <div class="rule"></div>
     <div class="chatsec chatsec-top">
       <div class="chatsec-h">
@@ -3413,7 +3429,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
       ${canOperate && !demoMode ? `<a class="bannedit" href="${runBase}/banner" aria-label="Change banner photo">🖼 Change</a>` : ''}
     </div>
     ${announcement ? `<div class="notice" style="margin-top:10px;display:flex;align-items:flex-start;gap:8px;justify-content:space-between"><span>📣 <b>Announcement</b> · ${esc(announcement.body)}${announcement.author ? `<span style="color:var(--muted)"> — ${esc(announcement.author)}</span>` : ''}</span>${canOperate ? `<form method="POST" action="${runBase}/announce/retract" class="swapform" style="margin:0;flex-shrink:0"><button class="btn ghost sm" type="submit" title="Retract this announcement">Retract</button></form>` : ''}</div>` : ''}
-    ${hero}${demoMode && canOperate ? `<div class="notice" style="margin-top:10px;background:#fff4e5;border-color:#e0b070">🎬 <b>Demo mode.</b> Seed a full floor + waitlist, then pull a floor player (Remove in "Who's going") to fire a real auto-offer — the top waitlister moves to <b>⏳ Claiming</b>; tap <b>✓ Claim</b> to slide them onto the floor. <b>End queue</b> = run's over (roster archives, check-in closes); <b>Start queue</b> = next week opens and the auto-renewers instantly claim their guaranteed spots. Nothing here touches live data.<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><form method="POST" action="/admin/demo/seed" class="swapform" style="margin:0"><button class="btn primary sm" type="submit">${going + waiting ? '↻ Reset' : '▶ Seed'} full run</button></form><form method="POST" action="/admin/demo/endqueue" class="swapform" style="margin:0"><button class="btn sm" type="submit">⏹ End queue</button></form><form method="POST" action="/admin/demo/startqueue" class="swapform" style="margin:0"><button class="btn sm" type="submit">▶ Start queue</button></form><form method="POST" action="/admin/demo/clear" class="swapform" style="margin:0" onsubmit="return confirm('Clear the demo run?')"><button class="btn ghost sm" type="submit">Clear</button></form></div></div>` : ''}
+    ${hero}${demoMode && canOperate ? `<div class="notice demonote" style="margin-top:10px">🎬 <b>Demo mode.</b> Seed a full floor + waitlist, then pull a floor player (Remove in "Who's going") to fire a real auto-offer — the top waitlister moves to <b>⏳ Claiming</b>; tap <b>✓ Claim</b> to slide them onto the floor. <b>End queue</b> = run's over (roster archives, check-in closes); <b>Start queue</b> = next week opens and the auto-renewers instantly claim their guaranteed spots. Nothing here touches live data.<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><form method="POST" action="/admin/demo/seed" class="swapform" style="margin:0"><button class="btn primary sm" type="submit">${going + waiting ? '↻ Reset' : '▶ Seed'} full run</button></form><form method="POST" action="/admin/demo/endqueue" class="swapform" style="margin:0"><button class="btn sm" type="submit">⏹ End queue</button></form><form method="POST" action="/admin/demo/startqueue" class="swapform" style="margin:0"><button class="btn sm" type="submit">▶ Start queue</button></form><form method="POST" action="/admin/demo/clear" class="swapform" style="margin:0" onsubmit="return confirm('Clear the demo run?')"><button class="btn ghost sm" type="submit">Clear</button></form></div></div>` : ''}
     ${canOperate && pendingRequests.length ? `<div class="notice warn" style="margin-top:10px">
       <b>Join requests (${pendingRequests.length})</b>
       ${pendingRequests.map(p => `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap"><span style="flex:1;min-width:140px">${esc(p.name)}</span>
@@ -3693,6 +3709,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
       <script>
         (function(){ if(window.__themeBound) return; window.__themeBound=1;
           function mark(){ var cur=''; try{cur=localStorage.getItem('bridgeTheme')||'';}catch(e){}
+            if(!/^(midnight)$/.test(cur))cur='';   // stale value from a removed theme = Classic
             document.querySelectorAll('.themeopt').forEach(function(b){
               var on=(b.getAttribute('data-theme')||'')===cur;
               b.style.borderColor=on?'var(--orange)':'var(--line)';
@@ -3701,6 +3718,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
             var k=b.getAttribute('data-theme')||'';
             try{ if(k)localStorage.setItem('bridgeTheme',k); else localStorage.removeItem('bridgeTheme'); }catch(e2){}
             document.documentElement.className=(document.documentElement.className.replace(/\\btheme-[a-z]+\\b/g,'').trim()+(k?' theme-'+k:'')).trim();
+            var m=document.querySelector('meta[name=theme-color]');if(m)m.setAttribute('content',k==='midnight'?'#111827':'#F8F5EF');
             mark(); });
           mark();
         })();
@@ -4623,7 +4641,7 @@ export function kioskPage({ sport, emoji, theme = '', runDate = '', dateLabel = 
       .kcols{display:grid;grid-template-columns:1fr 1fr;gap:28px}
       @media (max-width:700px){.kcols{grid-template-columns:1fr}}
       .ksec h2{font-size:20px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 10px}
-      .krow{display:flex;gap:14px;align-items:center;padding:10px 14px;border:1px solid var(--line);border-radius:12px;margin-bottom:8px;background:#fff}
+      .krow{display:flex;gap:14px;align-items:center;padding:10px 14px;border:1px solid var(--line);border-radius:12px;margin-bottom:8px;background:var(--card)}
       .krow .kn{font-weight:800;font-size:22px;min-width:34px;color:var(--muted)}
       .krow .km{font-size:26px;font-weight:600} .kc{color:#2e7d53;font-weight:800}
       .krow.kw .km{font-size:22px;font-weight:500}

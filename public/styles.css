@@ -17,7 +17,8 @@
   --bg:#F8F5EF; --card:#FFFFFF; --ink:#20211c; --muted:#6e6857;
   --line:rgba(34,35,29,.12); --line-soft:rgba(34,35,29,.08);
   --teal:#22615A; --hero:linear-gradient(150deg,#2b6c64 0%,#1d4f48 58%,#153a35 100%);
-  --chalk:#F6F2E9; --tint:#FCF7F1; --tint2:#F1EEE6; --composer:var(--composer); --chalk-dim:rgba(240,235,220,.6);
+  --chalk:#F6F2E9; --tint:#FCF7F1; --tint2:#F1EEE6; --composer:rgba(248,245,239,.94); --chalk-dim:rgba(240,235,220,.6);
+  --bubble:#ECEAE4; --wash:rgba(255,255,255,.55);
   --orange:#E4611F; --orange-deep:#C24512; --orange-dark:#D0530F; --peach:#FBB360; --burn:#3a1405;
   --foil:linear-gradient(145deg,#C24512 0%,#FBB360 38%,#E4611F 56%,#FFCF98 100%);
   --solid:linear-gradient(180deg,#F59248,#E4611F 55%,#D0530F);
@@ -34,14 +35,16 @@
 body.pk{
   --teal:#2c8175;
   --hero:linear-gradient(150deg,#3a9285 0%,#2b7669 56%,#1f5a50 100%);
-  --orange:#e7d7b3; --orange-deep:#b7a273; --orange-dark:#cdb888; --peach:#f1e8d1; --burn:#463a20;
+  --orange:#e7d7b3; --orange-deep:#b7a273; --orange-dark:#cdb888; --peach:#f1e8d1; --burn:#463a20; --accent-ink:#20211c;
   --foil:linear-gradient(145deg,#dbc796 0%,#f1e8d1 38%,#e7d7b3 56%,#f5eddb 100%);
   --solid:linear-gradient(180deg,#efe4c6,#e7d7b3 55%,#d9c69c);
 }
-/* cream buttons/pills need dark ink + a neutral (non-orange) shadow to stay legible */
-body.pk .btn{color:var(--ink);text-shadow:none;box-shadow:0 10px 24px -14px rgba(90,74,38,.55),inset 0 1px 0 rgba(255,255,255,.55)}
+/* cream buttons/pills need dark ink + a neutral (non-orange) shadow to stay legible.
+   --accent-ink (set on body.pk/.vb, NOT themeable): "ink that contrasts the cream accent" —
+   under Midnight --ink goes light, which would put near-white text on the cream buttons. */
+body.pk .btn{color:var(--accent-ink);text-shadow:none;box-shadow:0 10px 24px -14px rgba(90,74,38,.55),inset 0 1px 0 rgba(255,255,255,.55)}
 body.pk .spill,body.pk .arpill.on{color:var(--burn);box-shadow:0 2px 10px rgba(150,128,72,.38)}
-body.pk .backruns{background:var(--solid)!important;color:var(--ink)!important;box-shadow:0 3px 10px rgba(90,74,38,.26)!important}
+body.pk .backruns{background:var(--solid)!important;color:var(--accent-ink)!important;box-shadow:0 3px 10px rgba(90,74,38,.26)!important}
 /* legibility on the cream/teal skin: white-on-cream badges + host tags → dark ink; the
    ghost active tab + eyebrow + links get a readable teal instead of near-invisible cream. */
 body.pk .tabbadge{color:var(--burn)}
@@ -54,13 +57,13 @@ body.pk a{color:var(--teal)}
 body.vb{
   --teal:#2f5d9e;
   --hero:linear-gradient(150deg,#3d6db4 0%,#2c5490 56%,#1e3c69 100%);
-  --orange:#e7d29a; --orange-deep:#bfa25f; --orange-dark:#d6bd7c; --peach:#f2e7c8; --burn:#3e3416;
+  --orange:#e7d29a; --orange-deep:#bfa25f; --orange-dark:#d6bd7c; --peach:#f2e7c8; --burn:#3e3416; --accent-ink:#20211c;
   --foil:linear-gradient(145deg,#d9bf82 0%,#f2e7c8 38%,#e7d29a 56%,#f6efd8 100%);
   --solid:linear-gradient(180deg,#efe1bd,#e7d29a 55%,#d9c088);
 }
-body.vb .btn{color:var(--ink);text-shadow:none;box-shadow:0 10px 24px -14px rgba(70,58,32,.55),inset 0 1px 0 rgba(255,255,255,.55)}
+body.vb .btn{color:var(--accent-ink);text-shadow:none;box-shadow:0 10px 24px -14px rgba(70,58,32,.55),inset 0 1px 0 rgba(255,255,255,.55)}
 body.vb .spill,body.vb .arpill.on{color:var(--burn);box-shadow:0 2px 10px rgba(150,128,72,.38)}
-body.vb .backruns{background:var(--solid)!important;color:var(--ink)!important;box-shadow:0 3px 10px rgba(70,58,32,.26)!important}
+body.vb .backruns{background:var(--solid)!important;color:var(--accent-ink)!important;box-shadow:0 3px 10px rgba(70,58,32,.26)!important}
 body.vb .tabbadge{color:var(--burn)}
 body.vb .bdg.host,body.vb .sb.host,body.vb .tag.host{color:var(--burn)}
 body.vb .tab.on{color:var(--teal)}
@@ -491,13 +494,14 @@ textarea{min-height:84px;resize:vertical}
 .notice.good{border-color:rgba(46,125,83,.35);border-left-color:var(--good)}
 .notice.warn{border-color:rgba(162,117,27,.35);border-left-color:var(--warn)}
 .notice.bad{border-color:rgba(188,72,55,.4);border-left-color:var(--bad)}
+.notice.demonote{background:#fff4e5;border-color:#e0b070}
 /* waitlist offer banner — loud/foil-accented so a held spot can't be missed */
 .notice.claim{border:1px solid rgba(228,97,31,.5);border-left:4px solid var(--burn);
-  background:linear-gradient(90deg,rgba(251,179,96,.16),rgba(255,255,255,.6));line-height:1.5}
+  background:linear-gradient(90deg,rgba(251,179,96,.16),var(--wash));line-height:1.5}
 
 /* ---------- announcement banner (in-app latest announcement — all players) ---------- */
 .annbanner{display:flex;gap:12px;align-items:flex-start;margin:14px 0;padding:13px 12px 13px 16px;
-  border-radius:16px;background:linear-gradient(90deg,rgba(34,97,90,.10),rgba(255,255,255,.55));
+  border-radius:16px;background:linear-gradient(90deg,rgba(34,97,90,.10),var(--wash));
   border:1px solid rgba(34,97,90,.28);border-left:4px solid var(--teal);box-shadow:0 1px 2px rgba(28,32,25,.04)}
 .annbanner-i{font-size:19px;line-height:1.3;flex:none}
 .annbanner-b{flex:1;min-width:0}
@@ -874,7 +878,7 @@ ol.ig li b{font-weight:700}
 .msg.theirs .mbwrap{flex-direction:row-reverse}
 .mb{padding:9px 14px;border-radius:19px;font-size:15px;line-height:1.35;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
 .msg.mine .mb{background:linear-gradient(180deg,#34A9FF,#0A7AFF);color:#fff;border-bottom-right-radius:19px;box-shadow:0 1px 2px rgba(10,110,255,.3)}
-.msg.theirs .mb{background:#ECEAE4;color:var(--ink)}
+.msg.theirs .mb{background:var(--bubble);color:var(--ink)}
 .msg.mine.tail .mb{border-bottom-right-radius:5px}
 .msg.theirs.tail .mb{border-bottom-left-radius:5px}
 .mquote{max-width:100%;font-size:12px;color:var(--muted);padding:3px 12px 5px;margin-bottom:-2px;
@@ -944,7 +948,7 @@ body.kb-open .wrap{padding-bottom:calc(100px + var(--kb, 0px))}
 .mb-img{padding:0;background:none!important;box-shadow:none!important;overflow:hidden;border-radius:18px;max-width:230px}
 .mb-img.mb-cap{padding:4px 4px 2px}
 .msg.mine .mb-img.mb-cap{background:linear-gradient(180deg,#34A9FF,#0A7AFF)!important;box-shadow:0 1px 2px rgba(10,110,255,.3)!important}
-.msg.theirs .mb-img.mb-cap{background:#ECEAE4!important}
+.msg.theirs .mb-img.mb-cap{background:var(--bubble)!important}
 .mphoto{display:block;max-width:220px;width:100%;height:auto;border-radius:16px;object-fit:cover;cursor:zoom-in;background:rgba(34,35,29,.05)}
 .mb-cap .mphoto{border-radius:14px}
 .mcap{padding:6px 10px 4px;font-size:15px;line-height:1.35;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
@@ -1233,11 +1237,11 @@ html:not(.noanim) .lpclone{animation:lp-pop 300ms cubic-bezier(.34,1.3,.55,1) bo
 html:not(.noanim) .lpreact{animation:lp-rise 280ms cubic-bezier(.34,1.3,.55,1) 20ms both}
 html:not(.noanim) .lpacts{animation:lp-rise 300ms cubic-bezier(.34,1.3,.55,1) 40ms both}
 
-/* NO View Transitions. The client router swaps tabs instantly (one synchronous .wrap
-   repaint), which is already fast + clean. The View Transitions API was removed because
-   iOS Safari leaves stuck ::view-transition snapshots — the old masthead ghosting over
-   the new page. Cross-document @view-transition and all ::view-transition rules are gone
-   so a tab switch is a crisp instant swap with zero overlap. */
+/* View Transitions are LIVE for router navigations only (see the ::view-transition
+   block further up): __swapWrap animates when go() passes animate=true; poll refreshes
+   and form-shim re-renders stay instant swaps. The .tabs bar is pinned via
+   view-transition-name; the masthead is deliberately NOT pinned (pinning it froze the
+   old masthead over pages with different headers — the 2026-08-04 overlap bug). */
 
 /* ================= USER THEMES (2026-08-04, owner request) =================
    Member-selectable skins. The picker (Profile → App theme) writes localStorage
@@ -1253,5 +1257,11 @@ html.theme-midnight{
   --line:rgba(226,233,248,.16); --line-soft:rgba(226,233,248,.09);
   --teal:#43907E; --hero:linear-gradient(160deg,#1f4f47 0%,#163a36 55%,#122b31 100%);
   --good:#5CBF8B; --warn:#D9A94A; --bad:#E07A66;
+  --bubble:#242F44; --wash:rgba(226,233,248,.07);
 }
 html.theme-midnight body{background:var(--bg)}
+/* Surfaces whose light look is baked into a gradient (not a re-pointable var): give each a
+   navy-tuned twin so no card ends up light-on-light / dark-on-dark under Midnight. */
+html.theme-midnight .hostcall{background:linear-gradient(180deg,#2E2118,#281C13)}
+html.theme-midnight .hostcall .tx b{color:var(--peach)}
+html.theme-midnight .demonote{background:#332818;border-color:#8a6a35}

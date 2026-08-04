@@ -33,7 +33,16 @@ $launcher = Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" |
   Where-Object { $_.CommandLine -match 'start-bridge' }
 if ($launcher) { Write-Log 'healthz dead but a launcher is alive - leaving it to recover'; exit 0 }
 
-# 3. Nothing supervising. Bring the launcher back (same invocation as the
-#    BridgeAdvRuns logon task) and record the incident.
+# 3. Port still held? A launcher-less node (started by hand) can hang while keeping
+#    :3000 bound — a fresh launcher's node would just die EADDRINUSE every 3s forever.
+#    That state needs a human (it's UptimeRobot's page), not a blind restart on top.
+$held = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue
+if ($held) {
+  Write-Log "healthz dead but :3000 still bound by pid $($held[0].OwningProcess) - not restarting (hung unsupervised process needs a human)"
+  exit 0
+}
+
+# 4. Nothing supervising, port free. Bring the launcher back (same invocation as
+#    the BridgeAdvRuns logon task) and record the incident.
 Write-Log 'healthz dead + no launcher process - restarting start-bridge.cmd'
 Start-Process cmd.exe -ArgumentList '/c start "Bridge Adv Runs" /min start-bridge.cmd' -WorkingDirectory $dir
