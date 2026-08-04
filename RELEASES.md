@@ -11,6 +11,7 @@ Backfilled below from git history for the releases that shipped before this file
 
 | Date (local) | Tag | Commit | Summary |
 |---|---|---|---|
+| 2026-08-04 | rel-20260804-1407 | a43b297 | Back button = fixed hierarchy climb (run→hub, admin tools→People), never history.back — kills the run↔chat ping-pong |
 | 2026-08-04 | rel-20260804-1357 | db6ae85 | Guests are team-assignable — teamFloor + unassigned panel include the whole floor (a post-close guest could never get a chair) |
 | 2026-08-04 | rel-20260804-1346 | 698e320 | Scheduled announcements fire at the exact instant (armed timer + boot re-arm, 60s tick as net; verified +0.40s on a real clock) |
 | 2026-08-04 | rel-20260804-1339 | 480a77c | NAV BUG RESOLVED via first device capture — stuck-visual-viewport gate (keyboard-plausibility) + geometry 29/29 pins both sides; team seats are floor-only (waitlist slide loses the chair, self-heal at read); localizer doc updated |
