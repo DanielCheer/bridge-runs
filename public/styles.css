@@ -17,7 +17,7 @@
   --bg:#F8F5EF; --card:#FFFFFF; --ink:#20211c; --muted:#6e6857;
   --line:rgba(34,35,29,.12); --line-soft:rgba(34,35,29,.08);
   --teal:#22615A; --hero:linear-gradient(150deg,#2b6c64 0%,#1d4f48 58%,#153a35 100%);
-  --chalk:#F6F2E9; --tint:#FCF7F1; --tint2:#F1EEE6; --chalk-dim:rgba(240,235,220,.6);
+  --chalk:#F6F2E9; --tint:#FCF7F1; --tint2:#F1EEE6; --composer:var(--composer); --chalk-dim:rgba(240,235,220,.6);
   --orange:#E4611F; --orange-deep:#C24512; --orange-dark:#D0530F; --peach:#FBB360; --burn:#3a1405;
   --foil:linear-gradient(145deg,#C24512 0%,#FBB360 38%,#E4611F 56%,#FFCF98 100%);
   --solid:linear-gradient(180deg,#F59248,#E4611F 55%,#D0530F);
@@ -760,7 +760,7 @@ textarea#phones{width:100%;background:var(--card);border:1px solid var(--line);b
 
 /* ---- thread page (own layout: fixed top bar + composer, no bottom tabs) ---- */
 body.thread-page .wrap{padding-bottom:calc(96px + env(safe-area-inset-bottom));padding-top:60px}
-.pbar{position:fixed;top:0;left:0;right:0;z-index:20;background:rgba(248,245,239,.92);backdrop-filter:blur(10px);
+.pbar{position:fixed;top:0;left:0;right:0;z-index:20;background:var(--composer);backdrop-filter:blur(10px);
   border-bottom:1px solid var(--line);display:flex;align-items:center;gap:6px;padding:9px 14px;padding-top:calc(9px + env(safe-area-inset-top))}
 .pbar > *{max-width:580px}
 .pbback{font-family:var(--head);font-weight:800;font-size:26px;line-height:1;color:var(--orange-deep);text-decoration:none;padding:0 6px 3px;flex:none}
@@ -901,7 +901,7 @@ ol.ig li b{font-weight:700}
 .mstart p{color:var(--muted);font-size:14px;margin-top:8px}
 
 /* composer (pinned bottom pill) */
-.composer{position:fixed;left:0;right:0;bottom:0;z-index:15;background:rgba(248,245,239,.94);backdrop-filter:blur(10px);
+.composer{position:fixed;left:0;right:0;bottom:0;z-index:15;background:var(--composer);backdrop-filter:blur(10px);
   border-top:1px solid var(--line);padding:10px 14px calc(10px + env(safe-area-inset-bottom))}
 .composer,.replychip,.crow{max-width:580px;margin-left:auto;margin-right:auto}
 .composer.disabled{text-align:center;color:var(--muted);font-size:13px;padding-top:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom))}
@@ -1247,10 +1247,11 @@ html:not(.noanim) .lpacts{animation:lp-rise 300ms cubic-bezier(.34,1.3,.55,1) 40
    identity on their own pages — the surfaces beneath still follow the user
    theme. Classic = no class = the :root palette untouched. */
 html.theme-midnight{
-  --tint:rgba(240,235,220,.08); --tint2:rgba(240,235,220,.08);
-  --bg:#101210; --card:#191C18; --ink:#EFEDE4; --muted:#9A957F;
-  --line:rgba(240,235,220,.15); --line-soft:rgba(240,235,220,.09);
-  --teal:#3B8F7F; --hero:linear-gradient(160deg,#20524a 0%,#143830 58%,#0d2621 100%);
+  --composer:rgba(13,17,27,.92);
+  --tint:rgba(226,233,248,.08); --tint2:rgba(226,233,248,.08);
+  --bg:#111827; --card:#1B2537; --ink:#EAEDF4; --muted:#96A0B6;
+  --line:rgba(226,233,248,.16); --line-soft:rgba(226,233,248,.09);
+  --teal:#43907E; --hero:linear-gradient(160deg,#1f4f47 0%,#163a36 55%,#122b31 100%);
   --good:#5CBF8B; --warn:#D9A94A; --bad:#E07A66;
 }
 html.theme-midnight body{background:var(--bg)}
