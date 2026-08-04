@@ -3195,7 +3195,7 @@ export function pastRunPage({ name = '', emoji = '', runDate = '', rows = [], dm
 // pass-through wrapper and the golden master stays byte-identical); a 3rd program calls runPage
 // with its own runBase / theme / sport / etc. NOTE: offer-window UI (offered "claiming" rows) is
 // NOT rendered yet — volleyball (offerWindow:true) needs a follow-up increment for that.
-export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM', startLabel = '6 PM', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], offeredPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, schedAnns = [], kioskUrl = '', myConfirmed = false, confirmBy = '', partyMsg = '', iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null,
+export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM', startLabel = '6 PM', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], offeredPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, schedAnns = [], kioskUrl = '', kioskable = false, myConfirmed = false, confirmBy = '', partyMsg = '', iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null,
   runBase = '/pickleball', programId = 2, theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒', dayName = 'Tuesday', pollKey = 'pickleball',
   teamsCfg = null, teamRows = [], teamsOpen = false, penaltyState = {}, partyData = null, demoMode = false, pendingRequests = [] }) {
   // Admin-supplied program names: escape every interpolation (case-convert first — see runChatPage).
@@ -3267,7 +3267,9 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
     : '';
   // Kiosk link for the door crew (proposal #3): per-program token the operator/host mints
   // themselves — no admin round-trip; rotating kills only THIS program's screens.
-  const kioskRow = canOperate
+  // kioskable (not bare canOperate): the static demo program has no kiosk by design, so it
+  // must never offer the controls (the 2026-08-04 'Not found' tap).
+  const kioskRow = kioskable
     ? `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
         ${kioskUrl ? `<a class="btn ghost sm" style="margin:0" target="_blank" rel="noopener" href="${esc(kioskUrl)}">📺 Kiosk screen</a>` : ''}
         <form method="POST" action="${runBase}/kiosk-rotate" class="swapform" style="margin:0"${kioskUrl ? ` onsubmit="return confirm('Refresh this run&#39;s kiosk link? Screens on the old link stop working.')"` : ''}><button class="btn ghost sm" type="submit">${kioskUrl ? '↻ Refresh kiosk link' : '📺 Create kiosk link'}</button></form>

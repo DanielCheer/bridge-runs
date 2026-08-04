@@ -4708,7 +4708,7 @@ app.get('/kiosk/:pid', (req, res) => {
 // global away so "refresh" means what it says.
 app.post('/admin/kiosk', requireAdmin, (req, res) => {
   const pid = Number(req.body.pid);
-  if (Number.isInteger(pid) && PROGRAMS.has(pid)) {
+  if (Number.isInteger(pid) && PROGRAMS.has(pid) && !P(pid).config.static) {
     setSetting(`kiosk_token_${pid}`, crypto.randomBytes(12).toString('base64url'));
     audit(req.userEmail, 'admin', 'kiosk:token-rotated', `program ${pid}`);
     return res.redirect('/admin/programs?msg=' + encodeURIComponent(`${P(pid).displayName} kiosk link refreshed — its old screens stop working.`));
@@ -6406,6 +6406,9 @@ function runAnnounceRetract(programId, req, res) {
 function runKioskRotate(programId, req, res) {
   const base = P(programId).paths.run;
   const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  // The demo program has no kiosk (/kiosk/:pid refuses 90 by design) — minting a token for it
+  // built a door the room refuses (2026-08-04 bug: 'Not found' on tap). No static tokens, ever.
+  if (P(programId).config.static) return res.redirect(base);
   setSetting(`kiosk_token_${programId}`, crypto.randomBytes(12).toString('base64url'));
   audit(req.userEmail, g.admin ? 'admin' : 'host', 'kiosk:token-rotated', `program ${programId}`);
   res.redirect(base);
@@ -6596,7 +6599,9 @@ function runGetPage(programId, req, res) {
     schedAnns: g.canOperate ? db.prepare(
       'SELECT id, body, publish_at FROM announcements WHERE program_id = ? AND pending = 1 ORDER BY publish_at').all(programId) : [],
     // Kiosk link for the door crew (proposal #3) — per-program token, host-mintable.
-    kioskUrl: (g.canOperate && getSetting(`kiosk_token_${programId}`)) ? `/kiosk/${programId}?k=${getSetting(`kiosk_token_${programId}`)}` : '',
+    // Never for the static demo program: /kiosk/:pid refuses 90 by design.
+    kioskUrl: (g.canOperate && !cfg.static && getSetting(`kiosk_token_${programId}`)) ? `/kiosk/${programId}?k=${getSetting(`kiosk_token_${programId}`)}` : '',
+    kioskable: g.canOperate && !cfg.static,
     season: opener || '', seasonWeekday: opener ? runWeekday(opener) : '', seasonLabel: opener ? runLabelFor(opener) : '',
     preseason: pre, today: ymdLocal(), seasonMax: shiftYmd(ymdLocal(), 365),
     pkMsg: req.query.pkset ? String(req.query.pkset) : (req.query.pkerr || ''),
