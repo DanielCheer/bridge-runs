@@ -4459,6 +4459,7 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–
     </div>` : '';
 
   return HEAD('Council — The Bridge', 'has-tabs') + header(`<b>COUNCIL</b>${viewerIsAdmin ? 'admin' : 'team'}`, wdayShort(runDate), ann, hours) + `
+    ${backBtn('/checkin')}
     ${opsNav('admin', { isAdmin: viewerIsAdmin, isTeam: viewerIsTeam })}${firstRunTour}
     <div class="rule"></div>
     <span class="eyebrow">${applicants.length} ${filter === 'all' ? 'applicant' : filter}${applicants.length===1?'':'s'}</span>
@@ -5188,6 +5189,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
   const phoneList = approvedPhones.map(p => `${p.full_name}: ${p.phone}`).join('\n');
 
   return HEAD('People — The Bridge', 'has-tabs') + header('<b>PEOPLE</b>admin', '', ann) + `
+    ${backBtn('/checkin')}
     ${opsNav('people', { isAdmin: true })}${firstRunTour}
     <div class="rule"></div>
     <span class="eyebrow">${people.length} ${q ? 'match' + (people.length===1?'':'es') : 'people'}</span>
