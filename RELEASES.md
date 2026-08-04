@@ -11,6 +11,7 @@ Backfilled below from git history for the releases that shipped before this file
 
 | Date (local) | Tag | Commit | Summary |
 |---|---|---|---|
+| 2026-08-04 | rel-20260804-1339 | 480a77c | NAV BUG RESOLVED via first device capture — stuck-visual-viewport gate (keyboard-plausibility) + geometry 29/29 pins both sides; team seats are floor-only (waitlist slide loses the chair, self-heal at read); localizer doc updated |
 | 2026-08-04 | rel-20260804-1329 | 6bac6ad | Demo-kiosk 'Not found' fixed (static programs never offer/mint kiosk tokens; orphan token removed) + chat room header pinned while scrolling (back always reachable) — program-fn 88, chat suites + CDP green |
 | 2026-08-04 | rel-20260804-1157 | 3253a69 | Five audit proposals: /admin/history run browser + CSV, per-kind notification open rates (SW v3 tag pass-through), per-program kiosk tokens w/ host minting, last-active chips on People, metrics retention policy — board green (metrics-fn 32, program-fn 86) |
 | 2026-08-04 | rel-20260804-1037 | e4b0d09 | Audit batch: F8 scheduling fixed (was broken since ship) + scheduled-post manage/cancel, UTC fill-speed + migration, join-mode enforcement closed, program-agnostic suspend/reject cascade, delete cascade + metrics tables, F4 on all shift paths, kiosk + PCO arrivals hardening, metric rate limits — board 15 suites + CDP + tour green |
