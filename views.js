@@ -155,23 +155,36 @@ window.__patchBadges=function(d){try{d=d||{};var chats=d.chats||{};
 // re-run its inline scripts (innerHTML won't execute them) — the shared engine behind
 // both the check-in action fetches and the client tab router. Returns false on any
 // parse/shape problem so callers fall back to a hard navigation.
-window.__swapWrap=function(html){
+window.__swapWrap=function(html,animate){
   try{
+    // Parse + validate FIRST so the caller's fallback contract stays synchronous — the mutation
+    // itself may run inside a View Transition callback below.
     var doc=new DOMParser().parseFromString(html,'text/html');
     var nw=doc.querySelector('.wrap'),cur=document.querySelector('.wrap');
     if(!nw||!cur)return false;
-    if(doc.title)document.title=doc.title;
-    if(doc.body&&doc.body.className!==document.body.className)document.body.className=doc.body.className;
-    document.body.style.overflow='';   // any open overlay is destroyed by this swap; never leave scroll locked
-    cur.innerHTML=nw.innerHTML;
-    // The tab bar now lives outside .wrap → swap it explicitly so its active tab / run-aware
-    // Chat href / badges track the new page. Absent on some pages (e.g. wall) → just leave it.
-    var ntb=doc.querySelector('.tabs'), ctb=document.querySelector('.tabs');
-    if(ntb&&ctb){ ctb.parentNode.replaceChild(ntb.cloneNode(true), ctb); }
-    else if(ntb&&!ctb){ document.body.appendChild(ntb.cloneNode(true)); }
-    else if(!ntb&&ctb){ ctb.parentNode.removeChild(ctb); }
-    var s=cur.querySelectorAll('script');
-    for(var i=0;i<s.length;i++){var ns=document.createElement('script');if(s[i].src)ns.src=s[i].src;else ns.textContent=s[i].textContent;s[i].parentNode.replaceChild(ns,s[i]);}
+    var mutate=function(){
+      if(doc.title)document.title=doc.title;
+      if(doc.body&&doc.body.className!==document.body.className)document.body.className=doc.body.className;
+      document.body.style.overflow='';   // any open overlay is destroyed by this swap; never leave scroll locked
+      cur.innerHTML=nw.innerHTML;
+      // The tab bar now lives outside .wrap → swap it explicitly so its active tab / run-aware
+      // Chat href / badges track the new page. Absent on some pages (e.g. wall) → just leave it.
+      var ntb=doc.querySelector('.tabs'), ctb=document.querySelector('.tabs');
+      if(ntb&&ctb){ ctb.parentNode.replaceChild(ntb.cloneNode(true), ctb); }
+      else if(ntb&&!ctb){ document.body.appendChild(ntb.cloneNode(true)); }
+      else if(!ntb&&ctb){ ctb.parentNode.removeChild(ctb); }
+      var s=cur.querySelectorAll('script');
+      for(var i=0;i<s.length;i++){var ns=document.createElement('script');if(s[i].src)ns.src=s[i].src;else ns.textContent=s[i].textContent;s[i].parentNode.replaceChild(ns,s[i]);}
+    };
+    // Soft transitions (owner request 2026-08-04): NAVIGATION swaps crossfade via the View
+    // Transitions API — the browser snapshots old/new and animates between them; the tab bar +
+    // masthead carry view-transition-names so the chrome stays still while content moves.
+    // Deliberately ONLY for navigation (animate flag): poll refreshes and form-shim re-renders
+    // stay hard cuts, or the app would flash on every background update. Falls back to the
+    // instant swap where the API is missing, the tab is hidden, or the user prefers less motion.
+    var reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches;
+    if(animate&&document.startViewTransition&&!reduce&&!document.hidden){ document.startViewTransition(mutate); }
+    else{ mutate(); }
     return true;
   }catch(e){return false;}
 };
@@ -386,7 +399,7 @@ window.__pollStop=function(){window.__pollPage=null;window.__pollOnChange=null;}
     // entirely; __swapWrap replaces .wrap in one synchronous repaint = clean, no overlap.
     if(push)history.pushState({r:1},'',href); else history.replaceState({r:1},'',href);
     window.scrollTo(0,0);
-    if(!window.__swapWrap(res.text)){hard(href);}
+    if(!window.__swapWrap(res.text,true)){hard(href);}
   }
   function mkres(r){ return r.text().then(function(t){return {ok:r.ok,url:r.url,redirected:r.redirected,text:t};}); }
   function go(href,push){

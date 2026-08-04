@@ -787,6 +787,26 @@ ol.ig li b{font-weight:700}
 .codein{width:100%;box-sizing:border-box;font-size:26px;font-weight:800;letter-spacing:.35em;text-align:center;
   font-family:ui-monospace,Menlo,monospace;padding:12px 10px;border:1px solid var(--line);border-radius:12px;
   background:var(--bg);color:var(--ink);text-indent:.35em}
+/* Page-to-page View Transitions (2026-08-04, owner request "no hard cuts"): the router's
+   NAVIGATION swap runs inside document.startViewTransition — old content fades, new content
+   fades in with the app's signature 6px rise (same motion language as a-rise). The tab bar and
+   masthead carry their own view-transition-names so the persistent chrome holds perfectly still
+   while only the page content moves. Poll refreshes and form re-renders never animate (the
+   router only flags navigations). Unsupported browsers keep the instant swap. */
+@supports (view-transition-name: x) {
+  .tabs{view-transition-name:bridge-tabs}
+  .mast{view-transition-name:bridge-mast}
+  ::view-transition-old(root){animation:vt-out .14s ease both}
+  ::view-transition-new(root){animation:vt-in .2s ease both}
+  ::view-transition-old(bridge-tabs),::view-transition-new(bridge-tabs),
+  ::view-transition-old(bridge-mast),::view-transition-new(bridge-mast){animation:none}
+  @media (prefers-reduced-motion:reduce){
+    ::view-transition-old(root),::view-transition-new(root),::view-transition-group(*){animation:none!important}
+  }
+}
+@keyframes vt-out{to{opacity:0}}
+@keyframes vt-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
 /* First-run coach-mark tour (spotlight an element + tooltip explaining it). */
 #tour{position:fixed;inset:0;z-index:400}
 #tourcatch{position:absolute;inset:0}
