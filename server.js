@@ -5596,7 +5596,20 @@ function clearRunParties(programId, rd) {
   } catch (e) { db.exec('ROLLBACK'); throw e; }
 }
 const stmtRunTeams = db.prepare('SELECT email, team_no, assigned_by FROM team_assignments WHERE program_id = ? AND run_date = ? ORDER BY team_no ASC, created_at ASC');
-function runTeamsFor(programId, rd) { return stmtRunTeams.all(programId, rd); }
+function runTeamsFor(programId, rd) {
+  const rows = stmtRunTeams.all(programId, rd);
+  if (!rows.length) return rows;
+  // Team seats are FLOOR seats. Every REMOVAL path clears the assignment, but a floor→waitlist
+  // slide (offer churn, operator bump, waitlist cycling) is not a removal — it left the slider
+  // holding a team seat from the waitlist, so teams read "full" while a floor player had no seat
+  // (2026-08-04: demo-12 waitlisted with a Team 3 chair, Andre unassigned). Self-heal at the one
+  // read chokepoint: non-floor assignments are dropped, not displayed.
+  const part = partitionFor(programId, rd);
+  const floor = new Set((((P(programId).config.offerWindow ? part.floorReal : part.floor)) || []).map((p) => lc(p.email)));
+  const stale = rows.filter((r) => !floor.has(lc(r.email)));
+  for (const s of stale) clearTeamAssignment(programId, rd, s.email);
+  return rows.filter((r) => floor.has(lc(r.email)));
+}
 function teamsFeature(programId) { const f = P(programId).config.features; return (f && f.teams) || null; }  // {count,size,opensAt,selfServe} or null
 // Teams open once the roster LOCKS (config.features.teams.opensAt='lock' → lockTime), so teams form
 // off the FINAL roster. schedNow() honours the TEST_NOW seam.
