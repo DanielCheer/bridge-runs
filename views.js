@@ -706,6 +706,9 @@ const WALL_BODY = `<div id="installwall" role="dialog" aria-modal="true" aria-la
 })();</script>`;
 
 const HEAD = (title, bodyClass = '', { wall = true } = {}) => `<!doctype html><html lang="en"><head>
+<script>/* User theme bootstrap — BEFORE styles load so there is no flash. Class lives on <html>
+(the router swap replaces body.className, html survives). Whitelisted; Classic = no class. */
+try{var t=localStorage.getItem('bridgeTheme');if(t&&/^(midnight|glass|porcelain|paper)$/.test(t))document.documentElement.className='theme-'+t;}catch(e){}</script>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#F8F5EF">
 <link rel="icon" href="/favicon.ico?v=2" sizes="any">
@@ -1794,7 +1797,7 @@ const WELCOME_MODAL = `
   #welcome .wsteps{display:flex;flex-direction:column;gap:8px;margin:0 0 14px}
   #welcome .wstep{display:flex;gap:10px;align-items:baseline;font-size:14px;color:var(--ink)}
   #welcome .wplat{font-family:var(--head);font-weight:800;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);min-width:56px;flex:none}
-  #welcome .wtip{font-size:13px;color:var(--ink);background:#F1EEE6;border-radius:10px;padding:10px 12px;line-height:1.5;margin:0 0 16px}
+  #welcome .wtip{font-size:13px;color:var(--ink);background:var(--tint2);border-radius:10px;padding:10px 12px;line-height:1.5;margin:0 0 16px}
   #welcome .wgot{width:100%}
   </style>
   <script>(function(){try{if(localStorage.getItem('bridgeWelcomed')||(window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches)||navigator.standalone)document.documentElement.className+=' welcomed';}catch(e){}})();</script>
@@ -3678,6 +3681,31 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
       <span style="color:var(--muted);font-size:20px">›</span>
     </a>` : ''}
     ${passCard}
+    <div class="card rail" style="margin-top:12px">
+      <b style="font-size:14px;font-family:var(--head)">App theme</b>
+      <p class="tally-note" style="margin:4px 0 10px">Pick your look — it applies instantly, just on this device.</p>
+      <div id="themerow" style="display:flex;gap:8px;flex-wrap:wrap">
+        ${[['', 'Classic', '#F8F5EF', '#E4611F'], ['midnight', 'Midnight', '#101210', '#E4611F'], ['glass', 'Soft Glass', '#EDF0EF', '#2E7D69'], ['porcelain', 'Porcelain', '#F2F1ED', '#191A18'], ['paper', 'Paper', '#F4EFE3', '#B4691E']].map(([k, label, bgc, ac]) => `
+        <button type="button" class="themeopt" data-theme="${k}" style="display:flex;align-items:center;gap:7px;border:1.5px solid var(--line);background:var(--card);color:var(--ink);border-radius:999px;padding:8px 13px;font-size:12.5px;font-weight:700;font-family:var(--head);cursor:pointer">
+          <span style="width:18px;height:18px;border-radius:50%;background:${bgc};border:1px solid rgba(0,0,0,.15);display:inline-block;position:relative;overflow:hidden"><span style="position:absolute;right:0;top:0;bottom:0;width:7px;background:${ac}"></span></span>${label}
+        </button>`).join('')}
+      </div>
+      <script>
+        (function(){ if(window.__themeBound) return; window.__themeBound=1;
+          function mark(){ var cur=''; try{cur=localStorage.getItem('bridgeTheme')||'';}catch(e){}
+            document.querySelectorAll('.themeopt').forEach(function(b){
+              var on=(b.getAttribute('data-theme')||'')===cur;
+              b.style.borderColor=on?'var(--orange)':'var(--line)';
+              b.style.boxShadow=on?'0 0 0 1.5px var(--orange)':'none'; }); }
+          document.addEventListener('click',function(e){ var b=e.target&&e.target.closest&&e.target.closest('.themeopt'); if(!b) return;
+            var k=b.getAttribute('data-theme')||'';
+            try{ if(k)localStorage.setItem('bridgeTheme',k); else localStorage.removeItem('bridgeTheme'); }catch(e2){}
+            document.documentElement.className=(document.documentElement.className.replace(/\\btheme-[a-z]+\\b/g,'').trim()+(k?' theme-'+k:'')).trim();
+            mark(); });
+          mark();
+        })();
+      </script>
+    </div>
     <form method="POST" action="/profile/logoutall" style="margin-top:12px" onsubmit="return confirm('Sign out on every device you\\'ve ever used? You\\'ll sign back in with your email.')">
       <button class="btn ghost sm" type="submit">Sign out everywhere</button>
       <p class="tally-note" style="margin:6px 0 0">Lost a phone, or somewhere you didn't sign out? This ends the session on <b>every</b> device at once.</p>
