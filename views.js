@@ -204,13 +204,22 @@ window.__kbSync=function(){
   var want=vv.offsetTop+vv.height;                      // bottom of the VISIBLE area, in client coords
   var have=tabs.getBoundingClientRect().bottom;         // where the bar actually renders
   var fix=Math.round(want-have);
+  // DEVICE-EVIDENCED (capture 2026-08-04, /demo, installed app): WebKit can leave the VISUAL
+  // viewport STUCK at its keyboard-open height after dismissal — vv.height 528 vs innerHeight 873,
+  // activeElement BODY, scale 1, offsetTop 0, stable for seconds in the ring. In that state want
+  // is a lie and the lift branch parked the bar 345px up the page. A shrunken viewport is only
+  // TRUSTED when a keyboard is actually possible (an editable is focused / the composer is
+  // engaged) or the viewport is genuinely transformed (pinch: scale/offset). Otherwise: no lift —
+  // the layout bottom IS the visible bottom. Self-heals the moment WebKit fires the real resize.
+  var ae1=document.activeElement;
+  var editable=!!(ae1&&(ae1.tagName==='INPUT'||ae1.tagName==='TEXTAREA'||ae1.tagName==='SELECT'||ae1.isContentEditable));
+  var kbPossible=editable||!!window.__composerEngaged||vv.scale>1.01||Math.round(vv.offsetTop)>0||Math.round(vv.offsetLeft||0)>0;
+  if(fix<-1&&!kbPossible){fix=0;}
   // Only correct a real discrepancy, and never more than a viewport (a wild number means the
   // measurement is mid-transition — leave it alone rather than fling the bar off-screen).
-  // FROZEN PENDING EVIDENCE: this corrects only fix<-1 (bar BELOW the visible bottom, i.e. behind
-  // the keyboard). The reported symptom is the bar ABOVE the visible bottom (fix>0), which this
-  // deliberately does not touch — widening it, or re-adding a repaint nudge, would be another
-  // guess. The ring buffer below records what this computed on every event so the localizer can
-  // prove which mechanism is live first. See docs/NAV-LOCALIZER.md.
+  // POSITIVE GAP STILL FROZEN: this corrects only fix<-1. The bar-ABOVE-visible-bottom symptom
+  // (fix>0) remains record-only — the 2026-08-04 capture licensed the stale-viewport gate, not a
+  // positive-gap actuator. See docs/NAV-LOCALIZER.md.
   var applied='';
   if(fix<-1&&fix>-window.innerHeight){applied='translateY('+fix+'px)';tabs.style.transform=applied;}
   // Ring buffer (~40) — turns a single capture into a SEQUENCE, which is what distinguishes
@@ -219,7 +228,7 @@ window.__kbSync=function(){
     var B=window.__geoRing||(window.__geoRing=[]);
     var ae2=document.activeElement;
     B.push({t:Date.now(),ih:window.innerHeight,vh:vv.height,vt:Math.round(vv.offsetTop),
-      sc:vv.scale,rb:Math.round(have),fx:fix,ap:applied,
+      sc:vv.scale,rb:Math.round(have),fx:fix,ap:applied,kp:kbPossible?1:0,
       ae:ae2?(ae2.tagName+(ae2.type?':'+ae2.type:'')):'',ce:!!window.__composerEngaged});
     if(B.length>40)B.shift();
   }catch(e){}
