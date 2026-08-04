@@ -11,6 +11,7 @@ Backfilled below from git history for the releases that shipped before this file
 
 | Date (local) | Tag | Commit | Summary |
 |---|---|---|---|
+| 2026-08-04 | rel-20260804-1503 | 974e023 | User themes: Classic + Midnight + Soft Glass + Porcelain + Paper, per-device picker on Profile (pre-paint html-class bootstrap, var-driven skins; QR whites preserved) — verified via real-app themed screenshots, full CDP + suites green |
 | 2026-08-04 | rel-20260804-1425 | 82d7700 | View-transition overlap fix — masthead unpinned (top bars differ per page; only the identical opaque tab bar stays frozen) |
 | 2026-08-04 | rel-20260804-1419 | fd9bcda | Soft page transitions — navigation swaps crossfade (View Transitions API; chrome pinned still, polls/forms stay instant, reduced-motion + old-browser fallback) |
 | 2026-08-04 | rel-20260804-1407 | a43b297 | Back button = fixed hierarchy climb (run→hub, admin tools→People), never history.back — kills the run↔chat ping-pong |
