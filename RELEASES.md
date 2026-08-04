@@ -11,6 +11,7 @@ Backfilled below from git history for the releases that shipped before this file
 
 | Date (local) | Tag | Commit | Summary |
 |---|---|---|---|
+| 2026-08-04 | rel-20260804-1614 | 298bdae | Audit round 4: Classic composer background restored (P1), Midnight readability sweep (bubbles, cream buttons, banners, splash, kiosk, chrome tint), scheduler txn + ordering + harness guard, router race token + back-swipe fix, teams floor-check, watchdog port guard |
 | 2026-08-04 | rel-20260804-1537 | 27b3951 | Back pill on Council + People (→ Check-in) — every tabbed screen now has an up-path |
 | 2026-08-04 | rel-20260804-1526 | 6f4e4cc | Midnight is navy now (#111827, softer dark) + composer strip and DM top bar themed (the dark-input-on-light-strip fix) |
 | 2026-08-04 | rel-20260804-1518 | 43da9f4 | Themes trimmed to Classic + Midnight (removed the three too-similar lights; stale choices fall back to Classic) |
