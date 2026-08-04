@@ -312,6 +312,9 @@ db.exec(`
   -- emails — kinds + counts + run keys only, so it stays outside the PII surface (see
   -- docs/PII-RETENTION.md). Rows are tiny and rare (dozens/week); offer rows are rolled into
   -- run_summary at archive, the rest serve the analytics pulse.
+  -- RETENTION (stated 2026-08-04, docs/PII-RETENTION.md): individual events live 13 months for
+  -- year-over-year, then collapse into monthly rollups. Implement the rollup when the first rows
+  -- age past 13 months (~Sept 2027) — a planned lifecycle, not a future magic-constant cleanup.
   CREATE TABLE IF NOT EXISTS metrics_events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     at         TEXT NOT NULL DEFAULT (datetime('now','localtime')),

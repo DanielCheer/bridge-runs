@@ -30,7 +30,7 @@ import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, exportPage, logoutPage, APP_JS,
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap, setProgramMeta,
   STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, demoProfileCard, pickleballPage, runPage, runsPage, pkJoinPage, runJoinPage, pastRunPage, waiverPage,
-  friendsPage, friendsSearchFragment, chatLockedPage, runChatPage, pcoAdminPage, programsAdminPage, kioskPage, analyticsPage, auditViewerPage,
+  friendsPage, friendsSearchFragment, chatLockedPage, runChatPage, pcoAdminPage, programsAdminPage, kioskPage, analyticsPage, auditViewerPage, runHistoryPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -433,7 +433,12 @@ app.use((req, res, next) => {
       lastSeenDay.set(email, d);
       try { stmtTouchSeen.run(email); } catch (e) { console.error(`[metrics] last-seen touch failed: ${e.message}`); }
     }
-    if (req.query.from === 'push' && !rateLimited('push_tap', email, 40, 24 * 3600 * 1000)) metric('push_tap', { meta: String(req.path).slice(0, 80) });   // P3-5: generous daily cap per account — real taps are a handful
+    if (req.query.from === 'push' && !rateLimited('push_tap', email, 40, 24 * 3600 * 1000)) {
+      // meta = "tag|path" when the SW passed the notification tag (charset-stripped: our tags are
+      // plain slugs; a hostile ?tag= can't smuggle an identity into the identity-free table).
+      const tg = String(req.query.tag || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40);
+      metric('push_tap', { meta: (tg ? tg + '|' : '') + String(req.path).slice(0, 78) });   // P3-5 cap: real taps are a handful/day
+    }
   }
   next();
 });
@@ -4480,10 +4485,35 @@ app.post('/profile/logoutall', requireLogin, (req, res) => {
 // The church-facing question isn't "who came Tuesday" (rosters answer that) — it's trend, reach and
 // stickiness: is the run growing, how many are NEW, do people come back. Computed straight from the
 // permanent attendance log; per-RUN buckets (not calendar weeks) because a run is the natural unit.
+// Friendly names for notification kinds in the pulse breakdown. Tags carry program ids
+// (wlmove2, gatedann) — match by family, fall back to the raw tag.
+function pushKindLabel(tag) {
+  if (!tag) return 'Untagged';
+  if (tag === 'offer') return 'Spot offers';
+  if (tag === 'announce' || /ann$/.test(tag)) return 'Announcements';
+  if (tag === 'confirm') return 'Confirm reminders';
+  if (/^wlmove/.test(tag)) return 'Waitlist moves';
+  if (tag === 'adminlogin') return 'Admin sign-in alerts';
+  if (/^joinreq/.test(tag)) return 'Join requests';
+  if (/mention/.test(tag)) return 'Chat mentions';
+  return tag;
+}
 app.get('/admin/analytics', requireAdmin, (req, res) => {
   // Engagement pulse (metrics layer): actives from last_seen_at, notification volume + taps and
   // installs from metrics_events. Display-ready strings computed HERE so the view stays dumb.
+  // Per-kind open rates: sends carry the tag in meta; taps carry "tag|path" since the SW started
+  // passing &tag= (older tap rows are bare paths and stay out of the per-kind split).
+  const kindAgg = new Map();
+  for (const r of db.prepare("SELECT meta, COALESCE(SUM(n),0) s FROM metrics_events WHERE kind='push_send' AND at >= datetime('now','localtime','-30 days') GROUP BY meta").all()) {
+    const k = pushKindLabel(r.meta); const a = kindAgg.get(k) || { sent: 0, opened: 0 }; a.sent += r.s; kindAgg.set(k, a);
+  }
+  for (const r of db.prepare("SELECT meta FROM metrics_events WHERE kind='push_tap' AND at >= datetime('now','localtime','-30 days')").all()) {
+    const bar = String(r.meta || '').indexOf('|'); if (bar <= 0) continue;
+    const k = pushKindLabel(r.meta.slice(0, bar)); const a = kindAgg.get(k) || { sent: 0, opened: 0 }; a.opened++; kindAgg.set(k, a);
+  }
+  const kinds = [...kindAgg.entries()].map(([label, v]) => ({ label, ...v })).sort((x, y) => y.sent - x.sent);
   const pulse = {
+    kinds,
     wau: db.prepare("SELECT COUNT(*) n FROM applicants WHERE last_seen_at >= datetime('now','localtime','-7 days')").get().n,
     mau: db.prepare("SELECT COUNT(*) n FROM applicants WHERE last_seen_at >= datetime('now','localtime','-30 days')").get().n,
     pushes30: db.prepare("SELECT COALESCE(SUM(n),0) s FROM metrics_events WHERE kind='push_send' AND at >= datetime('now','localtime','-30 days')").get().s,
@@ -4553,6 +4583,29 @@ app.get('/admin/audit', requireAdmin, (req, res) => {
   const actions = db.prepare('SELECT DISTINCT action FROM audit_key_events ORDER BY action').all().map((r) => r.action);
   res.send(auditViewerPage({ rows: rows.slice(0, 100), hasMore: rows.length > 100, page, total, actions, q: f.q, action: f.action, from: f.from, to: f.to }));
 });
+// ---------- RUN HISTORY — the run_summary browser (proposal #1) ----------
+// Per-run receipts of the numbers the archive keeps: demand, fill speed, offer outcomes.
+// Read-only; CSV carries every row for spreadsheets/pitches.
+app.get('/admin/history', requireAdmin, (req, res) => {
+  const sections = [];
+  for (const p of PROGRAMS.values()) {
+    if (p.config.static) continue;
+    const rows = db.prepare(`SELECT *, CASE WHEN opened_at IS NOT NULL AND filled_at IS NOT NULL
+        THEN CAST(ROUND((julianday(filled_at) - julianday(opened_at)) * 1440) AS INTEGER) END fill_mins
+      FROM run_summary WHERE program_id = ? ORDER BY run_date DESC LIMIT 200`).all(p.id);
+    if (rows.length) sections.push({ name: p.displayName, emoji: p.emoji, rows });
+  }
+  res.send(runHistoryPage({ sections }));
+});
+app.get('/admin/history.csv', requireAdmin, (req, res) => {
+  const rows = db.prepare('SELECT * FROM run_summary ORDER BY run_date DESC').all();
+  const nameOf = (pid) => (PROGRAMS.get(pid) || { displayName: `program ${pid}` }).displayName;
+  const lines = ['Program,Run date,Floor,Waitlisted,Guests,Cap,Cancelled,Check-in opened,First check-in,Floor full,Offers sent,Offers claimed,Offers expired',
+    ...rows.map((r) => [nameOf(r.program_id), r.run_date, r.floor_n, r.wait_n, r.guest_n, r.cap, r.cancelled ? 'yes' : '', r.opened_at, r.first_checkin_at, r.filled_at, r.offers_sent, r.offers_claimed, r.offers_expired].map(csvCell).join(','))];
+  res.setHeader('Content-Disposition', 'attachment; filename="run-history.csv"');
+  res.type('text/csv').send('﻿' + lines.join('\r\n'));
+});
+
 app.get('/admin/audit.csv', requireAdmin, (req, res) => {
   const f = keyEventQuery(req);
   const rows = db.prepare('SELECT at, actor, actor_role, action, target FROM audit_key_events' + f.sql + ' ORDER BY id DESC').all(...f.params);
@@ -4616,9 +4669,11 @@ app.get('/kiosk/:pid', (req, res) => {
   const pid = Number(req.params.pid);
   if (!PROGRAMS.has(pid) || pid === 90) return res.status(404).send('Not found');
   // Timing-safe token compare (P3-3) — an early-exit === leaks prefix-match timing. Length guard
-  // first: timingSafeEqual throws on unequal lengths.
-  const tok = String(req.query.k || ''), want = String(getSetting('kiosk_token') || '');
-  const tokenOk = !!want && tok.length === want.length && crypto.timingSafeEqual(Buffer.from(tok), Buffer.from(want));
+  // first: timingSafeEqual throws on unequal lengths. Per-program tokens (proposal #3) so one
+  // program's leaked link is revocable alone; the legacy global token keeps old screens working.
+  const tok = String(req.query.k || '');
+  const tokEq = (want) => !!want && tok.length === want.length && crypto.timingSafeEqual(Buffer.from(tok), Buffer.from(want));
+  const tokenOk = tokEq(String(getSetting(`kiosk_token_${pid}`) || '')) || tokEq(String(getSetting('kiosk_token') || ''));
   const admin = isAdmin(currentUser(req));
   if (!tokenOk && !admin) return res.status(403).send('Kiosk link required.');
   // A token must not expose an UNPUBLISHED program's roster (P3-3): hidden = admins only.
@@ -4648,11 +4703,20 @@ app.get('/kiosk/:pid', (req, res) => {
     cancelled: runCancelledFor(pid, rd),
   }));
 });
-// Admin: mint/rotate the kiosk token and get ready-to-open links.
+// Admin: mint/rotate kiosk tokens — per program now (proposal #3). With a pid, rotate ONE
+// program's token; without, mint fresh tokens for every real program AND rotate the legacy
+// global away so "refresh" means what it says.
 app.post('/admin/kiosk', requireAdmin, (req, res) => {
-  setSetting('kiosk_token', crypto.randomBytes(12).toString('base64url'));
-  audit(req.userEmail, 'admin', 'kiosk:token-rotated', '');
-  res.redirect('/admin/programs?msg=' + encodeURIComponent('Kiosk links refreshed — old screens stop working, grab the new link from a program card.'));
+  const pid = Number(req.body.pid);
+  if (Number.isInteger(pid) && PROGRAMS.has(pid)) {
+    setSetting(`kiosk_token_${pid}`, crypto.randomBytes(12).toString('base64url'));
+    audit(req.userEmail, 'admin', 'kiosk:token-rotated', `program ${pid}`);
+    return res.redirect('/admin/programs?msg=' + encodeURIComponent(`${P(pid).displayName} kiosk link refreshed — its old screens stop working.`));
+  }
+  for (const p of PROGRAMS.values()) if (!p.config.static) setSetting(`kiosk_token_${p.id}`, crypto.randomBytes(12).toString('base64url'));
+  delSetting('kiosk_token');   // the global-era token dies with a full refresh
+  audit(req.userEmail, 'admin', 'kiosk:token-rotated', 'all programs');
+  res.redirect('/admin/programs?msg=' + encodeURIComponent('Kiosk links refreshed for every program — old screens stop working, grab new links from the cards.'));
 });
 
 // ---------- HEALTH (S4) ----------
@@ -4722,6 +4786,8 @@ function programAdminRows() {
       theme: cfg ? cfg.theme : '', spec,
       hasData: counts.c > 0 || counts.a > 0 || counts.m > 0, members: counts.mem,
       runDate: cfg ? (cfg.keys ? (getSetting(cfg.keys.runDate) || '') : nextRunDate()) : '',
+      // Per-program kiosk link (proposal #3): its own token, falling back to the global-era one.
+      kioskUrl: (() => { const t = getSetting(`kiosk_token_${row.id}`) || getSetting('kiosk_token'); return t ? `/kiosk/${row.id}?k=${t}` : ''; })(),
     };
   });
 }
@@ -6335,6 +6401,15 @@ function runAnnounceRetract(programId, req, res) {
   if (cur) { db.prepare('UPDATE announcements SET archived = 1 WHERE id = ? AND program_id = ?').run(cur.id, programId); audit(req.userEmail, g.admin ? 'admin' : 'host', `${cfg.logTag}:announce:retract`, String(cur.id)); }
   res.redirect(base);
 }
+// Kiosk link for the people who actually run the door (proposal #3): canOperate mints/rotates
+// THEIR program's token from the run page — no admin round-trip, revocable per program.
+function runKioskRotate(programId, req, res) {
+  const base = P(programId).paths.run;
+  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  setSetting(`kiosk_token_${programId}`, crypto.randomBytes(12).toString('base64url'));
+  audit(req.userEmail, g.admin ? 'admin' : 'host', 'kiosk:token-rotated', `program ${programId}`);
+  res.redirect(base);
+}
 // Cancel a SCHEDULED post before it fires (P2-4 twin of /announce/cancel) — pending-only delete.
 function runAnnounceCancel(programId, req, res) {
   const base = P(programId).paths.run, cfg = P(programId).config;
@@ -6520,6 +6595,8 @@ function runGetPage(programId, req, res) {
     // F8 management surface (P2-4): operators see + can cancel scheduled posts for THIS program.
     schedAnns: g.canOperate ? db.prepare(
       'SELECT id, body, publish_at FROM announcements WHERE program_id = ? AND pending = 1 ORDER BY publish_at').all(programId) : [],
+    // Kiosk link for the door crew (proposal #3) — per-program token, host-mintable.
+    kioskUrl: (g.canOperate && getSetting(`kiosk_token_${programId}`)) ? `/kiosk/${programId}?k=${getSetting(`kiosk_token_${programId}`)}` : '',
     season: opener || '', seasonWeekday: opener ? runWeekday(opener) : '', seasonLabel: opener ? runLabelFor(opener) : '',
     preseason: pre, today: ymdLocal(), seasonMax: shiftYmd(ymdLocal(), 365),
     pkMsg: req.query.pkset ? String(req.query.pkset) : (req.query.pkerr || ''),
@@ -6581,6 +6658,7 @@ app.post('/pickleball/announce', requireLogin, (req, res) => runAnnounce(2, req,
 // showing on the page (no new push/email; the original notification already went out).
 app.post('/pickleball/announce/retract', requireLogin, (req, res) => runAnnounceRetract(2, req, res));
 app.post('/pickleball/announce/cancel', requireLogin, (req, res) => runAnnounceCancel(2, req, res));
+app.post('/pickleball/kiosk-rotate', requireLogin, (req, res) => runKioskRotate(2, req, res));
 
 // ---------- DEMO run controls (admin-only showcase) ----------
 // Seed/reset/clear the synthetic demo roster (program 90). All rows are @demo.local checkins-only
@@ -7280,6 +7358,7 @@ function mountRunProgram(app, program) {
   app.post(`${b}/announce`, requireLogin, (req, res) => runAnnounce(id, req, res));
   app.post(`${b}/announce/retract`, requireLogin, (req, res) => runAnnounceRetract(id, req, res));
   app.post(`${b}/announce/cancel`, requireLogin, (req, res) => runAnnounceCancel(id, req, res));
+  app.post(`${b}/kiosk-rotate`, requireLogin, (req, res) => runKioskRotate(id, req, res));
   app.post(`${b}/publish`, requireAdmin, (req, res) => runPublish(id, req, res));
   // Teams-in-a-run (registered for every program; the handlers no-op unless config.features.teams).
   app.post(`${b}/team/join`, requireLogin, (req, res) => runTeamJoin(id, req, res));

@@ -3195,7 +3195,7 @@ export function pastRunPage({ name = '', emoji = '', runDate = '', rows = [], dm
 // pass-through wrapper and the golden master stays byte-identical); a 3rd program calls runPage
 // with its own runBase / theme / sport / etc. NOTE: offer-window UI (offered "claiming" rows) is
 // NOT rendered yet — volleyball (offerWindow:true) needs a follow-up increment for that.
-export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM', startLabel = '6 PM', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], offeredPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, schedAnns = [], myConfirmed = false, confirmBy = '', partyMsg = '', iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null,
+export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM', startLabel = '6 PM', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], offeredPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, schedAnns = [], kioskUrl = '', myConfirmed = false, confirmBy = '', partyMsg = '', iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null,
   runBase = '/pickleball', programId = 2, theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒', dayName = 'Tuesday', pollKey = 'pickleball',
   teamsCfg = null, teamRows = [], teamsOpen = false, penaltyState = {}, partyData = null, demoMode = false, pendingRequests = [] }) {
   // Admin-supplied program names: escape every interpolation (case-convert first — see runChatPage).
@@ -3265,9 +3265,17 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
           <form method="POST" action="${runBase}/announce/cancel" class="swapform" style="display:inline;margin-left:6px"><input type="hidden" name="id" value="${Number(x.id)}"><button class="btn ghost sm" type="submit" style="padding:3px 10px">Cancel</button></form></div>
       </li>`).join('')}</ul>` : ''}</details>`
     : '';
+  // Kiosk link for the door crew (proposal #3): per-program token the operator/host mints
+  // themselves — no admin round-trip; rotating kills only THIS program's screens.
+  const kioskRow = canOperate
+    ? `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        ${kioskUrl ? `<a class="btn ghost sm" style="margin:0" target="_blank" rel="noopener" href="${esc(kioskUrl)}">📺 Kiosk screen</a>` : ''}
+        <form method="POST" action="${runBase}/kiosk-rotate" class="swapform" style="margin:0"${kioskUrl ? ` onsubmit="return confirm('Refresh this run&#39;s kiosk link? Screens on the old link stop working.')"` : ''}><button class="btn ghost sm" type="submit">${kioskUrl ? '↻ Refresh kiosk link' : '📺 Create kiosk link'}</button></form>
+      </div>`
+    : '';
   const autoRenewPill = cancelled ? '' : `<form method="POST" action="${runBase}/autorenew" class="arform" style="margin:0"><input type="hidden" name="on" value="${iAutoRenew ? '0' : '1'}"><button class="arpill${iAutoRenew ? ' on' : ''}" type="submit" title="Auto-join the ${low} run each week">🔁 Auto-renew${iAutoRenew ? ' · ON' : ' · OFF'}</button></form>`;
-  const heroFooter = (annCompose || autoRenewPill)
-    ? `<div class="hann"><div class="hann-l">${annCompose}</div>${autoRenewPill ? `<div class="hann-r">${autoRenewPill}</div>` : ''}</div>`
+  const heroFooter = (annCompose || autoRenewPill || kioskRow)
+    ? `<div class="hann"><div class="hann-l">${annCompose}${kioskRow}</div>${autoRenewPill ? `<div class="hann-r">${autoRenewPill}</div>` : ''}</div>`
     : '';
   const scoreInner = `
     <div class="count">
@@ -4462,9 +4470,41 @@ export function analyticsPage({ cards = [], pulse = null }) {
       <p style="margin:0">Active members: <b>${pulse.wau}</b> this week · <b>${pulse.mau}</b> this month.
       Notifications (30d): <b>${pulse.pushes30}</b> sent to devices${pulse.taps30 ? ` · <b>${pulse.taps30}</b> opened from a notification` : ''}.
       Home-screen installs recorded: <b>${pulse.installs}</b>.</p>
-      <p class="tally-note" style="margin:8px 0 0">Counting started Aug 2026 — actives need a day of traffic, installs count from now on.</p>
+      ${(pulse.kinds || []).length ? `<p style="margin:8px 0 0">By kind (30d): ${pulse.kinds.map((k) => `<b>${esc(k.label)}</b> ${k.sent} sent${k.opened ? ` · ${k.opened} opened${k.sent ? ` (${Math.min(100, Math.round((k.opened / k.sent) * 100))}%)` : ''}` : ''}`).join(' &nbsp;·&nbsp; ')}</p>` : ''}
+      <p class="tally-note" style="margin:8px 0 0">Counting started Aug 2026 — actives need a day of traffic, installs count from now on. <a href="/admin/history">Full run history ›</a></p>
     </div>` : ''}
     ${cards.length ? cards.map(card).join('') : '<p class="lead" style="margin-top:12px">No attendance history yet — charts appear after the first archived run.</p>'}
+    <div class="foot" style="margin-top:24px"><a href="/admin/people">‹ Back to People &amp; invites</a></div>
+  ` + FOOT;
+}
+
+// ---------- RUN HISTORY — per-run receipts from run_summary (proposal #1) ----------
+// One table row per archived run night, per program: demand, fill speed, offer outcomes.
+// Read-only; the CSV link exports everything for spreadsheets / the pitch deck.
+export function runHistoryPage({ sections = [] }) {
+  const row = (r) => `<tr${r.cancelled ? ' style="opacity:.55"' : ''}>
+    <td style="white-space:nowrap">${esc(r.run_date)}${r.cancelled ? ' <span class="tag susp">cancelled</span>' : ''}</td>
+    <td>${r.floor_n}${r.cap ? ` / ${r.cap}` : ''}</td>
+    <td>${r.wait_n || '—'}</td>
+    <td>${r.guest_n || '—'}</td>
+    <td>${r.fill_mins != null ? `${r.fill_mins} min` : '—'}</td>
+    <td>${r.offers_sent ? `${r.offers_sent} → ${r.offers_claimed} claimed${r.offers_expired ? ` · ${r.offers_expired} expired` : ''}` : '—'}</td>
+  </tr>`;
+  const section = (s) => `<div class="card rail" style="margin-top:12px;overflow-x:auto">
+    <div class="subhead" style="margin-top:0">${esc(s.emoji)} ${esc(s.name)}</div>
+    <table class="audit-t">
+      <thead><tr><th>Run</th><th>Floor</th><th>Waited</th><th>Guests</th><th>Filled in</th><th>Freed spots</th></tr></thead>
+      <tbody>${s.rows.map(row).join('')}</tbody>
+    </table>
+  </div>`;
+  return HEAD('Run history — The Bridge', '', { wall: false }) + header('<b>RUN HISTORY</b>') + `
+    <style>.audit-t{width:100%;border-collapse:collapse;font-size:13px}.audit-t th{text-align:left;color:var(--muted);padding:4px 8px}.audit-t td{padding:6px 8px;border-top:1px solid var(--line);vertical-align:top}</style>
+    ${backBtn('/admin/people')}
+    <div class="rule"></div>
+    <span class="eyebrow">The permanent run record</span>
+    <h1 style="margin-bottom:0">Run history</h1>
+    <p class="lead" style="margin-top:8px">Every archived run night: who fit, who waited, how fast the floor filled, and what happened to freed spots. Collected automatically since Aug 2026. <a href="/admin/history.csv" download>⬇︎ CSV of everything</a></p>
+    ${sections.length ? sections.map(section).join('') : '<p class="lead" style="margin-top:12px">Nothing yet — the first summary row is written the night a run is archived.</p>'}
     <div class="foot" style="margin-top:24px"><a href="/admin/people">‹ Back to People &amp; invites</a></div>
   ` + FOOT;
 }
@@ -4587,7 +4627,7 @@ export function programsAdminPage({ rows = [], msg = '', form = false, themes = 
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
         ${r.id === 1 ? '' : `<form method="POST" action="/admin/programs/active" class="swapform" style="margin:0"><input type="hidden" name="id" value="${r.id}"><input type="hidden" name="on" value="${r.active ? '0' : '1'}"><button class="btn ${r.active ? 'ghost ' : ''}sm" type="submit">${r.active ? 'Hide' : 'Publish'}</button></form>`}
         ${r.editable ? `<a class="btn ghost sm" href="#edit-${r.id}" style="margin:0">Edit settings</a>` : ''}
-        ${r.id !== 90 ? (kioskToken ? `<a class="btn ghost sm" style="margin:0" target="_blank" rel="noopener" href="/kiosk/${r.id}?k=${esc(kioskToken)}">📺 Kiosk link</a>` : `<form method="POST" action="/admin/kiosk" class="swapform" style="margin:0"><button class="btn ghost sm" type="submit">📺 Create kiosk links</button></form>`) : ''}
+        ${r.id !== 90 ? (r.kioskUrl ? `<a class="btn ghost sm" style="margin:0" target="_blank" rel="noopener" href="${esc(r.kioskUrl)}">📺 Kiosk link</a><form method="POST" action="/admin/kiosk" class="swapform" style="margin:0" onsubmit="return confirm('Refresh ${esc(r.name)}&#39;s kiosk link? Its old screens stop working.')"><input type="hidden" name="pid" value="${r.id}"><button class="btn ghost sm" type="submit" title="Rotate this program's kiosk token">↻</button></form>` : `<form method="POST" action="/admin/kiosk" class="swapform" style="margin:0"><button class="btn ghost sm" type="submit">📺 Create kiosk links</button></form>`) : ''}
         ${r.editable && !r.hasData ? `<form method="POST" action="/admin/programs/delete" style="margin:0" onsubmit="return confirm('Delete ${esc(r.name)}? It has no sign-ups or history yet.')"><input type="hidden" name="id" value="${r.id}"><button class="btn ghost sm" type="submit">Delete</button></form>` : ''}
       </div>
       ${r.id !== 90 ? `<details style="margin-top:10px"><summary class="tally-note" style="cursor:pointer">Members &amp; hosts</summary>
@@ -5044,8 +5084,18 @@ export function bannerPage({ err = '', bannerVer = '0', action = '/admin/banner'
 // ---------- PEOPLE MANAGEMENT (admin-only) ----------
 export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = '', invites = [], newInviteLink = '', msg = '', ann = null, dmUnread = 0, groupUnread = 0, groupMention = 0 }) {
   const pill = (s) => `<span class="pill ${s}">${s}</span>`;
+  // Last-active chip (proposal #4): the churn signal — quiet for anyone seen this week, amber
+  // past 30 days. last_seen_at counting started Aug 2026; older accounts show nothing until
+  // they next open the app.
+  const lastActive = (a) => {
+    if (!a.last_seen_at) return '';
+    const days = Math.floor((Date.now() - new Date(String(a.last_seen_at).replace(' ', 'T')).getTime()) / 86400000);
+    if (!Number.isFinite(days) || days < 0) return '';
+    const label = days === 0 ? 'active today' : days === 1 ? 'active yesterday' : `active ${days}d ago`;
+    return ` <span class="tag${days > 30 ? ' susp' : ''}" style="font-weight:500">${label}</span>`;
+  };
   const rows = people.map(a => `<details class="arow"${q ? ' open' : ''}>
-    <summary><span class="an">${esc(a.full_name)}${a.is_team ? ' <span class="tag team">◆</span>' : ''}${a.is_regular ? ' <span class="tag reg">★</span>' : ''}${a.suspended ? ' <span class="tag susp">⊘ Suspended</span>' : ''}${a.status === 'approved' && !a.waiver_ok ? ' <span class="tag susp">⚠ No waiver</span>' : ''}</span> ${pill(a.status)}</summary>
+    <summary><span class="an">${esc(a.full_name)}${a.is_team ? ' <span class="tag team">◆</span>' : ''}${a.is_regular ? ' <span class="tag reg">★</span>' : ''}${a.suspended ? ' <span class="tag susp">⊘ Suspended</span>' : ''}${a.status === 'approved' && !a.waiver_ok ? ' <span class="tag susp">⚠ No waiver</span>' : ''}${lastActive(a)}</span> ${pill(a.status)}</summary>
     <form method="POST" action="/admin/people/edit" class="editrow swapform" style="margin-top:12px">
       <input type="hidden" name="id" value="${a.id}">
       <label>Name<input name="full_name" value="${esc(a.full_name)}"></label>
@@ -5105,6 +5155,7 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
       <a class="btn ghost" href="/admin/pco" style="margin:0">⇄ Planning Center</a>
       <a class="btn ghost" href="/admin/programs" style="margin:0">🏅 Programs</a>
       <a class="btn ghost" href="/admin/analytics" style="margin:0">📈 Analytics</a>
+      <a class="btn ghost" href="/admin/history" style="margin:0">🗓 Run history</a>
       <a class="btn ghost" href="/admin/audit" style="margin:0">🗂 Audit</a>
     </div>
 
