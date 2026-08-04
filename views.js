@@ -708,7 +708,7 @@ const WALL_BODY = `<div id="installwall" role="dialog" aria-modal="true" aria-la
 const HEAD = (title, bodyClass = '', { wall = true } = {}) => `<!doctype html><html lang="en"><head>
 <script>/* User theme bootstrap — BEFORE styles load so there is no flash. Class lives on <html>
 (the router swap replaces body.className, html survives). Whitelisted; Classic = no class. */
-try{var t=localStorage.getItem('bridgeTheme');if(t&&/^(midnight|glass|porcelain|paper)$/.test(t))document.documentElement.className='theme-'+t;}catch(e){}</script>
+try{var t=localStorage.getItem('bridgeTheme');if(t&&/^(midnight)$/.test(t))document.documentElement.className='theme-'+t;}catch(e){}</script>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#F8F5EF">
 <link rel="icon" href="/favicon.ico?v=2" sizes="any">
@@ -3685,7 +3685,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
       <b style="font-size:14px;font-family:var(--head)">App theme</b>
       <p class="tally-note" style="margin:4px 0 10px">Pick your look — it applies instantly, just on this device.</p>
       <div id="themerow" style="display:flex;gap:8px;flex-wrap:wrap">
-        ${[['', 'Classic', '#F8F5EF', '#E4611F'], ['midnight', 'Midnight', '#101210', '#E4611F'], ['glass', 'Soft Glass', '#EDF0EF', '#2E7D69'], ['porcelain', 'Porcelain', '#F2F1ED', '#191A18'], ['paper', 'Paper', '#F4EFE3', '#B4691E']].map(([k, label, bgc, ac]) => `
+        ${[['', 'Classic', '#F8F5EF', '#E4611F'], ['midnight', 'Midnight', '#101210', '#E4611F']].map(([k, label, bgc, ac]) => `
         <button type="button" class="themeopt" data-theme="${k}" style="display:flex;align-items:center;gap:7px;border:1.5px solid var(--line);background:var(--card);color:var(--ink);border-radius:999px;padding:8px 13px;font-size:12.5px;font-weight:700;font-family:var(--head);cursor:pointer">
           <span style="width:18px;height:18px;border-radius:50%;background:${bgc};border:1px solid rgba(0,0,0,.15);display:inline-block;position:relative;overflow:hidden"><span style="position:absolute;right:0;top:0;bottom:0;width:7px;background:${ac}"></span></span>${label}
         </button>`).join('')}
