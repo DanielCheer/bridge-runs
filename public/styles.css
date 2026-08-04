@@ -1022,7 +1022,15 @@ body.kb-open .wrap{padding-bottom:calc(100px + var(--kb, 0px))}
 /* section header introducing the chat below the roster list */
 .chatsec{margin:20px 0 2px;border-top:1px solid var(--line);padding-top:14px}
 /* on the standalone Chat page the header sits at the very top — no divider/gap */
-.chatsec.chatsec-top{margin:6px 0 2px;border-top:none;padding-top:0}
+/* The room header (back + name + members) stays PINNED while messages scroll under it —
+   messaging-app convention (owner request 2026-08-04): the back button must never require
+   scrolling up. Sticky against the body scroll; the ::before strip paints bg over the iOS
+   safe-area so scrolled messages never show behind the status bar in the installed app. */
+.chatsec.chatsec-top{margin:6px 0 2px;border-top:none;padding-top:4px;padding-bottom:4px;
+  position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);
+  border-bottom:1px solid var(--line-soft)}
+.chatsec.chatsec-top::before{content:'';position:absolute;bottom:100%;left:-16px;right:-16px;
+  height:env(safe-area-inset-top,0px);background:var(--bg)}
 .chatsec-h{display:flex;align-items:center;gap:12px;padding:2px}
 .chatsec-h .chav{width:40px;height:40px}
 .chatsec-t{min-width:0}
