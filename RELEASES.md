@@ -11,6 +11,7 @@ Backfilled below from git history for the releases that shipped before this file
 
 | Date (local) | Tag | Commit | Summary |
 |---|---|---|---|
+| 2026-08-04 | rel-20260804-1157 | 3253a69 | Five audit proposals: /admin/history run browser + CSV, per-kind notification open rates (SW v3 tag pass-through), per-program kiosk tokens w/ host minting, last-active chips on People, metrics retention policy — board green (metrics-fn 32, program-fn 86) |
 | 2026-08-04 | rel-20260804-1037 | e4b0d09 | Audit batch: F8 scheduling fixed (was broken since ship) + scheduled-post manage/cancel, UTC fill-speed + migration, join-mode enforcement closed, program-agnostic suspend/reject cascade, delete cascade + metrics tables, F4 on all shift paths, kiosk + PCO arrivals hardening, metric rate limits — board 15 suites + CDP + tour green |
 | 2026-08-03 | rel-20260803-1702 | c75a730 | Tour drive rig (player 8 + admin 17 steps, 12/12) + tour state in the masthead capture — device break not reproducible in Chromium, capture armed per never-guess policy |
 | 2026-08-03 | rel-20260803-1650 | b893e34 | Chat rooms: back chevron in the room header → the room's run page (all programs); DM threads already had one; CDP 52/52 + chat suites green |
