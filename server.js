@@ -5649,10 +5649,13 @@ function assignTeam(programId, rd, email, teamNo, by = '') {
     SELECT ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM team_assignments WHERE program_id = ? AND run_date = ? AND team_no = ? AND email <> ?) < ?`)
     .run(programId, rd, email, n, by, programId, rd, n, email, t.size).changes > 0;
 }
-// The set of floor players eligible for a team (real emails, on the floor once locked).
+// The set of floor players eligible for a team — INCLUDING guests (2026-08-04: a guest added
+// after close was invisible to the whole teams area and could never get a chair, though they
+// physically play). Guests have no session, so self-join stays members-only by construction;
+// operators assign them and auto-fill balances them like anyone on the floor.
 function teamFloor(programId, rd) {
   const cfg = P(programId).config, part = partitionFor(programId, rd);
-  return (cfg.offerWindow ? part.floorReal : part.floor).filter(p => !/@guest\.local$/.test(p.email));
+  return (cfg.offerWindow ? part.floorReal : part.floor);
 }
 // A floor player self-joins / switches a team (only once teams are open + they're on the floor).
 function runTeamJoin(programId, req, res) {
