@@ -1580,6 +1580,7 @@ app.post('/announce', requireApprover, (req, res) => {
     db.prepare('INSERT INTO announcements (body, author, pending, publish_at, sched_email) VALUES (?,?,1,?,?)')
       .run(body, req.userEmail, schedAt, req.body.email_everyone ? 1 : 0);
     audit(req.userEmail, req.actorRole, 'announce:scheduled', `${schedAt} ${body.slice(0, 40)}`);
+    armScheduleTimer();
     return res.redirect('/checkin?msg=' + encodeURIComponent(`Scheduled for ${fmtWhen(schedAt.replace('T', ' '))}.`));
   }
   if (body && !dup) {
@@ -1619,6 +1620,7 @@ app.post('/announce/cancel', requireApprover, (req, res) => {
   if (Number.isInteger(id) && id > 0) {
     const r = db.prepare('DELETE FROM announcements WHERE id = ? AND pending = 1 AND program_id = 1').run(id);
     if (r.changes) audit(req.userEmail, req.actorRole, 'announce:cancel-scheduled', String(id));
+    armScheduleTimer();
   }
   res.redirect('/profile');
 });
@@ -4636,6 +4638,23 @@ const localNowMinute = () => {
 // Fire due posts (60s tick). AT the moment it fires it becomes an ordinary live announcement:
 // archive the program's previous live post, flip pending off, push — and email if that was ticked
 // when it was scheduled.
+// Precise firing (owner request 2026-08-04: "send the instant of the scheduled time"): a single
+// armed timeout targets the NEXT due publish_at exactly, so a 7:00 post fires AT 7:00, not at
+// the first 60s tick after it. The tick still calls fireScheduledAnnouncements as the safety net
+// (a lost timer — crash, clock jump — costs at most the old minute of lag, never the post).
+// Re-armed on boot, on schedule, on cancel, and after every fire. Real clock on purpose: the
+// harness drives firing through the test tick, not this timer.
+let schedFireTimer = null;
+function armScheduleTimer() {
+  if (schedFireTimer) { clearTimeout(schedFireTimer); schedFireTimer = null; }
+  const next = db.prepare('SELECT MIN(publish_at) m FROM announcements WHERE pending = 1').get().m;
+  if (!next) return;
+  const ms = new Date(next + ':00').getTime() - Date.now();   // publish_at is minute-granular local
+  schedFireTimer = setTimeout(() => {
+    schedFireTimer = null;
+    try { fireScheduledAnnouncements(); } catch (e) { console.error(`[announce] timed fire failed: ${e.message}`); armScheduleTimer(); }
+  }, Math.max(0, Math.min(ms + 250, 2147000000)));   // +250ms lands just past the minute boundary; clamp ≈24d re-arms itself
+}
 function fireScheduledAnnouncements() {
   const due = db.prepare(
     "SELECT id, program_id, body, author, sched_email FROM announcements WHERE pending = 1 AND publish_at <= ? ORDER BY id").all(localNowMinute());
@@ -4659,6 +4678,7 @@ function fireScheduledAnnouncements() {
       setImmediate(() => { try { if (recipients.length) sendAnnouncement(recipients, a.body, a.author).catch(e => console.error(`[sched-announce] email FAILED: ${e.message}`)); } catch (e) { console.error(`[sched-announce] ${e.message}`); } });
     }
   }
+  armScheduleTimer();   // next pending post gets its own precise timer
 }
 
 // ---------- KIOSK (F7) ----------
@@ -5436,6 +5456,7 @@ setInterval(() => {
   // self-contained (own error handling, inert without credentials) — fire and forget.
   pcoTick().catch(e => console.error('[pco] tick rejected:', e.message));
 }, 60000).unref();
+armScheduleTimer();   // precise firing for any pending post that survived a restart
 
 // Test-only: synchronously run every program's scheduler tick (rollover + auto open/ping/lock).
 // Mounted ONLY when ENABLE_TEST_TICK=1 so it can never exist in prod — lets the harness drive the
@@ -6394,6 +6415,7 @@ function runAnnounce(programId, req, res) {
     db.prepare('INSERT INTO announcements (body, author, program_id, pending, publish_at, sched_email) VALUES (?,?,?,1,?,?)')
       .run(body, author, programId, schedAt, req.body.email_everyone ? 1 : 0);
     audit(req.userEmail, g.admin ? 'admin' : 'host', `${cfg.logTag}:announce-scheduled`, `${schedAt} ${body.slice(0, 40)}`);
+    armScheduleTimer();
     return res.redirect(base);
   }
   db.prepare('INSERT INTO announcements (body, author, program_id) VALUES (?,?,?)').run(body, author, programId);
@@ -6434,6 +6456,7 @@ function runAnnounceCancel(programId, req, res) {
   if (Number.isInteger(id) && id > 0) {
     const r = db.prepare('DELETE FROM announcements WHERE id = ? AND pending = 1 AND program_id = ?').run(id, programId);
     if (r.changes) audit(req.userEmail, g.admin ? 'admin' : 'host', `${cfg.logTag}:announce:cancel-scheduled`, String(id));
+    armScheduleTimer();
   }
   res.redirect(base);
 }
