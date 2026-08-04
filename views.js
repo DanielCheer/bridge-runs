@@ -2245,7 +2245,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
         <form method="POST" action="/announce" class="swapform" style="margin-top:10px" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Posting…';">
           <textarea name="body" required maxlength="500" placeholder="e.g. No run this week — gym's booked. Back next week."></textarea>
           <div style="height:8px"></div>
-          <label style="margin:0 0 8px">Schedule (optional) <span style="text-transform:none;font-weight:400;color:var(--muted)">— leave empty to post now</span><input type="datetime-local" name="publish_at"></label><label style="margin:0 0 8px">Schedule (optional) <span style="text-transform:none;font-weight:400;color:var(--muted)">— leave empty to post now</span><input type="datetime-local" name="publish_at"></label><label style="margin:0 0 8px">Schedule (optional) <span style="text-transform:none;font-weight:400;color:var(--muted)">— leave empty to post now</span><input type="datetime-local" name="publish_at"></label><label style="margin:0 0 8px">Schedule (optional) <span style="text-transform:none;font-weight:400;color:var(--muted)">— leave empty to post now</span><input type="datetime-local" name="publish_at"></label><label class="lvl" style="margin:0 0 8px"><input type="checkbox" name="email_everyone"> Also email everyone</label>
+          <label style="margin:0 0 8px">Schedule (optional) <span style="text-transform:none;font-weight:400;color:var(--muted)">— leave empty to post now</span><input type="datetime-local" name="publish_at"></label><label class="lvl" style="margin:0 0 8px"><input type="checkbox" name="email_everyone"> Also email everyone</label>
           <button class="btn sm" type="submit">Post to all players</button>
         </form>
       </details>`
@@ -3195,7 +3195,7 @@ export function pastRunPage({ name = '', emoji = '', runDate = '', rows = [], dm
 // pass-through wrapper and the golden master stays byte-identical); a 3rd program calls runPage
 // with its own runBase / theme / sport / etc. NOTE: offer-window UI (offered "claiming" rows) is
 // NOT rendered yet — volleyball (offerWindow:true) needs a follow-up increment for that.
-export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM', startLabel = '6 PM', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], offeredPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, myConfirmed = false, confirmBy = '', partyMsg = '', iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null,
+export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM', startLabel = '6 PM', isOpen = false, cancelled = false, cap = 12, waitlistCap = 4, going = 0, waiting = 0, canOperate = false, isAdmin = false, myState = 'out', myWaitPos = 0, floorPlayers = [], offeredPlayers = [], waitPlayers = [], hidden = true, tipoff = 0, announcement = null, schedAnns = [], myConfirmed = false, confirmBy = '', partyMsg = '', iAutoRenew = false, bannerSrc = '/gym.jpg', bannerVer = '4', season = '', seasonWeekday = '', seasonLabel = '', preseason = false, today = '', seasonMax = '', pkMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null,
   runBase = '/pickleball', programId = 2, theme = 'pk', sport = 'Pickleball', sportEmoji = '🥒', dayName = 'Tuesday', pollKey = 'pickleball',
   teamsCfg = null, teamRows = [], teamsOpen = false, penaltyState = {}, partyData = null, demoMode = false, pendingRequests = [] }) {
   // Admin-supplied program names: escape every interpolation (case-convert first — see runChatPage).
@@ -3259,7 +3259,11 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
   // ----- hero footer (INSIDE the card, like basketball): Post announcement (operators,
   //       LEFT) + Auto-renew pill (members, RIGHT) -----
   const annCompose = canOperate
-    ? `<details class="announce-compose"><summary>📣 Post announcement</summary><form method="POST" action="${runBase}/announce" class="swapform" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Posting…';"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all ${low} members (pushes to their phones)"></textarea><div style="height:8px"></div><label class="lvl" style="margin:0 0 8px"><input type="checkbox" name="email_everyone"> Also email everyone</label><button class="btn sm" type="submit">Post &amp; notify</button></form></details>`
+    ? `<details class="announce-compose"><summary>📣 Post announcement</summary><form method="POST" action="${runBase}/announce" class="swapform" onsubmit="var b=this.querySelector('button[type=submit]');if(b.dataset.s){return false;}b.dataset.s=1;b.disabled=true;b.textContent='Posting…';"><textarea name="body" required maxlength="1000" rows="2" placeholder="Message to all ${low} members (pushes to their phones)"></textarea><div style="height:8px"></div><label style="margin:0 0 8px">Schedule (optional) <span style="text-transform:none;font-weight:400;color:var(--muted)">— leave empty to post now</span><input type="datetime-local" name="publish_at"></label><label class="lvl" style="margin:0 0 8px"><input type="checkbox" name="email_everyone"> Also email everyone</label><button class="btn sm" type="submit">Post &amp; notify</button></form>${schedAnns.length ? `<ul class="annlog" style="margin-top:10px">${schedAnns.map((x) => `<li>
+        <div class="annlog-b">${esc(x.body)}</div>
+        <div class="annlog-m"><span class="annlog-state sched">Scheduled</span> Fires ${esc(String(x.publish_at || '').replace('T', ' '))}
+          <form method="POST" action="${runBase}/announce/cancel" class="swapform" style="display:inline;margin-left:6px"><input type="hidden" name="id" value="${Number(x.id)}"><button class="btn ghost sm" type="submit" style="padding:3px 10px">Cancel</button></form></div>
+      </li>`).join('')}</ul>` : ''}</details>`
     : '';
   const autoRenewPill = cancelled ? '' : `<form method="POST" action="${runBase}/autorenew" class="arform" style="margin:0"><input type="hidden" name="on" value="${iAutoRenew ? '0' : '1'}"><button class="arpill${iAutoRenew ? ' on' : ''}" type="submit" title="Auto-join the ${low} run each week">🔁 Auto-renew${iAutoRenew ? ' · ON' : ' · OFF'}</button></form>`;
   const heroFooter = (annCompose || autoRenewPill)
@@ -3546,8 +3550,11 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
           ${announcementLog.map(x => `<li>
             <div class="annlog-b">${esc(x.body)}</div>
             <div class="annlog-m">
-              <span class="annlog-state ${x.archived ? 'past' : 'live'}">${x.archived ? 'Cleared' : 'Live'}</span>
-              Posted ${esc(fmtWhen(x.at))}${x.author ? ' · ' + esc(x.author) : ''}${x.archived && x.archived_at ? ' · cleared ' + esc(fmtWhen(x.archived_at)) : ''}
+              <span class="annlog-state ${x.pending ? 'sched' : (x.archived ? 'past' : 'live')}">${x.pending ? 'Scheduled' : (x.archived ? 'Cleared' : 'Live')}</span>
+              ${x.pending
+                ? `Fires ${esc(String(x.publish_at || '').replace('T', ' '))}${x.author ? ' · ' + esc(x.author) : ''}
+                   <form method="POST" action="/announce/cancel" class="swapform" style="display:inline;margin-left:6px"><input type="hidden" name="id" value="${Number(x.id)}"><button class="btn ghost sm" type="submit" style="padding:3px 10px">Cancel</button></form>`
+                : `Posted ${esc(fmtWhen(x.at))}${x.author ? ' · ' + esc(x.author) : ''}${x.archived && x.archived_at ? ' · cleared ' + esc(fmtWhen(x.archived_at)) : ''}`}
             </div>
           </li>`).join('')}
         </ul>
@@ -4542,10 +4549,12 @@ export function kioskPage({ sport, emoji, theme = '', runDate = '', dateLabel = 
       <div class="ksec"><h2>Waitlist</h2>${wait.map((p, i) => row(p, i, 'kw')).join('') || '<p style="color:var(--muted)">Empty — spots open.</p>'}</div>
     </div>`}
     </div>
-    <script>setInterval(function(){fetch(location.href).then(function(r){return r.text()}).then(function(t){
+    <script>(function(){var miss=0;setInterval(function(){fetch(location.href).then(function(r){return r.text()}).then(function(t){
       var m=t.match(/<div id="kbody">([\\s\\S]*?)<\\/div>\\s*<script>/);
-      if(m)document.getElementById('kbody').innerHTML=m[1];
-    }).catch(function(){});},8000);</script>
+      if(m){miss=0;document.getElementById('kbody').innerHTML=m[1];}
+      else if(++miss>=4){/* token rotated / link dead (P3-3): say so instead of freezing on a stale roster */
+        document.getElementById('kbody').innerHTML='<div class="kcxl">📺 Screen disconnected<br><span style="font-size:20px;font-weight:600">This kiosk link was refreshed — open the new link from Admin → Programs.</span></div>';}
+    }).catch(function(){});},8000);})();</script>
   ` + FOOT;
 }
 

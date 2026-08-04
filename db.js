@@ -316,6 +316,9 @@ db.exec(`
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     at         TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     kind       TEXT NOT NULL,                -- push_send | push_tap | pwa_install | checkin_join | offer_send | offer_claim | offer_expire
+                                             -- checkin_join population (P3-7): SOLO self-joins only, demo excluded.
+                                             -- Party check-ins and auto-renew re-seats are deliberately NOT counted —
+                                             -- the metric answers "how many individual grab-a-spot taps", not seats filled.
     program_id INTEGER,
     run_date   TEXT,
     n          INTEGER NOT NULL DEFAULT 1,   -- batch size (push_send) or 1
@@ -718,9 +721,23 @@ db.exec(`
 // the anchor for "the floor filled in N minutes". Stamped by the two open funnels (setRunOpen /
 // setRunStateFor) only when not already set; carried into run_summary at archive, purged with
 // the row.
+//
+// TIMESTAMP CONVENTION (2026-08-04, learned from a P1): any column that participates in
+// ARITHMETIC with another timestamp column must share its zone. checkins.created_at is UTC
+// (datetime('now')), so opened_at is UTC too — the fill-speed subtraction is the whole reason it
+// exists. Self-contained localtime columns (metrics_events.at, run_summary.created_at,
+// audit tables) stay localtime and are only ever compared against 'now','localtime'. When adding
+// a timestamp column, pick the zone by what it will be SUBTRACTED FROM.
 {
   const cols = db.prepare('PRAGMA table_info(run_state)').all().map(c => c.name);
   if (!cols.includes('opened_at')) db.exec('ALTER TABLE run_state ADD COLUMN opened_at TEXT');
+  // One-time repair: 2026-08-03 wrote opened_at as localtime while created_at is UTC, inflating
+  // every fill-speed pair by the UTC offset — convert the brief window of localtime rows.
+  if (!db.prepare("SELECT value FROM app_settings WHERE key='mig_opened_at_utc'").get()) {
+    db.exec("UPDATE run_state SET opened_at = datetime(opened_at,'utc') WHERE opened_at IS NOT NULL");
+    db.exec("UPDATE run_summary SET opened_at = datetime(opened_at,'utc') WHERE opened_at IS NOT NULL");
+    db.prepare("INSERT OR REPLACE INTO app_settings (key,value) VALUES ('mig_opened_at_utc','1')").run();
+  }
 }
 // Scheduled announcements (2026-07-31, F8): pending=1 rows are invisible to every live query and
 // fire on the 60s tick when publish_at (local 'YYYY-MM-DDTHH:MM') arrives — archive-the-previous +

@@ -925,9 +925,16 @@ export async function pcoReconcile(dateStr) {
 // read: the kiosk renders nothing rather than a confident "0 arrived" it never actually fetched.
 // Roster membership is NOT decided here (same split as pcoReconcile's injected provider):
 // this maps taps → linked emails; who counts as floor/waitlist/walk-in is server.js's call.
-const KIOSK_POLL_MS = Math.max(5, Number(process.env.PCO_KIOSK_POLL_MS) || 30000);
-let kioskTaps = { date: '', at: 0, set: new Set(), live: false, refreshing: false };
-async function refreshKioskTaps(dateStr, eventId) {
+// Poll floor 5 SECONDS in prod (P3-4): an operator setting PCO_KIOSK_POLL_MS=10 thinking seconds
+// must not turn every 8s screen refresh into a PCO page-walk. The harness keeps a ms-scale floor
+// so its fast-cadence asserts still run.
+const KIOSK_POLL_MS = Math.max(process.env.HARNESS ? 5 : 5000, Number(process.env.PCO_KIOSK_POLL_MS) || 30000);
+const stmtLinkedPairs = () => db.prepare('SELECT email, pco_id FROM applicants WHERE pco_id IS NOT NULL');
+let kioskTaps = { date: '', at: 0, arrived: new Set(), unlinkedTaps: 0, live: false, refreshing: false };
+async function refreshKioskTaps(cache, dateStr, eventId) {
+  // `cache` is the epoch this refresh belongs to (P3-4): a midnight rollover swaps the module
+  // binding for a fresh object, so a completion from the OLD day writes into the orphaned object
+  // and can never contaminate the new day's cache.
   try {
     const dayStart = new Date(dateStr + 'T00:00:00');   // LOCAL day → UTC bounds, same as pcoReconcile
     const gte = dayStart.toISOString();
@@ -937,33 +944,30 @@ async function refreshKioskTaps(dateStr, eventId) {
       `/check-ins/v2/events/${encodeURIComponent(eventId)}/check_ins` +
       `?where[created_at][gte]=${encodeURIComponent(gte)}&where[created_at][lte]=${encodeURIComponent(lte)}&per_page=100`,
       (c) => { const pid = c.relationships?.person?.data?.id; if (pid) tapped.add(String(pid)); });
-    kioskTaps.set = tapped;
-    kioskTaps.live = true;
+    // Resolve taps → emails ONCE per successful refresh (P3-4), not per 8s render.
+    const linked = new Map(stmtLinkedPairs().all().map((r) => [String(r.pco_id), r.email.toLowerCase()]));
+    const arrived = new Set();
+    let unlinkedTaps = 0;
+    for (const pid of tapped) { const em = linked.get(pid); if (em) arrived.add(em); else unlinkedTaps++; }
+    cache.arrived = arrived; cache.unlinkedTaps = unlinkedTaps;
+    cache.live = true;
   } catch (e) {
     console.error(`[pco] kiosk arrivals refresh failed: ${e.message}`);
   } finally {
-    kioskTaps.at = Date.now();
-    kioskTaps.refreshing = false;
+    cache.at = Date.now();
+    cache.refreshing = false;
   }
 }
 export function pcoKioskArrivals(dateStr, todayStr) {
   if (getSetting('pco_kiosk_arrivals') !== '1' || !pcoAuthMode()) return null;
   const eventId = getSetting('pco_checkins_event');
   if (!eventId || dateStr !== todayStr) return null;
-  if (kioskTaps.date !== dateStr) kioskTaps = { date: dateStr, at: 0, set: new Set(), live: false, refreshing: false };
+  if (kioskTaps.date !== dateStr) kioskTaps = { date: dateStr, at: 0, arrived: new Set(), unlinkedTaps: 0, live: false, refreshing: false };
   if (!kioskTaps.refreshing && Date.now() - kioskTaps.at >= KIOSK_POLL_MS) {
     kioskTaps.refreshing = true;
-    refreshKioskTaps(dateStr, eventId);   // deliberately un-awaited — the door screen never blocks on PCO
+    refreshKioskTaps(kioskTaps, dateStr, eventId);   // deliberately un-awaited — the door screen never blocks on PCO
   }
-  const linked = new Map(db.prepare('SELECT email, pco_id FROM applicants WHERE pco_id IS NOT NULL').all()
-    .map(r => [String(r.pco_id), r.email.toLowerCase()]));
-  const arrived = new Set();
-  let unlinkedTaps = 0;
-  for (const pid of kioskTaps.set) {
-    const em = linked.get(pid);
-    if (em) arrived.add(em); else unlinkedTaps++;
-  }
-  return { arrived, unlinkedTaps, live: kioskTaps.live };
+  return { arrived: kioskTaps.arrived, unlinkedTaps: kioskTaps.unlinkedTaps, live: kioskTaps.live };
 }
 
 // Verify door passes by reading them back from PCO (consumption, not emission): for every linked

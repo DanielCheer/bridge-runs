@@ -65,7 +65,7 @@ function audit(actor, actorRole, action, target) {
   // admin logins, PCO connects) would otherwise age out while the state it explains lives on.
   if (KEY_EVENT_RE.test(action)) stmtAuditKey.run(actor, actorRole, action, target || '');
 }
-const KEY_EVENT_RE = /^(waiver:|people:waiver|admin:role|people:approve|people:delete|people:suspend|invite:claimed|session:|pco:connected|pco:oauth-connected|pco:disconnected|program:(create|delete|host-granted|host-revoked|request-approved|request-declined|member-removed))/;
+const KEY_EVENT_RE = /^(waiver:|people:waiver|admin:role|people:approve|people:delete|people:suspend|invite:claimed|session:|pco:connected|pco:oauth-connected|pco:disconnected|kiosk:token-rotated|program:(create|delete|host-granted|host-revoked|request-approved|request-declined|member-added|member-removed))/;
 const stmtAuditKey = db.prepare('INSERT INTO audit_key_events (actor,actor_role,action,target) VALUES (?,?,?,?)');
 // ---- metrics layer (2026-08-03): append-only product events, identity-free ----
 // One insert per event, never on a hot read path, and NEVER an email in the row — kinds, counts
@@ -319,9 +319,9 @@ function recomputeStatus(id) {
       // the offeree BEFORE the delete) instead of silently auto-promoting the waitlist.
       const runDate = nextRunDate();
       const offeree = offereeForFloorLeave(runDate, app.email);
-      db.prepare('DELETE FROM checkins WHERE email = ? AND program_id = 1').run(app.email); // basketball floor only; dropFromPickleball handles pk
+      db.prepare('DELETE FROM checkins WHERE email = ? AND program_id = 1').run(app.email); // basketball floor only; the cascade below handles every other program
       if (offeree) createOffer(runDate, offeree, null);
-      dropFromPickleball(app.email);   // a rejected player leaves BOTH programs' floors
+      dropFromPickleball(app.email);   // a rejected player leaves EVERY opt-in program's floor (P2-2)
     }
   }
   return status;
@@ -433,7 +433,7 @@ app.use((req, res, next) => {
       lastSeenDay.set(email, d);
       try { stmtTouchSeen.run(email); } catch (e) { console.error(`[metrics] last-seen touch failed: ${e.message}`); }
     }
-    if (req.query.from === 'push') metric('push_tap', { meta: String(req.path).slice(0, 80) });
+    if (req.query.from === 'push' && !rateLimited('push_tap', email, 40, 24 * 3600 * 1000)) metric('push_tap', { meta: String(req.path).slice(0, 80) });   // P3-5: generous daily cap per account — real taps are a handful
   }
   next();
 });
@@ -443,7 +443,10 @@ app.use((req, res, next) => {
 // only (beacons carry same-origin cookies) so an anonymous crawler can't inflate the count;
 // no identity is stored, just the fact.
 app.post('/metrics/install', (req, res) => {
-  if (currentUser(req)) metric('pwa_install');
+  const who = currentUser(req);
+  // P3-5: a member re-installs at most a couple of times ever — 3/day per account keeps a
+  // hostile beacon loop from inflating the count or growing metrics_events unbounded.
+  if (who && !rateLimited('metric_install', who, 3, 24 * 3600 * 1000)) metric('pwa_install');
   res.status(204).end();
 });
 
@@ -1603,6 +1606,18 @@ app.post('/announce', requireApprover, (req, res) => {
   res.redirect(req.body.from === 'admin' ? '/admin' : '/checkin');
 });
 
+// Cancel a SCHEDULED announcement before it fires (P2-4: the F8 state machine's missing exit —
+// without this the only way to stop a mis-scheduled post was DB surgery). Pending-only delete:
+// a fired/live post can never be deleted through here, only cleared via /announce/clear.
+app.post('/announce/cancel', requireApprover, (req, res) => {
+  const id = Number(req.body.id);
+  if (Number.isInteger(id) && id > 0) {
+    const r = db.prepare('DELETE FROM announcements WHERE id = ? AND pending = 1 AND program_id = 1').run(id);
+    if (r.changes) audit(req.userEmail, req.actorRole, 'announce:cancel-scheduled', String(id));
+  }
+  res.redirect('/profile');
+});
+
 // Clear the current announcement — admin or team. Archives it (keeps history) rather than deleting.
 app.post('/announce/clear', requireApprover, (req, res) => {
   const active = latestAnnouncement();
@@ -1717,7 +1732,7 @@ function setRunOpen(runDate, open) {
               ON CONFLICT(run_date, program_id) DO UPDATE SET is_open = excluded.is_open`)
     .run(runDate, open ? 1 : 0);
   // First open stamps the fill-speed anchor (metrics layer); a later re-open never resets it.
-  if (open) db.prepare("UPDATE run_state SET opened_at = datetime('now','localtime') WHERE run_date = ? AND program_id = 1 AND opened_at IS NULL").run(runDate);
+  if (open) db.prepare("UPDATE run_state SET opened_at = datetime('now') WHERE run_date = ? AND program_id = 1 AND opened_at IS NULL").run(runDate); // UTC — must match checkins.created_at for fill-speed math (P1-2)
 }
 // Run cancellation (per run_date). Cancelling closes the run too — a cancelled run can't
 // be open for check-in. Un-cancelling leaves it CLOSED (the host re-opens deliberately).
@@ -1988,6 +2003,8 @@ const stmtExpiredOffers = db.prepare(  // hoisted — runs on every /checkin + /
 function expireAndReoffer(runDate, req, programId = 1) {
   const cutoff = Date.now() - OFFER_WINDOW_MS;
   const expired = stmtExpiredOffers.all(runDate, programId, cutoff);
+  if (!expired.length) return;
+  const wlBefore = waitlistOrderFor(programId, runDate);   // F4 (P3-2): expiry is the MOST common shift
   for (const ex of expired) {
     // Capture the next offeree BEFORE dropping the expired hold, so the freed slot
     // offers the true top waitlister rather than one auto-promoted by the drop.
@@ -1999,6 +2016,7 @@ function expireAndReoffer(runDate, req, programId = 1) {
     if (!P(programId).config.static) metric('offer_expire', { programId, runDate });
     if (offeree) createOffer(runDate, offeree, req, programId);
   }
+  setImmediate(() => pingWaitlistShift(programId, runDate, wlBefore));   // F4 (P3-2)
 }
 
 // ---- run_summary writer (metrics layer) — call at archive time, BEFORE the purge ----
@@ -2019,7 +2037,10 @@ function writeRunSummary(programId, rd) {
     const floorN = floor.filter((p) => !isGuest(p)).length;
     const guestN = floor.filter(isGuest).length + wait.filter(isGuest).length;
     const waitN = wait.filter((p) => !isGuest(p)).length;
-    const times = db.prepare(`SELECT created_at FROM checkins WHERE run_date = ? AND program_id = ? AND email NOT LIKE '%@guest.local' ORDER BY created_at ASC`)
+    // Occupancy timeline INCLUDES guests (P3-8): guests occupy floor slots, so a 3-guest night
+    // still records filled_at when total occupancy reaches cap. floor_n/wait_n/guest_n keep the
+    // member-vs-guest split; this timeline answers "when was the floor full", whoever filled it.
+    const times = db.prepare('SELECT created_at FROM checkins WHERE run_date = ? AND program_id = ? ORDER BY created_at ASC')
       .all(rd, programId).map((r) => r.created_at);
     const st = db.prepare('SELECT opened_at, cancelled FROM run_state WHERE run_date = ? AND program_id = ?').get(rd, programId);
     const oc = (k) => db.prepare('SELECT COALESCE(SUM(n),0) s FROM metrics_events WHERE kind = ? AND run_date = ? AND program_id = ?').get(k, rd, programId).s;
@@ -3610,9 +3631,11 @@ app.post('/checkin/autorenew', requireLogin, (req, res) => {
     if (!on) {
       // opting out of the held-seat system — drop the current auto-spot too. If that
       // spot was on the floor, offer the freed slot to the top waitlister.
+      const wlBefore = waitlistOrderFor(1, runDate);   // F4 (P3-2)
       const offeree = offereeForFloorLeave(runDate, req.userEmail);
       db.prepare('DELETE FROM checkins WHERE run_date = ? AND email = ? AND program_id = 1').run(runDate, req.userEmail);
       if (offeree) createOffer(runDate, offeree, req);
+      setImmediate(() => pingWaitlistShift(1, runDate, wlBefore));
     } else {
       // WIRING: turning auto-renew back ON re-seats them now (autoJoinTeam is
       // rollover-gated in ensureWeek), so this response page shows them seated.
@@ -4543,6 +4566,10 @@ app.get('/admin/audit.csv', requireAdmin, (req, res) => {
 // is local — cutoffs, pings, waiver dates). Returns the normalized string only if it parses and is
 // in the future; anything else means "post now".
 function parseScheduleAt(v) {
+  // A duplicated form field arrives as an ARRAY under express.urlencoded — String() would mangle
+  // it, fail the regex, and silently convert "scheduled" into "post now" (the P1 that shipped F8
+  // broken). Take the first non-empty value so a stray duplicate can never flip the meaning.
+  if (Array.isArray(v)) v = v.find((x) => String(x || '').trim()) || '';
   const s = String(v || '').trim();
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) return null;
   const t = new Date(s + ':00').getTime();
@@ -4561,7 +4588,11 @@ function fireScheduledAnnouncements() {
     "SELECT id, program_id, body, author, sched_email FROM announcements WHERE pending = 1 AND publish_at <= ? ORDER BY id").all(localNowMinute());
   for (const a of due) {
     db.prepare("UPDATE announcements SET archived = 1, archived_at = datetime('now') WHERE archived = 0 AND COALESCE(pending,0) = 0 AND program_id = ?").run(a.program_id);
-    db.prepare("UPDATE announcements SET pending = 0, at = datetime('now') WHERE id = ?").run(a.id);
+    // Fire = INSERT a FRESH row + drop the pending one (P3-1): the unread-bell dot is
+    // `id > last_seen_id` and the panel orders by id DESC, so flipping pending=0 in place kept
+    // the OLD id — no dot, wrong order, for anyone who'd seen a later post meanwhile.
+    db.prepare('INSERT INTO announcements (body, author, program_id) VALUES (?,?,?)').run(a.body, a.author, a.program_id);
+    db.prepare('DELETE FROM announcements WHERE id = ?').run(a.id);
     audit('system', 'system', 'announce:fired', `${a.program_id}:${a.body.slice(0, 40)}`);
     const isBball = a.program_id === 1;
     const url = isBball ? '/checkin' : P(a.program_id)?.paths.run;
@@ -4584,8 +4615,14 @@ function fireScheduledAnnouncements() {
 app.get('/kiosk/:pid', (req, res) => {
   const pid = Number(req.params.pid);
   if (!PROGRAMS.has(pid) || pid === 90) return res.status(404).send('Not found');
-  const tokenOk = req.query.k && req.query.k === getSetting('kiosk_token');
-  if (!tokenOk && !isAdmin(currentUser(req))) return res.status(403).send('Kiosk link required.');
+  // Timing-safe token compare (P3-3) — an early-exit === leaks prefix-match timing. Length guard
+  // first: timingSafeEqual throws on unequal lengths.
+  const tok = String(req.query.k || ''), want = String(getSetting('kiosk_token') || '');
+  const tokenOk = !!want && tok.length === want.length && crypto.timingSafeEqual(Buffer.from(tok), Buffer.from(want));
+  const admin = isAdmin(currentUser(req));
+  if (!tokenOk && !admin) return res.status(403).send('Kiosk link required.');
+  // A token must not expose an UNPUBLISHED program's roster (P3-3): hidden = admins only.
+  if (!programActive(pid) && !admin) return res.status(404).send('Not found');
   const rd = pid === 1 ? nextRunDate() : programRunDate(pid);
   const part = partitionFor(pid, rd);
   const floor = (P(pid).config.offerWindow ? part.floorReal : part.floor) || [];
@@ -4860,11 +4897,16 @@ app.post('/admin/programs/delete', requireAdmin, (req, res) => {
   if (used.c || used.a || used.m)
     return res.redirect('/admin/programs?msg=' + encodeURIComponent(`${row.name} already has sign-ups, attendance or chat history — hide it instead of deleting, so the records survive.`));
   // Every program_id-scoped table, so a later program can't inherit orphans if this id is reused.
+  // (P2-3: run_summary + metrics_events joined this list when the metrics layer shipped — ids ARE
+  // reused, and INSERT OR IGNORE on run_summary's PK would silently keep a dead program's rows in
+  // a new program's demand card.)
   const cfg = (PROGRAMS.get(id) || {}).config || {};
   transact(() => {
     for (const t of ['program_membership', 'run_state', 'run_overrides', 'announcements', 'group_reads',
-                     'regular_optout', 'team_assignments', 'group_reactions', 'votes'])
+                     'regular_optout', 'team_assignments', 'group_reactions', 'votes', 'run_summary', 'metrics_events'])
       db.prepare(`DELETE FROM ${t} WHERE program_id=?`).run(id);
+    // Announcement dismissals key by announcement id — sweep rows orphaned by the announcements delete.
+    db.prepare('DELETE FROM announcement_dismissals WHERE announcement_id NOT IN (SELECT id FROM announcements)').run();
     // Parties for this run are keyed by group, not program_id — reach them through their run rows.
     const groups = db.prepare('SELECT id FROM signup_groups WHERE program_id=?').all(id).map(r => r.id);
     if (groups.length) {
@@ -5440,7 +5482,7 @@ function runCancelledFor(programId, rd) { const r = stmtRunCancelledById.get(rd,
 function setRunStateFor(programId, rd, field, val) {
   db.prepare(`INSERT INTO run_state (run_date, ${field}, program_id) VALUES (?, ?, ?) ON CONFLICT(run_date, program_id) DO UPDATE SET ${field} = excluded.${field}`).run(rd, val ? 1 : 0, programId);
   // First open stamps the fill-speed anchor (metrics layer, same rule as basketball's setRunOpen).
-  if (field === 'is_open' && val) db.prepare("UPDATE run_state SET opened_at = datetime('now','localtime') WHERE run_date = ? AND program_id = ? AND opened_at IS NULL").run(rd, programId);
+  if (field === 'is_open' && val) db.prepare("UPDATE run_state SET opened_at = datetime('now') WHERE run_date = ? AND program_id = ? AND opened_at IS NULL").run(rd, programId); // UTC — matches checkins.created_at (P1-2)
 }
 function pkIsOpen(rd) { return runOpenFor(2, rd); }
 function pkIsCancelled(rd) { return runCancelledFor(2, rd); }
@@ -5784,13 +5826,22 @@ function pkNotifyPromotion(rd, leavingEmail) { return notifyPromotionFor(2, rd, 
 // the pickleball twin of the checkins delete + offer-onward that suspend/reject already do for
 // basketball. Notify first: once the row is gone, pkNotifyPromotion can't tell a floor leaver
 // from a waitlist leaver. Safe to call for someone who isn't on the roster (no-op).
-function dropFromPickleball(email) {
+function dropFromPickleball(email) {   // kept as an alias — see dropFromAllOptInPrograms
+  return dropFromAllOptInPrograms(email);
+}
+// Suspend/reject cascade, PROGRAM-AGNOSTIC (P2-2): the old dropFromPickleball was hardcoded to
+// program 2 — written when there were two programs — so a suspended player kept their volleyball
+// or mounted-program seat and silently blocked that waitlist (registry extension without the
+// consumer walk). removeFromRun already does the whole per-program job correctly: offer-vs-notify
+// on the freed spot, team + party cleanup, F4 waitlist pings. Basketball (program 1) stays with
+// the callers' inline handling; static programs have synthetic rosters.
+function dropFromAllOptInPrograms(email) {
   if (!email) return;
-  const rd = pkRunDate();
-  // Guest priority applies here too (suspend/reject/delete cascades free a floor spot).
-  const onFloor = partitionFor(2, rd).floor.some(p => lc(p.email) === lc(email));
-  if (onFloor && !seatWaitingGuest(2, rd)) pkNotifyPromotion(rd, email);
-  stmtDelCheckinRow.run(rd, email, 2);
+  for (const p of PROGRAMS.values()) {
+    if (p.id === 1 || p.config.static) continue;
+    try { removeFromRun(p.id, programRunDate(p.id), lc(email)); }
+    catch (e) { console.error(`[cascade] drop from program ${p.id} failed for suspend/reject: ${e.message}`); }
+  }
 }
 
 // Confirm-flow markers when a run's EFFECTIVE DAY changes (date move / uncancel past the window):
@@ -5906,7 +5957,9 @@ function programGate(programId, req, res) {
   const a = applicantByEmail(req.userEmail);
   const admin = isAdmin(req.userEmail);
   if (!admin && (!a || a.status !== 'approved')) { res.redirect('/status'); return null; } // row-less admins allowed (matches requirePlayer)
-  if (!programActive(programId) && !admin) { res.status(404).send('Not found'); return null; } // hidden from everyone but admins
+  // Hidden programs stay reachable for their HOST too (P3-9): hiding a program mid-season must
+  // not lock the person who runs it out of rosters/requests/history until an admin re-publishes.
+  if (!programActive(programId) && !admin && !isProgramHost(programId, req.userEmail)) { res.status(404).send('Not found'); return null; }
   // canOperate: global admins, or THIS program's host (F2). Host power is per-program by
   // construction — the row carries the program_id, so a youth host can't touch volleyball.
   return { a, admin, canOperate: admin || isProgramHost(programId, req.userEmail) };
@@ -6031,6 +6084,9 @@ function runJoinRun(programId, req, res) {
   if (mode === 'host') {
     const existing = db.prepare('SELECT status FROM program_membership WHERE program_id = ? AND email = ?').get(programId, req.userEmail);
     if (!existing) {
+      // P3-10: a decline deletes the row, so an immediate re-request re-pushes every host +
+      // admin — 3/day per person per program keeps that a nudge, not a siren.
+      if (rateLimited('joinreq', `${req.userEmail}|${programId}`, 3, 24 * 3600 * 1000)) return res.redirect(base);
       joinProgramMembership(programId, req.userEmail, 'pending');
       audit(req.userEmail, 'player', 'program:join-requested', `${programId}`);
       const who = (g.a && g.a.full_name) || req.userEmail;
@@ -6071,8 +6127,10 @@ function runBump(programId, req, res) {
   const base = P(programId).paths.run;
   const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
   const rd = programRunDate(programId); if (runCancelledFor(programId, rd)) return res.redirect(base);
+  const wlBefore = waitlistOrderFor(programId, rd);   // F4 (P3-2): bumping a waitlister up shifts those behind (bball twin pings)
   const row = db.prepare('SELECT MIN(sort_order) m FROM checkins WHERE run_date = ? AND program_id = ?').get(rd, programId);
   db.prepare('UPDATE checkins SET sort_order = ? WHERE run_date = ? AND email = ? AND program_id = ?').run(((row && row.m) || 0) - 1, rd, String(req.body.email || '').toLowerCase(), programId);
+  setImmediate(() => pingWaitlistShift(programId, rd, wlBefore));
   res.redirect(base);
 }
 function runJoin(programId, req, res) {
@@ -6085,6 +6143,11 @@ function runJoin(programId, req, res) {
   if (runCancelledFor(programId, rd) || !runOpenFor(programId, rd)) return res.redirect(base);
   const { rows } = partitionFor(programId, rd);
   if (rows.length >= cfg.cap + cfg.waitlist && !rows.find(p => p.email === req.userEmail)) return res.redirect(base); // full
+  // F3 enforcement (P2-1): a direct POST here must not bypass the program's join mode — it
+  // previously enrolled ANY approved club player, invite-only or not (and let a pending
+  // requester self-approve). Non-members of a non-open program go back to the join prompt,
+  // which explains / requests properly. Open mode keeps the auto-enroll below.
+  if (!memberOf(programId, req.userEmail) && (cfg.joinMode || 'open') !== 'open') return res.redirect(base);
   // Taking a seat makes you a member — a direct POST skips the GET that would enroll you, so
   // without this an approved player could seat as a ghost (on the floor, absent from the member
   // list / chat audience / push). Idempotent + guest-safe.
@@ -6094,7 +6157,7 @@ function runJoin(programId, req, res) {
   // swept "unconfirmed" at the cutoff they signed up within.
   const ins = db.prepare("INSERT OR IGNORE INTO checkins (run_date, email, name, program_id, confirmed_at) VALUES (?,?,?,?, CASE WHEN ? = 1 THEN datetime('now') END)")
     .run(rd, req.userEmail, g.a.full_name, programId, rd === ymdLocal() ? 1 : 0);
-  if (ins.changes) metric('checkin_join', { programId, runDate: rd });
+  if (ins.changes && !cfg.static) metric('checkin_join', { programId, runDate: rd });   // demo excluded (P3-7), like offer_*
   res.redirect(base);
 }
 function runCancel(programId, req, res) {
@@ -6251,11 +6314,11 @@ function runAnnounce(programId, req, res) {
   if (schedAt) {
     db.prepare('INSERT INTO announcements (body, author, program_id, pending, publish_at, sched_email) VALUES (?,?,?,1,?,?)')
       .run(body, author, programId, schedAt, req.body.email_everyone ? 1 : 0);
-    audit(req.userEmail, 'admin', `${cfg.logTag}:announce-scheduled`, `${schedAt} ${body.slice(0, 40)}`);
+    audit(req.userEmail, g.admin ? 'admin' : 'host', `${cfg.logTag}:announce-scheduled`, `${schedAt} ${body.slice(0, 40)}`);
     return res.redirect(base);
   }
   db.prepare('INSERT INTO announcements (body, author, program_id) VALUES (?,?,?)').run(body, author, programId);
-  audit(req.userEmail, 'admin', `${cfg.logTag}:announce`, body.slice(0, 60));
+  audit(req.userEmail, g.admin ? 'admin' : 'host', `${cfg.logTag}:announce`, body.slice(0, 60));
   setImmediate(() => sendPush(programMemberEmails(programId), { title: cfg.copy.annTitle, body: body.slice(0, 140), url: base, tag: `${cfg.logTag}ann` }));
   if (req.body.email_everyone && emailConfigured) {
     setImmediate(() => {
@@ -6269,7 +6332,18 @@ function runAnnounceRetract(programId, req, res) {
   const base = P(programId).paths.run, cfg = P(programId).config;
   const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
   const cur = latestAnnouncementFor(programId);
-  if (cur) { db.prepare('UPDATE announcements SET archived = 1 WHERE id = ? AND program_id = ?').run(cur.id, programId); audit(req.userEmail, 'admin', `${cfg.logTag}:announce:retract`, String(cur.id)); }
+  if (cur) { db.prepare('UPDATE announcements SET archived = 1 WHERE id = ? AND program_id = ?').run(cur.id, programId); audit(req.userEmail, g.admin ? 'admin' : 'host', `${cfg.logTag}:announce:retract`, String(cur.id)); }
+  res.redirect(base);
+}
+// Cancel a SCHEDULED post before it fires (P2-4 twin of /announce/cancel) — pending-only delete.
+function runAnnounceCancel(programId, req, res) {
+  const base = P(programId).paths.run, cfg = P(programId).config;
+  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const id = Number(req.body.id);
+  if (Number.isInteger(id) && id > 0) {
+    const r = db.prepare('DELETE FROM announcements WHERE id = ? AND pending = 1 AND program_id = ?').run(id, programId);
+    if (r.changes) audit(req.userEmail, g.admin ? 'admin' : 'host', `${cfg.logTag}:announce:cancel-scheduled`, String(id));
+  }
   res.redirect(base);
 }
 // Season-start gate control (operator). Sets/clears the season opener; before it, no weekly runs
@@ -6280,7 +6354,7 @@ function runSeasonSet(programId, req, res) {
   const g = programGate(programId, req, res); if (!g) return;
   if (!g.canOperate) return res.redirect(base);
   const raw = String(req.body.season || '').trim();
-  if (!raw) { db.prepare('DELETE FROM app_settings WHERE key = ?').run(cfg.keys.seasonStart); audit(req.userEmail, 'admin', `${cfg.logTag}:season-clear`, ''); return res.redirect(base + '?pkset=seasonoff'); }
+  if (!raw) { db.prepare('DELETE FROM app_settings WHERE key = ?').run(cfg.keys.seasonStart); audit(req.userEmail, g.admin ? 'admin' : 'host', `${cfg.logTag}:season-clear`, ''); return res.redirect(base + '?pkset=seasonoff'); }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || isNaN(new Date(raw + 'T12:00:00'))) return res.redirect(base + '?pkerr=seasonbad');
   const today = ymdLocal();
   if (raw < today) return res.redirect(base + '?pkerr=seasonpast');
@@ -6298,7 +6372,7 @@ function runSeasonSet(programId, req, res) {
     const setBase = getSetting(cfg.keys.runBase); if (setBase && setBase < raw) delSetting(cfg.keys.runBase);
     db.exec('COMMIT');
   } catch (e) { db.exec('ROLLBACK'); console.error(`[${cfg.logTag}-season] roster cleanup FAILED: ${e.message}`); throw e; }
-  audit(req.userEmail, 'admin', `${cfg.logTag}:season-set`, raw);
+  audit(req.userEmail, g.admin ? 'admin' : 'host', `${cfg.logTag}:season-set`, raw);
   res.redirect(base + '?pkset=season');
 }
 // Season board (GET) — most runs this calendar year from attendance, member-gated (same bar as the
@@ -6443,6 +6517,9 @@ function runGetPage(programId, req, res) {
     confirmBy: effectiveConfirmCutoff(cfg.confirmCutoff) ? fmtClockLabel(cfg.confirmCutoff) : '',
     bannerSrc: bannerSrcFor(programId), bannerVer: bannerVersionFor(programId),
     tipoff: startEpochFor(programId, rd), announcement: latestAnnouncementFor(programId),
+    // F8 management surface (P2-4): operators see + can cancel scheduled posts for THIS program.
+    schedAnns: g.canOperate ? db.prepare(
+      'SELECT id, body, publish_at FROM announcements WHERE program_id = ? AND pending = 1 ORDER BY publish_at').all(programId) : [],
     season: opener || '', seasonWeekday: opener ? runWeekday(opener) : '', seasonLabel: opener ? runLabelFor(opener) : '',
     preseason: pre, today: ymdLocal(), seasonMax: shiftYmd(ymdLocal(), 365),
     pkMsg: req.query.pkset ? String(req.query.pkset) : (req.query.pkerr || ''),
@@ -6503,6 +6580,7 @@ app.post('/pickleball/announce', requireLogin, (req, res) => runAnnounce(2, req,
 // Retract the current pickleball announcement — operator only. Archives it so it stops
 // showing on the page (no new push/email; the original notification already went out).
 app.post('/pickleball/announce/retract', requireLogin, (req, res) => runAnnounceRetract(2, req, res));
+app.post('/pickleball/announce/cancel', requireLogin, (req, res) => runAnnounceCancel(2, req, res));
 
 // ---------- DEMO run controls (admin-only showcase) ----------
 // Seed/reset/clear the synthetic demo roster (program 90). All rows are @demo.local checkins-only
@@ -7087,7 +7165,11 @@ function runPartyCheckin(programId, req, res) {
     .filter(a => a && a.status === 'approved' && a.waiver_ok && !a.suspended && !/@guest\.local$/.test(a.email))
     // Belt-and-suspenders on the block invariant (P2-1): never seat someone alongside a party
     // member either of them has blocked, even if a stale membership survived.
-    .filter(a => !emails.some(e => e !== lc(a.email) && blockedPair(a.email, e)));
+    .filter(a => !emails.some(e => e !== lc(a.email) && blockedPair(a.email, e)))
+    // F3 enforcement (P2-1 twin): a party check-in must not smuggle NON-MEMBERS into an
+    // invite-only / request-to-join program — the leader's tap was auto-enrolling them below.
+    // Open mode keeps the auto-enroll; others seat existing members only.
+    .filter(a => (cfg.joinMode || 'open') === 'open' || memberOf(programId, lc(a.email)));
   const optRow = db.prepare('SELECT 1 FROM regular_optout WHERE run_date=? AND email=? AND program_id=?');
   const { rows } = partitionFor(programId, rd);
   const already = new Set(rows.map(r => lc(r.email)));
@@ -7197,6 +7279,7 @@ function mountRunProgram(app, program) {
   app.post(`${b}/chat/video`, requireLogin, (req, res) => runChatVideo(id, req, res));
   app.post(`${b}/announce`, requireLogin, (req, res) => runAnnounce(id, req, res));
   app.post(`${b}/announce/retract`, requireLogin, (req, res) => runAnnounceRetract(id, req, res));
+  app.post(`${b}/announce/cancel`, requireLogin, (req, res) => runAnnounceCancel(id, req, res));
   app.post(`${b}/publish`, requireAdmin, (req, res) => runPublish(id, req, res));
   // Teams-in-a-run (registered for every program; the handlers no-op unless config.features.teams).
   app.post(`${b}/team/join`, requireLogin, (req, res) => runTeamJoin(id, req, res));
