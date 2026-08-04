@@ -11,6 +11,7 @@ Backfilled below from git history for the releases that shipped before this file
 
 | Date (local) | Tag | Commit | Summary |
 |---|---|---|---|
+| 2026-08-04 | rel-20260804-1537 | 27b3951 | Back pill on Council + People (→ Check-in) — every tabbed screen now has an up-path |
 | 2026-08-04 | rel-20260804-1526 | 6f4e4cc | Midnight is navy now (#111827, softer dark) + composer strip and DM top bar themed (the dark-input-on-light-strip fix) |
 | 2026-08-04 | rel-20260804-1518 | 43da9f4 | Themes trimmed to Classic + Midnight (removed the three too-similar lights; stale choices fall back to Classic) |
 | 2026-08-04 | rel-20260804-1503 | 974e023 | User themes: Classic + Midnight + Soft Glass + Porcelain + Paper, per-device picker on Profile (pre-paint html-class bootstrap, var-driven skins; QR whites preserved) — verified via real-app themed screenshots, full CDP + suites green |
