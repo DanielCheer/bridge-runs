@@ -1505,15 +1505,13 @@ const opsNav = (current, { isAdmin = false, isTeam = false } = {}) => {
   </nav>`;
 };
 
-// Big orange "back to the Runs hub" button — sits top-left on each run's page so the
-// picker is one obvious tap away (in addition to the Runs tab). Inline styles so it
-// renders identically on the basketball + pickleball pages without page-specific CSS.
-// A true "Back" — history.back() so Chat → Check-in (and any page → wherever you came from) works,
-// with a /runs fallback when there's no history (e.g. a notification deep-link or a fresh load).
-// The orange Back button. `fallback` is where it goes when there's no history to pop — which is the
-// normal case in the installed app, where there is no browser chrome to fall back on. Caller-supplied
-// literal paths only (it lands inside an onclick).
-const backBtn = (fallback = '/runs') => `<button type="button" class="backruns" aria-label="Go back" onclick="if(window.history.length>1){window.history.back()}else{window.location.assign('${fallback}')}" style="display:inline-flex;align-items:center;gap:6px;background:#E86A33;color:#fff;font-family:inherit;font-weight:800;font-size:15px;line-height:1;padding:11px 18px 11px 15px;border:none;border-radius:13px;cursor:pointer;margin:14px 0 2px;box-shadow:0 3px 10px rgba(232,106,51,.32);-webkit-tap-highlight-color:transparent"><span style="font-size:22px;margin-top:-2px">‹</span>Back</button>`;
+// Big orange Back button — a FIXED destination, deliberately NOT history.back() (owner decision
+// 2026-08-04): two pages that link to each other turn history-back into a ping-pong (hub → run →
+// chat → back-to-run → Back landed you in CHAT again, "the most recent page", not the page
+// above). Back now always climbs the hierarchy: run pages → the Runs hub, admin tools → People.
+// The chat rooms' own chevron covers chat → run. Anchor (not button) so the SPA router
+// intercepts it (.backruns[href] is in the intercept list) for a smooth swap.
+const backBtn = (dest = '/runs') => `<a class="backruns" href="${dest}" aria-label="Go back" style="display:inline-flex;align-items:center;gap:6px;background:#E86A33;color:#fff;font-family:inherit;font-weight:800;font-size:15px;line-height:1;padding:11px 18px 11px 15px;border:none;border-radius:13px;cursor:pointer;margin:14px 0 2px;box-shadow:0 3px 10px rgba(232,106,51,.32);-webkit-tap-highlight-color:transparent;text-decoration:none"><span style="font-size:22px;margin-top:-2px">‹</span>Back</a>`;
 const backToRuns = backBtn('/runs');
 
 // Copy-to-clipboard button for a readonly <input>/<textarea> by id. Shows
