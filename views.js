@@ -2146,7 +2146,7 @@ function runDayControls({ runDay, rdMsg = '' }) {
 
 export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–10:30 PM', startLabel = '8:30 PM', tipoff = 0, openDay = 'Monday', openTime = '5 PM', cap, waitlistCap, going, waiting, full, runFull, isOpen, canSeeCount, regularSlotsFull,
                              myState, myWaitPos, myOffer = null, offerWindowHours = 3, iAmTeam, iAmRegular, iOptedOut, iAutoRenew,
-                             viewerIsAdmin, canOperate, canSeeRoster, suspended = false, suspendReason = '', myConfirmed = false, confirmBy = '', msg = '', bannerVer = '4', cancelled = false, locked = false, announcement = null, announcementLog = [], inPlayers, offeredPlayers = [], waitPlayers, host = null, runDay = null, rdMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+                             viewerIsAdmin, canOperate, canSeeRoster, kioskUrl = '', suspended = false, suspendReason = '', myConfirmed = false, confirmBy = '', msg = '', bannerVer = '4', cancelled = false, locked = false, announcement = null, announcementLog = [], inPlayers, offeredPlayers = [], waitPlayers, host = null, runDay = null, rdMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
 
   // Not cleared to play yet (admins always get through — they run the check-in)
   if (!viewerIsAdmin && status !== 'approved') {
@@ -2346,8 +2346,17 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
       </a>`
     : '';
   // ----- hero footer: Send announcement (operators, LEFT) + Auto-renew (team, RIGHT) -----
-  const heroFooter = (annCompose || autoRenewPill)
-    ? `<div class="hann"><div class="hann-l">${annCompose}</div>${autoRenewPill ? `<div class="hann-r">${autoRenewPill}</div>` : ''}</div>`
+  // Kiosk link parity with the generic run pages (owner ask 2026-08-05: "no kiosk screen for
+  // basketball?") — same controls, basketball's own mint route. Never static, so canOperate is
+  // the whole gate.
+  const kioskRow = canOperate
+    ? `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        ${kioskUrl ? `<a class="btn ghost sm" style="margin:0" target="_blank" rel="noopener" href="${esc(kioskUrl)}">📺 Kiosk screen</a>` : ''}
+        <form method="POST" action="/checkin/kiosk-rotate" class="swapform" style="margin:0"${kioskUrl ? ` onsubmit="return confirm('Refresh this run&#39;s kiosk link? Screens on the old link stop working.')"` : ''}><button class="btn ghost sm" type="submit">${kioskUrl ? '↻ Refresh kiosk link' : '📺 Create kiosk link'}</button></form>
+      </div>`
+    : '';
+  const heroFooter = (annCompose || autoRenewPill || kioskRow)
+    ? `<div class="hann"><div class="hann-l">${annCompose}${kioskRow}</div>${autoRenewPill ? `<div class="hann-r">${autoRenewPill}</div>` : ''}</div>`
     : '';
   // ----- operator "Add a guest" — sits on the RIGHT of the hbar (Checked in /
   //       Waitlist) row; expands the last-minute guest-add form (POST /checkin/guest,

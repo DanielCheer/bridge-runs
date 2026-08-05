@@ -2340,6 +2340,8 @@ app.get('/checkin', requireLogin, (req, res) => {
     runFull: totalCount >= TOTAL_CAP,
     isOpen, canSeeCount,
     regularSlotsFull,
+    // Kiosk link parity with the generic run pages — per-program token, operator-mintable.
+    kioskUrl: (canOperate && getSetting('kiosk_token_1')) ? `/kiosk/1?k=${getSetting('kiosk_token_1')}` : '',
     myState, myWaitPos, myOffer, offerWindowHours: OFFER_WINDOW_HOURS,
     iAmTeam, iAmRegular, iOptedOut, iAutoRenew,
     viewerIsAdmin, canOperate, canSeeRoster,
@@ -3728,6 +3730,14 @@ app.post('/checkin/close', requireApprover, (req, res) => {
   const runDate = nextRunDate();
   setRunOpen(runDate, false);
   audit(req.userEmail, req.actorRole, 'run:close', runDate);
+  res.redirect('/checkin');
+});
+// Basketball's kiosk-link mint/rotate — parity with the generic runKioskRotate (basketball still
+// renders the legacy checkinPage, which the per-program kiosk controls never reached). Same token
+// key the /kiosk/:pid route reads; rotating kills only basketball's screens.
+app.post('/checkin/kiosk-rotate', requireApprover, (req, res) => {
+  setSetting('kiosk_token_1', crypto.randomBytes(12).toString('base64url'));
+  audit(req.userEmail, req.actorRole, 'kiosk:token-rotated', 'program 1');
   res.redirect('/checkin');
 });
 
