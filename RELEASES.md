@@ -11,6 +11,7 @@ Backfilled below from git history for the releases that shipped before this file
 
 | Date (local) | Tag | Commit | Summary |
 |---|---|---|---|
+| 2026-08-05 | rel-20260805-1716 | 5b0046a | Door mode ON (owner decision: no confirm ping — PCO door tap is the confirmation) + auto-renew penalty dormant under door mode (false-strike guard) |
 | 2026-08-05 | rel-20260805-1529 | cae3cef | Opt-in per-message chat pushes (Profile toggle, default off — announcements/offers/mentions unchanged) + docs: confirm-your-spot framing dropped, council vote scoped to Adv Basketball |
 | 2026-08-05 | rel-20260805-1141 | 200a4f5 | Demo run kiosk screen (admin-session-only; no tokens ever) — the door-screen demo beat |
 | 2026-08-05 | rel-20260805-1130 | 8f71e95 | Hub player counts brighter/bigger (muted-token denominator + Slate brightness lift on the sport-colored numerator) |
