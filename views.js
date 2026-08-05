@@ -3132,8 +3132,11 @@ export function runsPage({ email, runs = [], canJoin = true, status = 'approved'
       .jc-r1{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
       .jc-name{flex:1;font-family:var(--head);font-weight:800;font-size:17px;letter-spacing:.2px;text-transform:uppercase;color:var(--ink);min-width:0}
       .jc.locked .jc-name{color:#958f80}
-      .jc-count{flex:none;font-family:var(--head);font-weight:800;font-size:17px;color:#a49b87}
+      .jc-count{flex:none;font-family:var(--head);font-weight:800;font-size:18px;color:var(--muted)}
       .jc-count b{color:var(--sport);font-weight:800}
+      /* Slate: the per-sport accents are tuned for light cards — lift the numerator's
+         brightness so the count pops without losing the colour coding (owner report). */
+      html.theme-midnight .jc-count b{filter:brightness(1.45)}
       .jc.locked .jc-count,.jc.locked .jc-count b{color:#b7b0a0}
       .jc-time{font-size:12.5px;font-weight:600;color:var(--muted)}
       .jc.locked .jc-time{color:#a49d8d}
