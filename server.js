@@ -4719,8 +4719,8 @@ app.get('/kiosk/:pid', (req, res) => {
   // someone with no spot tonight is a walk-in, whether or not their account is linked.
   const arr = pcoKioskArrivals(rd, ymdLocal(new Date(schedNow())));
   const tappedIn = (p) => !!(arr && arr.arrived.has(lc(p.email || '')));
-  const fl = floor.map(p => ({ name: p.name || p.email, confirmed: !!p.confirmed_at, arrived: tappedIn(p) }));
-  const wl = wait.map(p => ({ name: p.name || p.email, arrived: tappedIn(p) }));
+  const fl = floor.map(p => ({ name: p.name || p.email, email: p.email || '', confirmed: !!p.confirmed_at, arrived: tappedIn(p) }));
+  const wl = wait.map(p => ({ name: p.name || p.email, email: p.email || '', arrived: tappedIn(p) }));
   let door = null;
   if (arr) {
     const rostered = new Set([...floor, ...wait].map(p => lc(p.email || '')));

@@ -4628,7 +4628,7 @@ export function kioskPage({ sport, emoji, theme = '', runDate = '', dateLabel = 
   // door = { live, arrived, walkIns } when PCO kiosk-arrivals is on and today is the run day:
   // rows gain an IN chip as the station taps people, the count line gains the building tally.
   // `live` false = first fetch hasn't landed yet — say "starting…" rather than a false zero.
-  const row = (p, i, cls) => `<div class="krow ${cls}${p.arrived ? ' kinrow' : ''}"><span class="kn">${i + 1}</span><span class="km">${esc(p.name)}${p.confirmed ? ' <span class="kc">✓</span>' : ''}${p.arrived ? ' <span class="kin">IN</span>' : ''}</span></div>`;
+  const row = (p, i, cls) => `<div class="krow ${cls}${p.arrived ? ' kinrow' : ''}"><span class="kn">${i + 1}</span><span class="kav">${avatarInner(p.email || '', p.name)}</span><span class="km">${esc(p.name)}${p.confirmed ? ' <span class="kc">✓</span>' : ''}${p.arrived ? ' <span class="kin">IN</span>' : ''}</span></div>`;
   const doorLine = !door ? '' : (door.live
     ? ` · ${door.arrived} in the building${door.walkIns ? ` · +${door.walkIns} walk-in${door.walkIns === 1 ? '' : 's'}` : ''}`
     : ' · door sync starting…');
@@ -4643,6 +4643,9 @@ export function kioskPage({ sport, emoji, theme = '', runDate = '', dateLabel = 
       .ksec h2{font-size:20px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 10px}
       .krow{display:flex;gap:14px;align-items:center;padding:10px 14px;border:1px solid var(--line);border-radius:12px;margin-bottom:8px;background:var(--card)}
       .krow .kn{font-weight:800;font-size:22px;min-width:34px;color:var(--muted)}
+      .kav{width:44px;height:44px;border-radius:50%;overflow:hidden;flex:none;display:grid;place-items:center;
+        font-family:var(--head);font-weight:800;font-size:16px;color:#fff;background:linear-gradient(150deg,#2f7169,#1a453f)}
+      .kav img{width:100%;height:100%;object-fit:cover}
       .krow .km{font-size:26px;font-weight:600} .kc{color:#2e7d53;font-weight:800}
       .krow.kw .km{font-size:22px;font-weight:500}
       .kin{background:#2e7d53;color:#fff;font-size:15px;font-weight:800;padding:2px 9px;border-radius:8px;vertical-align:2px;letter-spacing:.05em}

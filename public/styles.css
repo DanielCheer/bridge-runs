@@ -1260,6 +1260,11 @@ html.theme-midnight{
   --bubble:#54668C; --wash:rgba(232,238,250,.09);
 }
 html.theme-midnight body{background:var(--bg)}
+/* Program accent skins re-point --teal to values tuned for CREAM grounds (pickleball deep teal,
+   volleyball court blue) — on slate cards they sink to near-invisible (owner report 2026-08-05:
+   vb eyebrows/links unreadable). Theme-scoped light variants; higher specificity than body.pk/.vb. */
+html.theme-midnight body.pk{--teal:#6FBFAC}
+html.theme-midnight body.vb{--teal:#93B4E8}
 /* Surfaces whose light look is baked into a gradient (not a re-pointable var): give each a
    navy-tuned twin so no card ends up light-on-light / dark-on-dark under Midnight. */
 html.theme-midnight .hostcall{background:linear-gradient(180deg,#5A4530,#4F3C28)}
