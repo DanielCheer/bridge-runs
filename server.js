@@ -4709,7 +4709,12 @@ function fireScheduledAnnouncements() {
 // kiosk link carrying a token (`?k=`), revocable by regenerating. Read-only by construction.
 app.get('/kiosk/:pid', (req, res) => {
   const pid = Number(req.params.pid);
-  if (!PROGRAMS.has(pid) || pid === 90) return res.status(404).send('Not found');
+  if (!PROGRAMS.has(pid)) return res.status(404).send('Not found');
+  const admin = isAdmin(currentUser(req));
+  // The static DEMO kiosk is ADMIN-SESSION-ONLY (owner ask 2026-08-05: show the door screen on
+  // the synthetic roster while demoing). No demo token exists or can ever mint (runKioskRotate's
+  // static guard), so there is no shareable demo link; everyone else 404s like any hidden program.
+  if (pid === 90 && !admin) return res.status(404).send('Not found');
   // Timing-safe token compare (P3-3) — an early-exit === leaks prefix-match timing. Length guard
   // first: timingSafeEqual throws on unequal lengths. Per-program tokens (proposal #3) so one
   // program's leaked link is revocable alone; the legacy global token keeps old screens working.
@@ -4720,7 +4725,6 @@ app.get('/kiosk/:pid', (req, res) => {
   // (the rotate confirm) is actually true (2026-08-05 audit P3-3).
   const perProg = String(getSetting(`kiosk_token_${pid}`) || '');
   const tokenOk = tokEq(perProg) || (!perProg && tokEq(String(getSetting('kiosk_token') || '')));
-  const admin = isAdmin(currentUser(req));
   if (!tokenOk && !admin) return res.status(403).send('Kiosk link required.');
   // A token must not expose an UNPUBLISHED program's roster (P3-3): hidden = admins only.
   if (!programActive(pid) && !admin) return res.status(404).send('Not found');
