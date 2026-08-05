@@ -1658,7 +1658,7 @@ const firstRunTour = `
       {path:'/checkin',sel:'.hguest summary',op:1,ttl:"Add a guest",txt:"Drop in a last-minute walk-on by name — works even after check-in locks."},
       {path:'/checkin',sel:'.announce-compose summary',op:1,ttl:"Announce to everyone",txt:"Post an update that pushes to the whole run’s phones (and emails those who opted in)."},
       {path:'/checkin',sel:'.arpill',op:1,ttl:"Your guaranteed spot",txt:"As team you’re auto-added each week. Toggle this to sit out a week — it never affects your standing."},
-      {path:'/checkin',ttl:"Turn on notifications",txt:"Get a ping for spot offers, announcements and @mentions — never miss out.",notif:1},
+      {path:'/checkin',ttl:"Turn on notifications",txt:"Get a ping for spot offers, announcements and @mentions — never miss out. Want a buzz for every chat message too? Flip that on under Profile → Chat notifications.",notif:1},
       // ---- admin-only (adm): council + people + data ----
       {path:'/admin',op:1,sel:'[data-tour="council"]',ttl:"Vote players in",txt:"New applicants show up here — tap Approve or Reject on each. 3 approvals lets someone in; 3 rejects turns them away."},
       {path:'/admin/people',adm:1,sel:'[data-tour="people"]',ttl:"Manage people",txt:"Search anyone to suspend, remove, or change their role (Team / Pillar / Host). Up top, Share the sign-up QR to invite new players."},
@@ -3709,6 +3709,14 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
       <span style="color:var(--muted);font-size:20px">›</span>
     </a>` : ''}
     ${passCard}
+    <div class="card rail" style="margin-top:12px">
+      <b style="font-size:14px;font-family:var(--head)">Chat notifications</b>
+      <p class="tally-note" style="margin:4px 0 10px">Announcements, spot offers, @mentions and DMs always ping you. Want a ping for <b>every</b> chat message too?</p>
+      <form method="POST" action="/profile/chatpush" class="swapform" style="margin:0">
+        <input type="hidden" name="on" value="${a.chat_push ? '0' : '1'}">
+        <button class="arpill${a.chat_push ? ' on' : ''}" type="submit">💬 Every chat message${a.chat_push ? ' · ON' : ' · OFF'}</button>
+      </form>
+    </div>
     <div class="card rail" style="margin-top:12px">
       <b style="font-size:14px;font-family:var(--head)">App theme</b>
       <p class="tally-note" style="margin:4px 0 10px">Pick your look — it applies instantly, just on this device.</p>

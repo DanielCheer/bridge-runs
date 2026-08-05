@@ -719,6 +719,9 @@ db.exec(`
   // Personal data: covered in docs/PII-RETENTION.md, deleted with the account like the rest of
   // the applicants row.
   if (!cols.includes('last_seen_at')) db.exec('ALTER TABLE applicants ADD COLUMN last_seen_at TEXT');
+  // Opt-in "every chat message" pushes (2026-08-05). Default 0 = the standing posture:
+  // only announcements / spot offers / @mentions / DMs buzz. Toggled on /profile.
+  if (!cols.includes('chat_push')) db.exec('ALTER TABLE applicants ADD COLUMN chat_push INTEGER NOT NULL DEFAULT 0');
 }
 // run_state.opened_at (2026-08-03, metrics layer): when check-in FIRST opened for this run —
 // the anchor for "the floor filled in N minutes". Stamped by the two open funnels (setRunOpen /

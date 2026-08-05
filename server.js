@@ -1047,6 +1047,30 @@ function notifyChatMentions(programId, fromEmail, body, mentions) {
   setImmediate(() => sendPush(emails, { title: `${name} mentioned you`, body: (body || '').slice(0, 140), url: p.paths.chat, tag: p.config.mentionTag }));
 }
 function notifyMentions(fromEmail, body, mentions) { return notifyChatMentions(1, fromEmail, body, mentions); }
+// Opt-in chat pushes (owner ask 2026-08-05): by DEFAULT ordinary chat messages never buzz —
+// only announcements / spot offers / @mentions / DMs do. A member flips "every chat message"
+// ON from their Profile (applicants.chat_push). One stable tag per program collapses a busy
+// room into a single updating notification instead of a stack; mentioned users are excluded
+// here because notifyChatMentions already pinged them louder.
+function notifyChatOptIns(programId, fromEmail, preview, mentions = null) {
+  const optIns = db.prepare('SELECT email FROM applicants WHERE COALESCE(chat_push,0) = 1 AND COALESCE(suspended,0) = 0').all().map((r) => r.email.toLowerCase());
+  if (!optIns.length) return;
+  const from = String(fromEmail).toLowerCase();
+  const mentioned = new Set();
+  const ids = String(mentions || '').split(',').map(Number).filter(Boolean);
+  if (ids.length) for (const r of db.prepare(`SELECT email FROM applicants WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids)) mentioned.add(r.email.toLowerCase());
+  const optSet = new Set(optIns);
+  const members = programId === 1 ? approvedEmails() : programMemberEmails(programId);
+  const emails = members.filter((e) => { const lc = e.toLowerCase(); return lc !== from && optSet.has(lc) && !mentioned.has(lc); });
+  if (!emails.length) return;
+  const sender = applicantByEmail(fromEmail);
+  const p = P(programId);
+  setImmediate(() => sendPush(emails, {
+    title: `${sender ? sender.full_name : 'Someone'} · ${p.displayName} chat`,
+    body: (preview || '').slice(0, 140),
+    url: p.paths.chat, tag: `${p.config.logTag || 'run'}chatmsg`,
+  }));
+}
 
 // DM push: buzz the recipient's phone — otherwise a host DM reaches nobody until they
 // happen to open the app. Coalesced to at most 1 push / 2 min per sender→recipient pair
@@ -3174,6 +3198,7 @@ app.post('/chat', requireLogin, (req, res) => {
       if (rateLimited('chat-media', me, 20, 10 * 60 * 1000)) return res.redirect('/chat?err=slow');
       db.prepare('INSERT INTO group_messages (from_email, body, reply_to, image) VALUES (?,?,?,?)')
         .run(me, '', replyTo || null, sticker);
+      notifyChatOptIns(1, me, '💬 Sticker');
       return res.redirect('/chat');
     }
     // Photo send (optional caption in body): sniff → process → insert → write → set image.
@@ -3189,6 +3214,7 @@ app.post('/chat', requireLogin, (req, res) => {
         const imgPath = await writeChatImage(jpeg, msgId);
         db.prepare('UPDATE group_messages SET image = ? WHERE id = ?').run(imgPath, msgId);
         notifyMentions(me, body, mentions);
+        notifyChatOptIns(1, me, body || '📷 Photo', mentions);
       } catch (e) {
         if (msgId) db.prepare('DELETE FROM group_messages WHERE id = ?').run(msgId); // no half-sent (caption-only) row
         console.error(`[chat] image process failed for ${me}: ${e.message}`);
@@ -3202,6 +3228,7 @@ app.post('/chat', requireLogin, (req, res) => {
     db.prepare('INSERT INTO group_messages (from_email, body, reply_to, mentions) VALUES (?,?,?,?)')
       .run(me, body, replyTo || null, mentions);
     notifyMentions(me, body, mentions);
+    notifyChatOptIns(1, me, body, mentions);
     res.redirect('/chat');
   });
 });
@@ -3293,6 +3320,7 @@ app.post('/chat/voice', requireLogin, (req, res) => {
     try {
       const apath = await writeChatAudio(file.buffer, id, ext);
       db.prepare('UPDATE group_messages SET audio = ?, audio_dur = ? WHERE id = ?').run(apath, dur, id);
+      notifyChatOptIns(1, me, '🎤 Voice note');
     } catch (e) {
       db.prepare('DELETE FROM group_messages WHERE id = ?').run(id); // no ghost row on disk failure
       console.error(`[chat] voice write failed for ${me}: ${e.message}`);
@@ -3329,6 +3357,7 @@ app.post('/chat/video', requireLogin, (req, res) => {
     try {
       const vpath = await writeChatVideo(file.buffer, id, ext);
       db.prepare('UPDATE group_messages SET video = ?, video_dur = ? WHERE id = ?').run(vpath, dur, id);
+      notifyChatOptIns(1, me, '🎬 Video');
     } catch (e) {
       db.prepare('DELETE FROM group_messages WHERE id = ?').run(id); // no ghost row on disk failure
       console.error(`[chat] video write failed for ${me}: ${e.message}`);
@@ -3391,6 +3420,7 @@ function runChatPost(programId, req, res) {
       if (rateLimited(`${cfg.logTag}chat-media`, me, 20, 10 * 60 * 1000)) return res.redirect(`${cb}?err=slow`);
       db.prepare('INSERT INTO group_messages (from_email, body, reply_to, image, program_id) VALUES (?,?,?,?,?)')
         .run(me, '', replyTo || null, sticker, programId);
+      notifyChatOptIns(programId, me, '💬 Sticker');
       return res.redirect(cb);
     }
     if (file && file.buffer && file.buffer.length) {
@@ -3405,6 +3435,7 @@ function runChatPost(programId, req, res) {
         const imgPath = await writeChatImage(jpeg, msgId);
         db.prepare('UPDATE group_messages SET image = ? WHERE id = ?').run(imgPath, msgId);
         notifyChatMentions(programId, me, body, mentions);
+        notifyChatOptIns(programId, me, body || '📷 Photo', mentions);
       } catch (e) {
         if (msgId) db.prepare('DELETE FROM group_messages WHERE id = ?').run(msgId);
         console.error(`[${cfg.logTag}chat] image process failed for ${me}: ${e.message}`);
@@ -3417,6 +3448,7 @@ function runChatPost(programId, req, res) {
     db.prepare('INSERT INTO group_messages (from_email, body, reply_to, mentions, program_id) VALUES (?,?,?,?,?)')
       .run(me, body, replyTo || null, mentions, programId);
     notifyChatMentions(programId, me, body, mentions);
+    notifyChatOptIns(programId, me, body, mentions);
     res.redirect(cb);
   });
 }
@@ -3492,6 +3524,7 @@ function runChatVoice(programId, req, res) {
     try {
       const apath = await writeChatAudio(file.buffer, id, ext);
       db.prepare('UPDATE group_messages SET audio = ?, audio_dur = ? WHERE id = ?').run(apath, dur, id);
+      notifyChatOptIns(programId, me, '🎤 Voice note');
     } catch (e) {
       db.prepare('DELETE FROM group_messages WHERE id = ?').run(id);
       console.error(`[${cfg.logTag}chat] voice write failed for ${me}: ${e.message}`);
@@ -3523,6 +3556,7 @@ function runChatVideo(programId, req, res) {
     try {
       const vpath = await writeChatVideo(file.buffer, id, ext);
       db.prepare('UPDATE group_messages SET video = ?, video_dur = ? WHERE id = ?').run(vpath, dur, id);
+      notifyChatOptIns(programId, me, '🎬 Video');
     } catch (e) {
       db.prepare('DELETE FROM group_messages WHERE id = ?').run(id);
       console.error(`[${cfg.logTag}chat] video write failed for ${me}: ${e.message}`);
@@ -4484,6 +4518,13 @@ setSessionVersionLookup((email) => {
 // "Sign out everywhere": bump the version → every cookie ever issued for this account dies at its
 // next request, including on a lost/stolen device. Key-event audited (S6) — a revocation is
 // exactly the record someone asks about later.
+// Opt-in "every chat message" pushes (2026-08-05). Default OFF = the standing posture
+// (announcements / offers / mentions / DMs only). Per person, all programs.
+app.post('/profile/chatpush', requireLogin, (req, res) => {
+  db.prepare('UPDATE applicants SET chat_push = ? WHERE email = ?')
+    .run(req.body.on === '1' ? 1 : 0, req.userEmail);
+  res.redirect('/profile');
+});
 app.post('/profile/logoutall', requireLogin, (req, res) => {
   const email = req.userEmail.toLowerCase();
   const r = db.prepare('UPDATE applicants SET session_ver = session_ver + 1 WHERE email = ?').run(email);
