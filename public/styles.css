@@ -19,6 +19,7 @@
   --teal:#22615A; --hero:linear-gradient(150deg,#2b6c64 0%,#1d4f48 58%,#153a35 100%);
   --chalk:#F6F2E9; --tint:#FCF7F1; --tint2:#F1EEE6; --composer:rgba(248,245,239,.94); --chalk-dim:rgba(240,235,220,.6);
   --bubble:#ECEAE4; --wash:rgba(255,255,255,.55);
+  --link:var(--orange-deep); --link-hover:var(--orange-dark);
   --orange:#E4611F; --orange-deep:#C24512; --orange-dark:#D0530F; --peach:#FBB360; --burn:#3a1405;
   --foil:linear-gradient(145deg,#C24512 0%,#FBB360 38%,#E4611F 56%,#FFCF98 100%);
   --solid:linear-gradient(180deg,#F59248,#E4611F 55%,#D0530F);
@@ -78,9 +79,9 @@ body.vb a{color:var(--teal)}
 html,body{margin:0;overscroll-behavior:none}
 body{background:var(--bg);color:var(--ink);font-family:var(--body);
   font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%}
-a{color:var(--orange-deep);text-decoration-thickness:1px;text-underline-offset:3px;
+a{color:var(--link);text-decoration-thickness:1px;text-underline-offset:3px;
   transition:color .15s ease}
-a:hover{color:var(--orange-dark)}
+a:hover{color:var(--link-hover)}
 /* Zoom kill (owner: "never zoom ever"): touch-action:manipulation removes the
    ~300ms double-tap-to-zoom delay/gesture on every interactive control. */
 button,a,.btn,.tab,.ftab,.chip,[role=button],label.chip,.score,summary{touch-action:manipulation}
@@ -279,7 +280,7 @@ a.score{cursor:pointer}
 .btn.leave{background:var(--card);color:var(--bad);border:1px solid rgba(188,72,55,.4);box-shadow:none;text-shadow:none}
 .btn.leave:hover{background:rgba(188,72,55,.06);border-color:rgba(188,72,55,.6);box-shadow:none}
 .btn.sm{width:auto;min-height:44px;padding:10px 15px;font-size:12px;border-radius:12px}
-.btn.regstar{background:var(--card);color:var(--orange-deep);border:1px solid rgba(228,97,31,.4);box-shadow:none;text-shadow:none}
+.btn.regstar{background:var(--card);color:var(--link);border:1px solid rgba(228,97,31,.4);box-shadow:none;text-shadow:none}
 .btn.regstar:hover{background:rgba(228,97,31,.06)}
 .btn.voted{background:var(--teal);color:#fff;box-shadow:none;text-shadow:none}
 .spin{display:none;width:16px;height:16px;border:2px solid rgba(255,255,255,.45);border-top-color:#fff;border-radius:50%;animation:btnspin .7s linear infinite}
@@ -292,7 +293,7 @@ a.score{cursor:pointer}
 .subh{font-family:var(--head);font-weight:700;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);padding:12px 8px 5px}
 .lr{display:flex;align-items:center;gap:11px;padding:8px;text-decoration:none;color:inherit;flex-wrap:wrap}
 .lr + .lr{border-top:1px solid rgba(34,35,29,.06)}
-.ln{width:22px;text-align:center;font-family:var(--anton);font-size:13px;color:var(--orange-deep);flex:none}
+.ln{width:22px;text-align:center;font-family:var(--anton);font-size:13px;color:var(--link);flex:none}
 .lrlink{display:contents;color:inherit;-webkit-tap-highlight-color:transparent} /* avatar+name → profile, no layout box */
 .lav{width:30px;height:30px;border-radius:50%;flex:none;overflow:hidden;display:grid;place-items:center;
   font-family:var(--head);font-weight:800;font-size:11px;color:#fff;background:linear-gradient(150deg,#2f7169,#1a453f)}
@@ -336,7 +337,7 @@ a.score{cursor:pointer}
 .contact{margin:16px 0 0;padding:14px 16px;border-radius:14px;background:var(--card);border:1px solid var(--line)}
 .contact .ck{font-family:var(--head);font-weight:700;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
 .contact .cv{font-size:14.5px;color:var(--ink);line-height:1.6}
-.contact .cv a{color:var(--orange-deep);font-weight:600}
+.contact .cv a{color:var(--link);font-weight:600}
 .prow{display:flex;gap:10px;margin:16px 0 0;flex-wrap:wrap}
 .prow .btn{flex:1;text-align:center;min-width:130px}
 
@@ -528,7 +529,7 @@ html:not(.noanim) .annbanner{animation:a-rise var(--t-fast) var(--ez-out) both}
 .tag.host{color:#fff;border-color:transparent;background:var(--solid)}
 .tag.susp{color:var(--bad);border-color:rgba(188,72,55,.35);background:rgba(188,72,55,.1)}
 
-.subhead{font-family:var(--head);font-weight:800;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--orange-deep);
+.subhead{font-family:var(--head);font-weight:800;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--link);
   margin:26px 0 4px;padding-top:14px;border-top:1px solid var(--line)}
 
 /* ---------- operator player list ---------- */
@@ -548,7 +549,7 @@ html:not(.noanim) .annbanner{animation:a-rise var(--t-fast) var(--ez-out) both}
 
 /* ---------- council tally ---------- */
 .tally{font-size:13.5px;margin-top:12px;color:var(--ink)}
-.tally b{font-family:var(--head);font-weight:800;color:var(--orange-deep);font-size:15px}
+.tally b{font-family:var(--head);font-weight:800;color:var(--link);font-size:15px}
 .tally-note{font-family:var(--body);font-size:12px;color:var(--muted);margin-top:3px}
 /* Vote colour-coding: approve = green, reject = red, so the two decisions never read alike.
    Placed AFTER .tally b so these win the equal-specificity tie on the count number. */
@@ -572,7 +573,7 @@ textarea#phones{width:100%;background:var(--card);border:1px solid var(--line);b
 /* ---------- announcements ---------- */
 .announce{background:var(--tint);border:1px solid rgba(228,97,31,.28);border-left:3px solid var(--orange);border-radius:14px;padding:16px 18px;margin:16px 0}
 .announce-compose{margin:14px 0;font-size:13.5px}
-.announce-compose summary{cursor:pointer;color:var(--orange-deep);font-weight:700;font-family:var(--head);padding:8px 0;-webkit-tap-highlight-color:transparent}
+.announce-compose summary{cursor:pointer;color:var(--link);font-weight:700;font-family:var(--head);padding:8px 0;-webkit-tap-highlight-color:transparent}
 .announce-compose summary:hover{color:var(--orange-dark)}
 .announce-compose textarea{min-height:70px}
 .annlog{list-style:none;padding:0;margin:8px 0 0}
@@ -624,7 +625,7 @@ textarea#phones{width:100%;background:var(--card);border:1px solid var(--line);b
 /* ---------- footer ---------- */
 .foot{font-family:var(--head);font-weight:700;font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--muted);
   text-align:center;margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
-.foot a{color:var(--orange-deep);text-transform:none;letter-spacing:.02em;font-weight:700}
+.foot a{color:var(--link);text-transform:none;letter-spacing:.02em;font-weight:700}
 /* Compact sign-out row on the profile tab (a second .foot — the tagline — follows it). */
 .foot.signout{margin-top:8px;padding-top:8px}
 
@@ -705,9 +706,11 @@ textarea#phones{width:100%;background:var(--card);border:1px solid var(--line);b
 .pact{display:flex;align-items:center;gap:10px;width:100%;margin-top:8px;padding:13px 14px;border:1px solid var(--line);border-radius:14px;background:var(--card);color:var(--ink);font-weight:700;font-size:14.5px;text-decoration:none;cursor:pointer;text-align:left;font-family:inherit}
 .pact .pic{font-size:17px;flex:none}
 .pact .pchev{margin-left:auto;color:var(--muted);font-size:19px;line-height:1}
-.pact.primary{background:var(--ink);color:#fff;border-color:var(--ink)}
-.pact.primary .pchev{color:rgba(255,255,255,.7)}
-.pact.danger{color:#b3261e}
+/* Semantic pair, not hardcoded: under Slate --ink is near-WHITE, so color:#fff here was
+   white-on-white (2026-08-05 audit P1). var(--bg) reads correctly under both themes. */
+.pact.primary{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.pact.primary .pchev{color:inherit;opacity:.7}
+.pact.danger{color:var(--bad)}
 .pcav{width:56px;height:56px;border-radius:50%;overflow:hidden;flex:none;display:grid;place-items:center;background:var(--teal);color:#fff;font-family:var(--head);font-weight:800;font-size:19px}
 .pcav img{width:100%;height:100%;object-fit:cover}
 .pcnm{font-family:var(--anton);font-size:22px;letter-spacing:.01em;line-height:1.05}
@@ -1214,7 +1217,7 @@ html:not(.noanim) .tab.on .ic{transform:translateY(-1px)}
 .lpfree{display:flex;gap:6px;align-items:center}
 .lpfree input{width:74px;height:34px;min-height:34px;padding:4px 10px;font-size:16px;border-radius:999px;border:1px solid var(--line);background:var(--card)}
 .lpr.lpadd{width:auto;height:34px;min-height:34px;padding:0 12px;border-radius:999px;font-family:var(--head);font-weight:800;
-  font-size:12px;text-transform:uppercase;color:var(--orange-deep);background:none;border:1px solid var(--line)}
+  font-size:12px;text-transform:uppercase;color:var(--link);background:none;border:1px solid var(--line)}
 .lpacts{min-width:184px;max-width:calc(100vw - 16px);background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;
   box-shadow:0 18px 40px -12px rgba(20,20,10,.5)}
 .lpact{display:flex;align-items:center;justify-content:space-between;gap:14px;width:100%;min-height:0;
@@ -1252,12 +1255,13 @@ html:not(.noanim) .lpacts{animation:lp-rise 300ms cubic-bezier(.34,1.3,.55,1) 40
    theme. Classic = no class = the :root palette untouched. */
 html.theme-midnight{
   --composer:rgba(54,71,101,.93);
-  --tint:rgba(226,233,248,.1); --tint2:rgba(226,233,248,.1);
-  --bg:#364765; --card:#465878; --ink:#F2F4F9; --muted:#BCC6DA;
+  --tint:rgba(232,238,250,.1); --tint2:rgba(232,238,250,.1);
+  --bg:#364765; --card:#465878; --ink:#F2F4F9; --muted:#C6CFE1;
   --line:rgba(232,238,250,.24); --line-soft:rgba(232,238,250,.14);
-  --teal:#55AD97; --hero:linear-gradient(160deg,#2E7267 0%,#24544D 55%,#1E4450 100%);
+  --teal:#7FC8B5; --hero:linear-gradient(160deg,#2E7267 0%,#24544D 55%,#1E4450 100%);
   --good:#6FCD9C; --warn:#E4B558; --bad:#E8887A;
   --bubble:#54668C; --wash:rgba(232,238,250,.09);
+  --link:#FBB360; --link-hover:#FFD096;
 }
 html.theme-midnight body{background:var(--bg)}
 /* Program accent skins re-point --teal to values tuned for CREAM grounds (pickleball deep teal,
@@ -1265,6 +1269,24 @@ html.theme-midnight body{background:var(--bg)}
    vb eyebrows/links unreadable). Theme-scoped light variants; higher specificity than body.pk/.vb. */
 html.theme-midnight body.pk{--teal:#6FBFAC}
 html.theme-midnight body.vb{--teal:#93B4E8}
+/* 2026-08-05 audit: the brightness passes lifted the ground ~5x but left every color OUTSIDE the
+   token block behind. Twins below flip white-on-accent states to dark ink (the burn-on-cream
+   pattern body.pk/.vb already use) and lift the accent-as-text uses that a shared token can't
+   satisfy in both directions on a mid-tone ground. */
+html.theme-midnight .btn.voted,html.theme-midnight .btn.approve.voted,html.theme-midnight .btn.leave.voted,
+html.theme-midnight .anndel,html.theme-midnight .ftab.on,html.theme-midnight .ftab.on:hover,
+html.theme-midnight .ftab.on .fcount,html.theme-midnight .opsnav a.on,html.theme-midnight .tabbadge.mention{color:var(--bg)}
+html.theme-midnight .btn.leave{color:#F2A196;border-color:rgba(242,161,150,.35)}
+html.theme-midnight .btn.approve{color:#8FD9B4;border-color:rgba(143,217,180,.35)}
+html.theme-midnight .eyebrow,html.theme-midnight .loc-h{color:var(--peach)}
+html.theme-midnight .mention{color:#A9E2D3;background:rgba(127,200,181,.14)}
+html.theme-midnight .annlog-state.sched{color:var(--peach);background:rgba(251,179,96,.14)}
+html.theme-midnight .ftab .fcount{background:rgba(232,238,250,.12)}
+html.theme-midnight .bdg.core,html.theme-midnight .sb.core{background:rgba(127,200,181,.14)}
+html.theme-midnight .bdg.core{border-color:rgba(127,200,181,.35)}
+html.theme-midnight .bdg.guest,html.theme-midnight .bdg.reg,html.theme-midnight .btn.ghost{border-color:var(--line)}
+html.theme-midnight .go{color:rgba(232,238,250,.4)}
+html.theme-midnight .lr + .lr{border-top-color:var(--line-soft)}
 /* Surfaces whose light look is baked into a gradient (not a re-pointable var): give each a
    navy-tuned twin so no card ends up light-on-light / dark-on-dark under Midnight. */
 html.theme-midnight .hostcall{background:linear-gradient(180deg,#5A4530,#4F3C28)}

@@ -4715,7 +4715,11 @@ app.get('/kiosk/:pid', (req, res) => {
   // program's leaked link is revocable alone; the legacy global token keeps old screens working.
   const tok = String(req.query.k || '');
   const tokEq = (want) => !!want && tok.length === want.length && crypto.timingSafeEqual(Buffer.from(tok), Buffer.from(want));
-  const tokenOk = tokEq(String(getSetting(`kiosk_token_${pid}`) || '')) || tokEq(String(getSetting('kiosk_token') || ''));
+  // Legacy global token only while NO per-program token exists: minting a program's own link
+  // then self-retires the global for THAT program, so "screens on the old link stop working"
+  // (the rotate confirm) is actually true (2026-08-05 audit P3-3).
+  const perProg = String(getSetting(`kiosk_token_${pid}`) || '');
+  const tokenOk = tokEq(perProg) || (!perProg && tokEq(String(getSetting('kiosk_token') || '')));
   const admin = isAdmin(currentUser(req));
   if (!tokenOk && !admin) return res.status(403).send('Kiosk link required.');
   // A token must not expose an UNPUBLISHED program's roster (P3-3): hidden = admins only.

@@ -51,8 +51,8 @@ const SPLASH_HEAD = `<script>(function(){try{if(sessionStorage.getItem('splashed
 <style>
 #splash{position:fixed;inset:0;z-index:9999;background:#F8F5EF;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:46px;opacity:1;transition:opacity .5s ease}
 html.theme-midnight #splash{background:#364765}
-html.theme-midnight #splash .tt b{color:#EAEDF4}
-html.theme-midnight #splash .tt .sb,html.theme-midnight #splash .tt .ck{color:#55AD97}
+html.theme-midnight #splash .tt b{color:#F2F4F9}
+html.theme-midnight #splash .tt .sb,html.theme-midnight #splash .tt .ck{color:#7FC8B5}
 html.splashed #splash{display:none}
 #splash.hide{opacity:0;pointer-events:none}
 #splash .bw{position:relative;display:grid;place-items:center}
@@ -4655,10 +4655,10 @@ export function kioskPage({ sport, emoji, theme = '', runDate = '', dateLabel = 
       .kav{width:44px;height:44px;border-radius:50%;overflow:hidden;flex:none;display:grid;place-items:center;
         font-family:var(--head);font-weight:800;font-size:16px;color:#fff;background:linear-gradient(150deg,#2f7169,#1a453f)}
       .kav img{width:100%;height:100%;object-fit:cover}
-      .krow .km{font-size:26px;font-weight:600} .kc{color:#2e7d53;font-weight:800}
+      .krow .km{font-size:26px;font-weight:600} .kc{color:var(--good);font-weight:800}
       .krow.kw .km{font-size:22px;font-weight:500}
       .kin{background:#2e7d53;color:#fff;font-size:15px;font-weight:800;padding:2px 9px;border-radius:8px;vertical-align:2px;letter-spacing:.05em}
-      .krow.kinrow{border-color:#2e7d53}
+      .krow.kinrow{border-color:var(--good)}
       .kcxl{font-size:34px;font-weight:800;margin:40px 0;text-align:center}
     </style>
     <div id="kbody">
