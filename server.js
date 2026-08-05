@@ -5935,6 +5935,11 @@ const stmtPmPausedFloor = db.prepare('SELECT email, ar_strikes, ar_paused_until 
 function assessRenewPenalties(programId, rd) {
   const cfg = P(programId).config, pen = cfg.autoRenewPenalty;
   if (!pen || !rd) return;
+  // Door mode: there IS no in-app confirm, so "auto-seated and never confirmed" describes the
+  // entire floor — assessing it would false-strike every renewer, every week. The penalty goes
+  // DORMANT with the confirm flow (2026-08-05, flipped with the owner's door-mode decision);
+  // it comes back the day arrival (the PCO door tap) becomes the show/no-show source.
+  if (doorMode()) return;
   const part = partitionFor(programId, rd);
   const floor = cfg.offerWindow ? part.floorReal : part.floor;
   const struck = [], paused = [];
