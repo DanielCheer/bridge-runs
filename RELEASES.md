@@ -11,6 +11,7 @@ Backfilled below from git history for the releases that shipped before this file
 
 | Date (local) | Tag | Commit | Summary |
 |---|---|---|---|
+| 2026-08-05 | rel-20260805-0851 | 1737153 | Slate: pickleball/volleyball accents get light variants (were invisible on slate) + kiosk rows show profile photos |
 | 2026-08-05 | rel-20260805-0836 | 4e923ea | Dark theme much lighter (slate #364765/#465878) + renamed Midnight to Slate (key unchanged — existing picks carry over) |
 | 2026-08-05 | rel-20260805-0824 | 2e59b2d | Midnight lightened to slate navy (#1B2740) — owner report: too dark; all touchpoints (splash, chrome tint, picker swatch, bubbles, composer) moved together |
 | 2026-08-04 | rel-20260804-1614 | 298bdae | Audit round 4: Classic composer background restored (P1), Midnight readability sweep (bubbles, cream buttons, banners, splash, kiosk, chrome tint), scheduler txn + ordering + harness guard, router race token + back-swipe fix, teams floor-check, watchdog port guard |
