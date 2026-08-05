@@ -1251,17 +1251,17 @@ html:not(.noanim) .lpacts{animation:lp-rise 300ms cubic-bezier(.34,1.3,.55,1) 40
    identity on their own pages — the surfaces beneath still follow the user
    theme. Classic = no class = the :root palette untouched. */
 html.theme-midnight{
-  --composer:rgba(13,17,27,.92);
+  --composer:rgba(27,39,64,.92);
   --tint:rgba(226,233,248,.08); --tint2:rgba(226,233,248,.08);
-  --bg:#111827; --card:#1B2537; --ink:#EAEDF4; --muted:#96A0B6;
-  --line:rgba(226,233,248,.16); --line-soft:rgba(226,233,248,.09);
-  --teal:#43907E; --hero:linear-gradient(160deg,#1f4f47 0%,#163a36 55%,#122b31 100%);
+  --bg:#1B2740; --card:#273550; --ink:#EAEDF4; --muted:#A2ADC4;
+  --line:rgba(226,233,248,.18); --line-soft:rgba(226,233,248,.1);
+  --teal:#489B87; --hero:linear-gradient(160deg,#266056 0%,#1b453f 55%,#16333a 100%);
   --good:#5CBF8B; --warn:#D9A94A; --bad:#E07A66;
-  --bubble:#242F44; --wash:rgba(226,233,248,.07);
+  --bubble:#33425F; --wash:rgba(226,233,248,.07);
 }
 html.theme-midnight body{background:var(--bg)}
 /* Surfaces whose light look is baked into a gradient (not a re-pointable var): give each a
    navy-tuned twin so no card ends up light-on-light / dark-on-dark under Midnight. */
-html.theme-midnight .hostcall{background:linear-gradient(180deg,#2E2118,#281C13)}
+html.theme-midnight .hostcall{background:linear-gradient(180deg,#3A2B1E,#332619)}
 html.theme-midnight .hostcall .tx b{color:var(--peach)}
-html.theme-midnight .demonote{background:#332818;border-color:#8a6a35}
+html.theme-midnight .demonote{background:#3D3020;border-color:#8a6a35}
