@@ -11,6 +11,7 @@ Backfilled below from git history for the releases that shipped before this file
 
 | Date (local) | Tag | Commit | Summary |
 |---|---|---|---|
+| 2026-08-05 | rel-20260805-1115 | cdb9733 | Audit round 5: Slate contrast sweep — link token (peach), white-on-accent twins, teal/muted lifts, kiosk greens tokenized; per-program kiosk token now retires the legacy global |
 | 2026-08-05 | rel-20260805-0912 | ba07108 | Basketball kiosk link controls on /checkin (mint/rotate + screen link — parity with pickleball/volleyball) |
 | 2026-08-05 | rel-20260805-0851 | 1737153 | Slate: pickleball/volleyball accents get light variants (were invisible on slate) + kiosk rows show profile photos |
 | 2026-08-05 | rel-20260805-0836 | 4e923ea | Dark theme much lighter (slate #364765/#465878) + renamed Midnight to Slate (key unchanged — existing picks carry over) |
