@@ -1734,21 +1734,106 @@ const stmtStampWaiver = db.prepare(
   "UPDATE applicants SET waiver_ok = 1, waiver_at = COALESCE(waiver_at, datetime('now','localtime')) WHERE email = ?");
 function stampWaiver(email) { if (email) stmtStampWaiver.run(String(email).toLowerCase()); }
 
-// One-time waiver gate — the join routes send a member here when waiver_ok is unset. They
-// confirm they've signed, we flip waiver_ok, and they're returned to the run to check in.
+// ---------- PER-PROGRAM WAIVERS (F6 youth pack) ----------
+// A program whose config carries waiver:{key} requires ITS OWN signed waiver (a waiver_records
+// row for that key) instead of the club-wide applicants.waiver_ok — a youth program's consent
+// document is not the adult pickup waiver. waiverSatisfied is the ONE seam every seat-granting
+// path reads; for a program without config.waiver it reduces exactly to the old waiver_ok check.
+// guardianUnder (config.waiver.guardianUnder = 18): a minor's record also needs a guardian's
+// consent attestation before it satisfies — adults are untouched by it.
+const stmtWaiverRec = db.prepare('SELECT * FROM waiver_records WHERE waiver_key = ? AND email = ?');
+function programWaiver(programId) { return P(programId).config.waiver || null; }
+function waiverSatisfied(programId, email) {
+  email = String(email || '').toLowerCase();
+  const a = applicantByEmail(email);
+  const w = programWaiver(programId);
+  if (!w) return !!(a && a.waiver_ok);
+  const rec = stmtWaiverRec.get(w.key, email);
+  if (!rec) return false;
+  // An organizer who has SEEN the signed document has seen the whole document — for a youth
+  // waiver that includes the guardian's signature, so verified_at satisfies outright (parity
+  // with the global model, where admin verification sets waiver_ok itself).
+  if (rec.verified_at) return true;
+  if (!rec.attested_at) return false;
+  if (waiverNeedsGuardian(w, a) && !rec.guardian_consent_at) return false;
+  return true;
+}
+// Where a join route sends someone who still owes this program's waiver.
+function waiverGateUrl(programId, next) {
+  const p = programWaiver(programId) ? `&p=${programId}` : '';
+  return `/waiver?next=${encodeURIComponent(next)}${p}`;
+}
+// Does THIS program's waiver need a guardian's consent for THIS member? (Minors only; adults and
+// guardian-less programs → false.)
+function waiverNeedsGuardian(w, a) {
+  return !!(w && w.guardianUnder && a && isMinor(a) && ageFromDob(a.dob) < w.guardianUnder);
+}
+// Resolve the ?p= param to a program that actually HAS its own waiver — anything else falls back
+// to the global flow rather than trusting a crafted id.
+function waiverProgramFromReq(req, source) {
+  const pid = Number((source || {}).p) || 0;
+  return pid && PROGRAMS.has(pid) && programWaiver(pid) ? pid : null;
+}
+
+// One-time waiver gate — the join routes send a member here when their waiver is unset. They
+// confirm they've signed, we record it, and they're returned to the run to check in. With ?p=
+// the gate is a PROGRAM's own waiver (waiver_records row); without it, the club-wide flag.
 app.get('/waiver', requireLogin, (req, res) => {
   const a = applicantByEmail(req.userEmail);
   const next = safeNextPath(req.query.next);
-  if (a && a.waiver_ok) return res.redirect(next); // already signed → nothing to do
-  res.send(waiverPage({ email: req.userEmail, next, err: req.query.err || '' }));
+  const pid = waiverProgramFromReq(req, req.query);
+  if (pid ? waiverSatisfied(pid, req.userEmail) : (a && a.waiver_ok)) return res.redirect(next); // already signed → nothing to do
+  res.send(waiverPage({
+    email: req.userEmail, next, err: req.query.err || '',
+    programId: pid, programName: pid ? P(pid).displayName : '',
+    // Guardian consent block renders only when THIS program requires it for THIS (minor) member.
+    guardian: waiverNeedsGuardian(pid ? programWaiver(pid) : null, a),
+  }));
 });
 app.post('/waiver', requireLogin, (req, res) => {
   const a = applicantByEmail(req.userEmail);
   const next = safeNextPath(req.body.next);
   if (!a) return res.redirect('/status');
-  if (!req.body.agree) return res.redirect('/waiver?next=' + encodeURIComponent(next) + '&err=' + encodeURIComponent('Please check the box to confirm you signed the waiver.'));
-  stampWaiver(a.email);
-  audit(req.userEmail, 'player', 'waiver:ack', '');
+  const pid = waiverProgramFromReq(req, req.body);
+  const back = (msg) => res.redirect(`/waiver?next=${encodeURIComponent(next)}${pid ? `&p=${pid}` : ''}&err=${encodeURIComponent(msg)}`);
+  if (!req.body.agree) return back('Please check the box to confirm you signed the waiver.');
+  if (!pid) {   // club-wide flow — unchanged
+    stampWaiver(a.email);
+    audit(req.userEmail, 'player', 'waiver:ack', '');
+    return res.redirect(next);
+  }
+  const w = programWaiver(pid);
+  const needsGuardian = waiverNeedsGuardian(w, a);
+  let g = { name: '', phone: '', email: '' };
+  if (needsGuardian) {   // guardian consent (F6): the guardian fills their details + attests
+    g = {
+      name: String(req.body.guardian_name || '').trim().slice(0, 60),
+      phone: String(req.body.guardian_phone || '').trim().slice(0, 30),
+      email: String(req.body.guardian_email || '').trim().toLowerCase(),
+    };
+    if (!req.body.guardian_agree) return back('A parent or guardian needs to check the consent box.');
+    if (!g.name || !g.phone || !isValidEmail(g.email)) return back('Guardian name, phone, and a valid email are required.');
+    if (g.email === String(a.email).toLowerCase()) return back('The guardian email must be the parent or guardian’s own address, not the player’s.');
+  }
+  // Idempotent like stampWaiver: first attestation dates stick; a re-confirm never rewrites them.
+  db.prepare(`INSERT INTO waiver_records (waiver_key, email, attested_at, guardian_name, guardian_phone, guardian_email, guardian_consent_at)
+      VALUES (?, ?, datetime('now','localtime'), ?, ?, ?, CASE WHEN ? THEN datetime('now','localtime') END)
+    ON CONFLICT(waiver_key, email) DO UPDATE SET
+      attested_at = COALESCE(attested_at, excluded.attested_at),
+      guardian_name = CASE WHEN excluded.guardian_name != '' THEN excluded.guardian_name ELSE guardian_name END,
+      guardian_phone = CASE WHEN excluded.guardian_phone != '' THEN excluded.guardian_phone ELSE guardian_phone END,
+      guardian_email = CASE WHEN excluded.guardian_email != '' THEN excluded.guardian_email ELSE guardian_email END,
+      guardian_consent_at = COALESCE(guardian_consent_at, excluded.guardian_consent_at)`)
+    .run(w.key, String(a.email).toLowerCase(), g.name || null, g.phone || null, g.email || null, needsGuardian ? 1 : 0);
+  // The applicants guardian columns are the person-level contact record (one guardian per player,
+  // shown on the admin People card) — stamped from the first program that collects them.
+  if (needsGuardian) {
+    db.prepare(`UPDATE applicants SET guardian_name = COALESCE(NULLIF(guardian_name,''), ?),
+        guardian_phone = COALESCE(NULLIF(guardian_phone,''), ?),
+        guardian_email = COALESCE(NULLIF(guardian_email,''), ?) WHERE email = ?`)
+      .run(g.name, g.phone, g.email, a.email);
+  }
+  audit(req.userEmail, 'player', 'waiver:ack', `${w.key}${needsGuardian ? ':guardian' : ''}`);
   res.redirect(next);
 });
 
@@ -2501,7 +2586,27 @@ app.get('/u/:id', requireLogin, (req, res) => {
 });
 
 // ---------- PROFILE (own editable tab) ----------
-const POSITIONS = ['', 'PG', 'SG', 'SF', 'PF', 'C', 'S', 'OH', 'MB', 'OPP', 'L', 'DS']; // basketball + volleyball
+// Positions are PER-PROGRAM config now (config.positions = [[code,label],…]) so a new sport
+// declares its own set in the wizard instead of editing a hardcoded list (F6). The save whitelist
+// is the union across ALL programs (hidden ones included — hiding a program must not strip its
+// members' stored picks on the next profile save) plus the legacy codes that predate the config.
+const LEGACY_POSITIONS = ['PG', 'SG', 'SF', 'PF', 'C', 'S', 'OH', 'MB', 'OPP', 'L', 'DS'];
+function positionWhitelist() {
+  const set = new Set(LEGACY_POSITIONS);
+  for (const p of PROGRAMS.values()) for (const [code] of (p.config.positions || [])) set.add(code);
+  return set;
+}
+// Profile picker groups: one chip row per program that declares positions. Hidden programs keep
+// their group visible (pre-F6 the two sport rows always showed, vb hidden or not — same UI, and a
+// member's picks for a program that later publishes are already in place).
+function positionGroups() {
+  const groups = [];
+  for (const p of PROGRAMS.values()) {
+    if (!p.config.positions || !p.config.positions.length || p.config.static) continue;
+    groups.push({ label: p.displayName, chips: p.config.positions });
+  }
+  return groups;
+}
 app.get('/profile', requireLogin, async (req, res) => {
   const gate = requirePlayer(req, res);
   if (!gate) return;
@@ -2530,7 +2635,8 @@ app.get('/profile', requireLogin, async (req, res) => {
   res.send(profileTabPage({ a, stats: attendanceStats(a.email), saved: req.query.saved === '1', error: '', passQr, passCode: a.pco_pass_code || '',
     dmUnread: unreadCount(a.email), groupUnread: cc.group, groupMention: cc.gm, chatProgram, canOperate, announcementLog: canOperate ? announcementHistory() : [],
     friendCount: friendsOf(a.email).length, friendReqIn: friendReqIncomingCount(a.email), followerCount: followersOf(a.email).length, // Friends entry-point summary
-    iAmHost, threads: loadInbox(a.email), photoMsg, ann: annPanel(a.email), minor: isMinor(a), showRoles: gate.viewerIsAdmin }));
+    iAmHost, threads: loadInbox(a.email), photoMsg, ann: annPanel(a.email), minor: isMinor(a), showRoles: gate.viewerIsAdmin,
+    positionGroups: positionGroups() }));
 });
 
 // ---------- PROFILE PHOTO (upload / remove) ----------
@@ -2602,7 +2708,8 @@ app.post('/profile', requireLogin, (req, res) => {
   // position is now multi-select (checkboxes): array, single string, or absent
   let posInput = req.body.position || [];
   if (typeof posInput === 'string') posInput = [posInput];
-  const position = [...new Set(posInput.filter(p => POSITIONS.includes(p) && p))].join(',');
+  const posOk = positionWhitelist();
+  const position = [...new Set(posInput.filter(p => p && posOk.has(p)))].join(',');
   // Email opt-out — an unchecked checkbox doesn't POST, so absent = opted OUT.
   const email_optout = req.body.email_announce ? 0 : 1;
   // DOB: SET-ONCE by the member (add it if legacy/missing); an already-set dob can only be changed by
@@ -2618,6 +2725,7 @@ app.post('/profile', requireLogin, (req, res) => {
     canOperate, iAmHost, announcementLog: canOperate ? announcementHistory() : [], threads: loadInbox(a.email), ann: annPanel(a.email),
     chatProgram: chatProgramFor(req), // keep the run-aware Chat tab correct on a validation re-render too
     minor: isMinor(a), // red safeguarding badge (dob is set-once, so unchanged on an error re-render)
+    positionGroups: positionGroups(),
   };
   if (!full_name || !phone || !isValidEmail(email))
     return res.send(profileTabPage({ ...errProps, error: 'Name, phone, and a valid email are required.' }));
@@ -4291,7 +4399,37 @@ app.get('/admin/people', requireAdmin, (req, res) => {
   const invites = db.prepare('SELECT * FROM invites WHERE used = 0 ORDER BY created_at DESC').all()
     .map(iv => ({ ...iv, link: `${base}/invite/${iv.token}` }));
   const newInviteLink = req.query.invite ? `${base}/invite/${req.query.invite}` : '';
-  res.send(peoplePage({ people, q, approvedPhones, signInUrl, invites, newInviteLink, msg: req.query.msg || '', ann: annPanel(req.userEmail), dmUnread: unreadCount(req.userEmail), groupUnread: groupUnread(req.userEmail), groupMention: groupMentionUnread(req.userEmail, applicantIdOf(req.userEmail)) }));
+  // Per-program waivers (F6): which programs have their own, and every signed record grouped by
+  // email — the person card shows each program's state with a verify affordance. Empty until a
+  // program opts in, so this section renders nothing today.
+  const waiverProgs = [...PROGRAMS.values()].filter(p => p.config.waiver)
+    .map(p => ({ key: p.config.waiver.key, label: p.displayName }));
+  const waiverRecs = {};
+  if (waiverProgs.length) for (const r of db.prepare('SELECT * FROM waiver_records').all()) (waiverRecs[r.email] = waiverRecs[r.email] || []).push(r);
+  res.send(peoplePage({ people, q, approvedPhones, signInUrl, invites, newInviteLink, msg: req.query.msg || '', ann: annPanel(req.userEmail), dmUnread: unreadCount(req.userEmail), groupUnread: groupUnread(req.userEmail), groupMention: groupMentionUnread(req.userEmail, applicantIdOf(req.userEmail)), waiverProgs, waiverRecs }));
+});
+
+// Organizer confirms a PROGRAM's waiver document they have actually seen (F6 twin of
+// /admin/people/waiver): upserts the record with verified_at/verified_by — sighting the signed
+// document (guardian signature included, for youth waivers) satisfies the program's gate outright.
+app.post('/admin/people/waiver-record', requireAdmin, (req, res) => {
+  const a = db.prepare('SELECT email, full_name FROM applicants WHERE id = ?').get(req.body.id);
+  if (!a) return res.redirect('/admin/people?msg=' + encodeURIComponent('No such person.'));
+  const key = String(req.body.key || '');
+  const prog = [...PROGRAMS.values()].find(p => p.config.waiver && p.config.waiver.key === key);
+  if (!prog) return res.redirect('/admin/people?msg=' + encodeURIComponent('No program uses that waiver.'));
+  const em = String(a.email).toLowerCase();
+  if (req.body.on === '0') {
+    db.prepare('UPDATE waiver_records SET verified_at = NULL, verified_by = NULL WHERE waiver_key = ? AND email = ?').run(key, em);
+    audit(req.userEmail, 'admin', 'people:waiver-record-unverify', `${key}:${em}`);
+    return res.redirect('/admin/people?msg=' + encodeURIComponent(`Cleared the ${prog.displayName} confirmation for ${a.full_name} — their own attestation stands.`));
+  }
+  db.prepare(`INSERT INTO waiver_records (waiver_key, email, verified_at, verified_by)
+      VALUES (?, ?, datetime('now','localtime'), ?)
+    ON CONFLICT(waiver_key, email) DO UPDATE SET verified_at = excluded.verified_at, verified_by = excluded.verified_by`)
+    .run(key, em, req.userEmail);
+  audit(req.userEmail, 'admin', 'people:waiver-record-verified', `${key}:${em}`);
+  res.redirect('/admin/people?msg=' + encodeURIComponent(`${a.full_name}'s ${prog.displayName} waiver is confirmed on file.`));
 });
 
 // Roster CSV export (admin-only) — offline backup / spreadsheet analysis of the people
@@ -4877,6 +5015,7 @@ function programAdminRows() {
       theme: cfg ? cfg.theme : '', spec,
       hasData: counts.c > 0 || counts.a > 0 || counts.m > 0, members: counts.mem,
       runDate: cfg ? (cfg.keys ? (getSetting(cfg.keys.runDate) || '') : nextRunDate()) : '',
+      seasonStart: cfg && cfg.keys ? (getSetting(cfg.keys.seasonStart) || '') : '',   // wizard edit form field (F6 follow-up)
       // Per-program kiosk link (proposal #3): its own token, falling back to the global-era one.
       kioskUrl: (() => { const t = getSetting(`kiosk_token_${row.id}`) || getSetting('kiosk_token'); return t ? `/kiosk/${row.id}?k=${t}` : ''; })(),
     };
@@ -4930,6 +5069,13 @@ function parseProgramForm(body, { existingSlug = null } = {}) {
   // honest again. The legacy `approval` column stays 'open' — joinMode in the spec is the authority.
   const joinMode = ['open', 'invite', 'host'].includes(body.joinMode) ? body.joinMode : 'open';
   const approval = 'open';
+  // Positions (F6): one per line, "CODE Label" (e.g. "GK Goalkeeper"). Codes are what get stored
+  // on profiles; labels are the chip captions. Empty = this program has no position picker.
+  const positions = String(body.positions || '').split(/\r?\n/)
+    .map(l => l.trim()).filter(Boolean).slice(0, 16)
+    .map(l => { const sp = l.search(/\s/); return sp < 0 ? [l, ''] : [l.slice(0, sp), l.slice(sp + 1).trim()]; })
+    .map(([c, l]) => [c.toUpperCase().slice(0, 6), l.slice(0, 24)])
+    .filter(([c]) => /^[A-Z0-9]+$/.test(c));
   const spec = {
     displayName: name, emoji, joinMode,
     cap, waitlist, prereg,
@@ -4941,6 +5087,12 @@ function parseProgramForm(body, { existingSlug = null } = {}) {
     autoRenew: body.autoRenew === '1',
     teams: teamsCount > 0 ? { count: teamsCount, size: teamsSize } : null,
     groupQueue: partySize > 1 ? { maxSize: partySize } : null,
+    positions: positions.length ? positions : null,
+    // Own waiver + guardian consent (F6 youth pack). Guardian consent implies an own waiver —
+    // the consent attestation lives ON the program's waiver record. waiverKey is stamped by the
+    // create route (frozen at the creation-time slug) so renames never orphan signed records.
+    waiver: (body.waiverMode === 'own' || body.waiverGuardian === '1')
+      ? { own: true, guardian: body.waiverGuardian === '1' } : null,
   };
   return { spec, name, slug, approval };
 }
@@ -4950,6 +5102,7 @@ app.get('/admin/programs', requireAdmin, (req, res) => {
 app.post('/admin/programs/create', requireAdmin, (req, res) => {
   const parsed = parseProgramForm(req.body);
   if (parsed.error) return res.redirect('/admin/programs?form=1&msg=' + encodeURIComponent(parsed.error));
+  if (parsed.spec.waiver) parsed.spec.waiverKey = parsed.slug;   // frozen forever — renames must not orphan signed waiver records (F6)
   // ids 4..89 are the in-app range (90 is the demo showcase, reserved).
   const maxRow = db.prepare('SELECT MAX(id) m FROM program WHERE id < ?').get(DEMO_PROGRAM_ID);
   const id = Math.max(4, (maxRow.m || 3) + 1);
@@ -4962,8 +5115,13 @@ app.post('/admin/programs/create', requireAdmin, (req, res) => {
   }
   buildPrograms();            // registry + view meta + PCO sport labels
   mountPendingPrograms();     // routes live immediately — no restart
+  // Season start from the form (F6 follow-up) — after buildPrograms so P(id) exists. Invalid dates
+  // don't block creation; the program lands and the message says what to fix.
+  const season = applySeasonStart(id, req.body.seasonStart);
   audit(req.userEmail, 'admin', 'program:create', `${id}:${parsed.slug}`);
-  res.redirect('/admin/programs?msg=' + encodeURIComponent(`Created ${parsed.name}. It's hidden — set its first run date, then publish it.`));
+  res.redirect('/admin/programs?msg=' + encodeURIComponent(`Created ${parsed.name}.` +
+    (season.err ? ' The season date didn’t look right (not past, within a year) — set it in its Settings.' : '') +
+    ` It's hidden — publish it when it's ready.`));
 });
 app.post('/admin/programs/edit', requireAdmin, (req, res) => {
   const id = Number(req.body.id);
@@ -4972,6 +5130,13 @@ app.post('/admin/programs/edit', requireAdmin, (req, res) => {
   if (PROGRAM_CODE_IDS.has(id)) return res.redirect('/admin/programs?msg=' + encodeURIComponent('Basketball, pickleball, volleyball and the demo are managed in code — they can be published or hidden here, not edited.'));
   const parsed = parseProgramForm(req.body, { existingSlug: row.slug });
   if (parsed.error) return res.redirect('/admin/programs?msg=' + encodeURIComponent(parsed.error));
+  // Waiver key survives every edit (F6): carry the creation-time stamp; a program that ENABLES
+  // its own waiver later gets stamped with its current slug from that moment on.
+  if (parsed.spec.waiver) {
+    let oldKey = null;
+    try { oldKey = (JSON.parse(row.config || '{}') || {}).waiverKey || null; } catch {}
+    parsed.spec.waiverKey = oldKey || row.slug;
+  }
   transact(() => {
     db.prepare('UPDATE program SET name=?, sport=?, slug=?, approval=?, config=? WHERE id=?')
       .run(parsed.name, parsed.slug, parsed.slug, parsed.approval, JSON.stringify(parsed.spec), id);
@@ -4993,8 +5158,12 @@ app.post('/admin/programs/edit', requireAdmin, (req, res) => {
   // program is gone from the registry, so they 404 through the normal gate — never a stale run).
   MOUNTED_PROGRAMS.delete(id);
   mountPendingPrograms();
+  // Season start rides the same form (F6 follow-up): unchanged is a no-op; blanking clears the gate.
+  const season = applySeasonStart(id, req.body.seasonStart);
   audit(req.userEmail, 'admin', 'program:edit', `${id}:${parsed.slug}`);
-  res.redirect('/admin/programs?msg=Saved');
+  res.redirect('/admin/programs?msg=' + encodeURIComponent(season.err
+    ? 'Saved — but the season date didn’t look right (not past, within a year), so it wasn’t changed.'
+    : 'Saved'));
 });
 // F2/F3: per-program member management (admin). Hosts approve REQUESTS on the run page; roles and
 // invite-mode additions are an admin action here, so host-granting stays with the org owner.
@@ -5071,6 +5240,10 @@ app.post('/admin/programs/delete', requireAdmin, (req, res) => {
       db.prepare(`DELETE FROM signup_group_members WHERE group_id IN (${ph})`).run(...groups);
       db.prepare('DELETE FROM signup_groups WHERE program_id=?').run(id);
     }
+    // Its own waiver records (F6) — keyed by the frozen waiver key, not program_id. Delete is the
+    // empty-only path, but a signed record CAN exist for a program nobody ever checked into; those
+    // attestations die with the program (guardian contact details included — they're PII).
+    if (cfg.waiver && cfg.waiver.key) db.prepare('DELETE FROM waiver_records WHERE waiver_key=?').run(cfg.waiver.key);
     db.prepare('DELETE FROM program WHERE id=?').run(id);
   });
   // Its whole app_settings namespace: the scheduler keys AND chatSeqKey, which lives beside
@@ -5385,6 +5558,7 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
     db.prepare('DELETE FROM announcement_reads WHERE email = ?').run(a.email);
     db.prepare('DELETE FROM announcement_dismissals WHERE email = ?').run(a.email);
     db.prepare('DELETE FROM login_tokens WHERE email = ?').run(a.email);
+    db.prepare('DELETE FROM waiver_records WHERE email = ?').run(a.email);   // per-program waivers (F6) — guardian contact details are PII, gone on hard-delete
     // Social graph (Phase 6): drop every edge touching this person, in BOTH directions, so a
     // same-email re-registration can't inherit stale friendships/blocks (mirrors the votes purge).
     db.prepare('DELETE FROM social_edges WHERE from_email = ? OR to_email = ?').run(a.email, a.email);
@@ -5883,13 +6057,17 @@ function seatRenewers(programId, rd) {
   const insR = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, program_id, auto_seated) VALUES (?,?,?,?,1)');
   let team = [], nonTeam = [];
   if (cfg.autoRenew.from === 'members') {
+    // Waiver filtering happens in JS via waiverSatisfied — a program with its OWN waiver (F6)
+    // must not seat someone who only holds the club-wide flag, and vice versa. For global-waiver
+    // programs the seam reads a.waiver_ok, so the outcome is identical to the old SQL filter.
     const renewers = db.prepare(`SELECT pm.email, a.full_name, COALESCE(a.is_team,0) AS is_team
       FROM program_membership pm JOIN applicants a ON a.email = pm.email
       WHERE pm.program_id = ? AND pm.auto_renew = 1 AND a.status = 'approved' AND a.email NOT LIKE '%@guest.local'
-        AND COALESCE(a.suspended,0) = 0 AND COALESCE(a.waiver_ok,0) = 1
+        AND COALESCE(a.suspended,0) = 0
         AND NOT EXISTS (SELECT 1 FROM regular_optout o WHERE o.run_date = ? AND o.email = pm.email AND o.program_id = ?)
         AND (pm.ar_paused_until IS NULL OR pm.ar_paused_until <= ?)
-      ORDER BY a.id`).all(programId, rd, programId, today);
+      ORDER BY a.id`).all(programId, rd, programId, today)
+      .filter(r => waiverSatisfied(programId, r.email));
     team = renewers.filter(r => r.is_team); nonTeam = renewers.filter(r => !r.is_team);
   } else { // 'team' — only the org team auto-renews (basketball); opt-out checked per-row (matches autoJoinTeam)
     const optedOut = db.prepare('SELECT 1 FROM regular_optout WHERE run_date = ? AND email = ? AND program_id = ?');
@@ -6254,7 +6432,7 @@ function runAutorenew(programId, req, res) {
   const g = programGate(programId, req, res); if (!g) return;
   if (!memberOf(programId, req.userEmail)) return res.redirect(base);
   const on = req.body.on === '1' ? 1 : 0;
-  if (on && (!g.a || !g.a.waiver_ok)) return res.redirect('/waiver?next=' + base); // can't auto-seat without the waiver
+  if (on && (!g.a || !waiverSatisfied(programId, g.a.email))) return res.redirect(waiverGateUrl(programId, base)); // can't auto-seat without the waiver (program-scoped when config.waiver is set — F6)
   db.prepare('UPDATE program_membership SET auto_renew = ? WHERE program_id = ? AND email = ?').run(on, programId, req.userEmail);
   res.redirect(base);
 }
@@ -6324,7 +6502,7 @@ function runJoin(programId, req, res) {
   const base = P(programId).paths.run, cfg = P(programId).config;
   const g = programGate(programId, req, res); if (!g) return;
   if (!g.a || g.a.suspended) return res.redirect(base); // need a profile to join; suspended can't
-  if (!g.a.waiver_ok) return res.redirect('/waiver?next=' + base); // one-time waiver before first join
+  if (!waiverSatisfied(programId, g.a.email)) return res.redirect(waiverGateUrl(programId, base)); // one-time waiver before first join (program-scoped when config.waiver is set — F6)
   ensureWeekFor(programId);
   const rd = programRunDate(programId);
   if (runCancelledFor(programId, rd) || !runOpenFor(programId, rd)) return res.redirect(base);
@@ -6550,17 +6728,19 @@ function runAnnounceCancel(programId, req, res) {
 // Season-start gate control (operator). Sets/clears the season opener; before it, no weekly runs
 // and nothing auto-fires. Clears rosters/state stranded in the gap (else the next rollover archives
 // them as phantom season-board credits). Query flags stay pkset/pkerr (the GET run page reads them).
-function runSeasonSet(programId, req, res) {
-  const base = P(programId).paths.run, cfg = P(programId).config;
-  const g = programGate(programId, req, res); if (!g) return;
-  if (!g.canOperate) return res.redirect(base);
-  const raw = String(req.body.season || '').trim();
-  if (!raw) { db.prepare('DELETE FROM app_settings WHERE key = ?').run(cfg.keys.seasonStart); audit(req.userEmail, g.admin ? 'admin' : 'host', `${cfg.logTag}:season-clear`, ''); return res.redirect(base + '?pkset=seasonoff'); }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || isNaN(new Date(raw + 'T12:00:00'))) return res.redirect(base + '?pkerr=seasonbad');
+// Core shared by the run-page control AND the programs wizard (F6 follow-up): validate, write the
+// gate, clean the gap. '' clears the gate. Returns { ok: 'set'|'cleared'|'unchanged' } or { err }.
+function applySeasonStart(programId, raw) {
+  const cfg = P(programId).config;
+  raw = String(raw || '').trim();
+  const cur = getSetting(cfg.keys.seasonStart) || '';
+  if (raw === cur) return { ok: 'unchanged' };
+  if (!raw) { db.prepare('DELETE FROM app_settings WHERE key = ?').run(cfg.keys.seasonStart); return { ok: 'cleared' }; }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || isNaN(new Date(raw + 'T12:00:00'))) return { err: 'seasonbad' };
   const today = ymdLocal();
-  if (raw < today) return res.redirect(base + '?pkerr=seasonpast');
+  if (raw < today) return { err: 'seasonpast' };
   const maxD = new Date(); maxD.setFullYear(maxD.getFullYear() + 1);
-  if (raw > ymdLocal(maxD)) return res.redirect(base + '?pkerr=seasonrange');
+  if (raw > ymdLocal(maxD)) return { err: 'seasonrange' };
   db.exec('BEGIN');
   try {
     setSetting(cfg.keys.seasonStart, raw);   // inside the txn (P3-7): a rollback of the gap-cleanup must not leave
@@ -6573,6 +6753,17 @@ function runSeasonSet(programId, req, res) {
     const setBase = getSetting(cfg.keys.runBase); if (setBase && setBase < raw) delSetting(cfg.keys.runBase);
     db.exec('COMMIT');
   } catch (e) { db.exec('ROLLBACK'); console.error(`[${cfg.logTag}-season] roster cleanup FAILED: ${e.message}`); throw e; }
+  return { ok: 'set' };
+}
+function runSeasonSet(programId, req, res) {
+  const base = P(programId).paths.run, cfg = P(programId).config;
+  const g = programGate(programId, req, res); if (!g) return;
+  if (!g.canOperate) return res.redirect(base);
+  const raw = String(req.body.season || '').trim();
+  const r = applySeasonStart(programId, raw);
+  if (r.err) return res.redirect(base + '?pkerr=' + r.err);
+  if (r.ok === 'unchanged') return res.redirect(base + (raw ? '?pkset=season' : '?pkset=seasonoff'));
+  if (r.ok === 'cleared') { audit(req.userEmail, g.admin ? 'admin' : 'host', `${cfg.logTag}:season-clear`, ''); return res.redirect(base + '?pkset=seasonoff'); }
   audit(req.userEmail, g.admin ? 'admin' : 'host', `${cfg.logTag}:season-set`, raw);
   res.redirect(base + '?pkset=season');
 }
@@ -6993,6 +7184,7 @@ const PROGRAM_DEFS = {
       theme: 'default', access: 'apply', approval: 'council',
       tiers: ['team', 'core', 'host'], offerWindow: true,
       autoRenew: { from: 'team' },   // only the org team (applicants.is_team) auto-renews; no non-team fill
+      positions: [['PG', 'Point'], ['SG', 'Shoot'], ['SF', 'Small F'], ['PF', 'Power F'], ['C', 'Center']],   // profile picker chips (F6: per-program)
       // autoRenewPenalty: { strikes: 3, pauseWeeks: 2 },   // DARK — add to police team no-shows (autoRunState assess + seatRenewers skip already wired; marker app_settings 'arassess_done')
       mentionTag: 'mention', chatSeqKey: 'chat_seq',   // push-dedup tag + app_settings key for this room
       features: { teams: false, groupQueue: false },
@@ -7082,6 +7274,7 @@ const PROGRAM_DEFS = {
       tiers: ['team', 'host'], offerWindow: false,   // SIMPLE model — immediate waitlist promotion (see block comment)
       autoRenew: { from: 'members' },
       autoRenewPenalty: { strikes: 3, pauseWeeks: 2 },   // ENABLED: 3 consecutive no-shows (auto-seated, never confirmed) → auto-renew pauses 2 weeks. Tunable.
+      positions: [['S', 'Setter'], ['OH', 'Outside'], ['MB', 'Middle'], ['OPP', 'Opp'], ['L', 'Libero'], ['DS', 'Def']],   // profile picker chips (F6: per-program)
       mentionTag: 'vbmention', chatSeqKey: 'vb_chat_seq',
       features: { teams: { count: 3, size: 7, opensAt: 'lock', selfServe: true }, groupQueue: { maxSize: 4 } },  // 3×7 teams; queue-with-friends parties up to 4 (Phase 6b)
     },
@@ -7368,7 +7561,7 @@ function runPartyCheckin(programId, req, res) {
     ? db.prepare("SELECT email FROM signup_group_members WHERE group_id=? AND status='declined'").all(runGroup.id).map(r => lc(r.email))
     : []);
   const seatable = emails.filter(e => !declined.has(e)).map(e => applicantByEmail(e))
-    .filter(a => a && a.status === 'approved' && a.waiver_ok && !a.suspended && !/@guest\.local$/.test(a.email))
+    .filter(a => a && a.status === 'approved' && waiverSatisfied(programId, a.email) && !a.suspended && !/@guest\.local$/.test(a.email))
     // Belt-and-suspenders on the block invariant (P2-1): never seat someone alongside a party
     // member either of them has blocked, even if a stale membership survived.
     .filter(a => !emails.some(e => e !== lc(a.email) && blockedPair(a.email, e)))
@@ -7562,6 +7755,16 @@ function defFromRow(row) {
       tiers: ['team', 'host'], offerWindow: !!spec.offerWindow,
       autoRenew: spec.autoRenew ? { from: 'members' } : null,
       mentionTag: `${slug}mention`, chatSeqKey: k('chat_seq'),
+      // Positions (F6): shape-guarded like the numeric contract above — a hand-edited spec must
+      // not let a non-[code,label] entry reach the profile renderer.
+      positions: Array.isArray(spec.positions)
+        ? spec.positions.filter(x => Array.isArray(x) && typeof x[0] === 'string' && x[0]).map(x => [x[0], String(x[1] || '')])
+        : null,
+      // Own waiver (F6): the key is frozen at creation (spec.waiverKey) so slug renames don't
+      // orphan signed records; a legacy spec without the stamp falls back to the current slug.
+      waiver: spec.waiver && spec.waiver.own
+        ? { key: spec.waiverKey || slug, guardianUnder: spec.waiver.guardian ? 18 : 0 }
+        : null,
       features,
     },
     unread: genericUnread(row.id), hubCard: genericHubCard(row.id), tick: genericTick(row.id),

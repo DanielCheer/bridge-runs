@@ -692,6 +692,26 @@ db.exec(`
     PRIMARY KEY (party_id, email)
   );
   CREATE INDEX IF NOT EXISTS idx_party_members_email ON party_members(email);
+  -- Per-program waivers (F6 youth pack). A program whose config carries waiver:{key} requires a
+  -- row here instead of the global applicants.waiver_ok. waiver_key is stamped into the program
+  -- spec at creation and never changes (slug renames don't orphan records). Attestation dates are
+  -- 'localtime' like applicants.waiver_at — these are dates people read on a quasi-legal record.
+  -- Guardian columns are filled when the program requires consent for a minor (guardian attests);
+  -- verified_at/verified_by is the organizer's separate "I've seen the signed document" claim.
+  CREATE TABLE IF NOT EXISTS waiver_records (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    waiver_key          TEXT NOT NULL,
+    email               TEXT NOT NULL,
+    attested_at         TEXT,
+    guardian_name       TEXT,
+    guardian_phone      TEXT,
+    guardian_email      TEXT,
+    guardian_consent_at TEXT,
+    verified_at         TEXT,
+    verified_by         TEXT,
+    UNIQUE (waiver_key, email)
+  );
+  CREATE INDEX IF NOT EXISTS idx_waiver_records_email ON waiver_records(email);
 `);
 
 // ---------- Planning Center sync (Phase 1: People ⇄ Bridge identity) ----------
@@ -813,7 +833,8 @@ function transact(fn) {
 // keeps their own: drop whatever the target address left behind, then carry. Internal constants
 // — never user input — so interpolating them into SQL is safe.
 const EMAIL_KEYED_TABLES = ['announcement_reads', 'announcement_dismissals', 'regular_optout',
-  'group_reads', 'program_membership', 'team_assignments', 'signup_group_members', 'party_members'];
+  'group_reads', 'program_membership', 'team_assignments', 'signup_group_members', 'party_members',
+  'waiver_records'];   // per-program waivers (F6) — composite (waiver_key,email); target's rows lose, same doctrine as program_membership
 
 // Carry every per-user row from oldEmail to newEmail. Assumes the CALLER already opened a
 // transaction, so the `applicants` row update commits atomically with this cascade — a

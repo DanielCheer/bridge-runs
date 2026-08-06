@@ -3576,7 +3576,7 @@ function inboxRows(me, threads) {
 }
 
 // ---------- PROFILE (own editable tab) ----------
-export function profileTabPage({ a, stats, saved = false, error = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, canOperate = false, announcementLog = [], iAmHost = false, threads = [], photoMsg = '', ann = null, friendCount = 0, friendReqIn = 0, followerCount = 0, minor = false, showRoles = false, passQr = '', passCode = '' }) {
+export function profileTabPage({ a, stats, saved = false, error = '', dmUnread = 0, groupUnread = 0, groupMention = 0, chatProgram = 1, canOperate = false, announcementLog = [], iAmHost = false, threads = [], photoMsg = '', ann = null, friendCount = 0, friendReqIn = 0, followerCount = 0, minor = false, showRoles = false, passQr = '', passCode = '', positionGroups = [] }) {
   // Door check-in pass (Phase 2b, hybrid mode): the QR the church's Check-Ins station scans.
   // Rendered only when the server verified the code exists in PCO (passQr non-empty).
   const passCard = passQr ? `
@@ -3590,8 +3590,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
   // global announcements bell lives in the .bar rather than the .mast here. Same
   // button + panel + JS as every other page (one shared affordance, one live dot).
   const { btn: annBtn, sheet: annSheet } = annBell(ann);
-  const BBALL_POS = [['PG', 'Point'], ['SG', 'Shoot'], ['SF', 'Small F'], ['PF', 'Power F'], ['C', 'Center']];
-  const VB_POS = [['S', 'Setter'], ['OH', 'Outside'], ['MB', 'Middle'], ['OPP', 'Opp'], ['L', 'Libero'], ['DS', 'Def']];
+  // Position chips come from each program's config.positions (F6) — server passes the groups.
   // Host/admin-only: move a given week's run to a different weekday. Compact,
   // collapsed-by-default <details> so it never breaks the profile's no-scroll fit.
   // Run-day + Cancel-run controls moved to the check-in page's Operator-tools card
@@ -3623,8 +3622,12 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
     : '';
   const selected = new Set((a.position || '').split(',').map(s => s.trim()).filter(Boolean));
   const chipRow = (list) => list.map(([v, l]) =>
-    `<label class="chip"><input type="checkbox" name="position" value="${v}" hidden${selected.has(v) ? ' checked' : ''}>${v}<small>${l}</small></label>`).join('');
-  const bbChips = chipRow(BBALL_POS), vbChips = chipRow(VB_POS);
+    `<label class="chip"><input type="checkbox" name="position" value="${esc(v)}" hidden${selected.has(v) ? ' checked' : ''}>${esc(v)}<small>${esc(l)}</small></label>`).join('');
+  const positionSec = positionGroups.length
+    ? `<div class="sec"><div class="lb"><b>Position</b><span>Tap to toggle</span></div>
+        ${positionGroups.map(g => `<div class="poslab">${esc(g.label)}</div><div class="chips sm">${chipRow(g.chips)}</div>`).join('')}
+      </div>`
+    : '';
   const memberSince = fmtMonthYear(a.created_at);
   const hasAvatar = !!a.avatar;
   // Photo upload/remove outcome (redirect flag → friendly notice). Errors are the
@@ -3672,10 +3675,7 @@ export function profileTabPage({ a, stats, saved = false, error = '', dmUnread =
           </div>
         </div>
       </details>
-      <div class="sec"><div class="lb"><b>Position</b><span>Tap to toggle</span></div>
-        <div class="poslab">Basketball</div><div class="chips sm">${bbChips}</div>
-        <div class="poslab">Volleyball</div><div class="chips sm">${vbChips}</div>
-      </div>
+      ${positionSec}
       <div class="sec"><div class="lb"><b>Email</b></div>
         <label class="lvl" style="display:block"><input type="checkbox" name="email_announce" value="1"${a.email_optout ? '' : ' checked'}> Email me announcements &amp; run-day changes</label>
         <p class="tally-note" style="margin:6px 0 0">Sign-in links and waitlist spot offers are always sent.</p>
@@ -4787,7 +4787,7 @@ export function programsAdminPage({ rows = [], msg = '', form = false, themes = 
         <p class="tally-note" style="margin:6px 0 0">A <b>host</b> runs this program day-to-day — open/close check-in, announcements, guests, and approving join requests — without any other admin power.</p>
       </details>` : ''}
       ${r.editable ? `<details id="edit-${r.id}" style="margin-top:10px"><summary class="tally-note" style="cursor:pointer">Settings</summary>
-        ${programForm({ action: '/admin/programs/edit', id: r.id, spec: r.spec, slug: r.slug, approval: r.approval, submit: 'Save changes', DAYS, hourOpts, themes, THEME_LABEL })}
+        ${programForm({ action: '/admin/programs/edit', id: r.id, spec: r.spec, slug: r.slug, approval: r.approval, submit: 'Save changes', DAYS, hourOpts, themes, THEME_LABEL, seasonStart: r.seasonStart || '' })}
       </details>` : ''}
     </div>`;
   };
@@ -4809,13 +4809,24 @@ export function programsAdminPage({ rows = [], msg = '', form = false, themes = 
   ` + FOOT;
 }
 // Shared create/edit form. `spec` null = the create defaults.
-function programForm({ action, id = null, spec, slug, approval, submit, DAYS, hourOpts, themes, THEME_LABEL }) {
+function programForm({ action, id = null, spec, slug, approval, submit, DAYS, hourOpts, themes, THEME_LABEL, seasonStart = '' }) {
   const s = spec || {};
   const v = (k, d) => (s[k] == null ? d : s[k]);
   const teams = s.teams || {}, gq = s.groupQueue || {};
   const cutoff = v('confirmCutoff', null);
+  const w = s.waiver || null;
+  // One-tap starting points (create only): each preset fills the knobs below — then customize.
+  // Plain DOM writes on THIS form only (closest('form')), so the create and edit forms never fight.
+  const presets = id ? '' : `
+    <div class="lb" style="margin:2px 0 4px"><b>Start from</b><span>tap to prefill, then adjust</span></div>
+    <div class="chips sm" style="margin-bottom:10px">
+      <button type="button" class="btn ghost sm preset" data-preset='{"joinMode":"open","seating":"instant","confirmMode":"none","autoRenew":1,"waiverMode":"shared","waiverGuardian":0}'>🏀 Casual pickup — click to join</button>
+      <button type="button" class="btn ghost sm preset" data-preset='{"joinMode":"host","seating":"offer","confirmMode":"cutoff","autoRenew":1,"waiverMode":"shared","waiverGuardian":0}'>🏆 Committed roster — confirm or lose the spot</button>
+      <button type="button" class="btn ghost sm preset" data-preset='{"joinMode":"host","seating":"instant","confirmMode":"none","autoRenew":0,"waiverMode":"own","waiverGuardian":1}'>🧒 Youth program — own waiver + guardian consent</button>
+    </div>`;
   return `<form method="POST" action="${action}" class="card rail" style="margin-top:10px">
     ${id ? `<input type="hidden" name="id" value="${id}">` : ''}
+    ${presets}
     <label>Program name<input name="name" value="${esc(v('displayName', ''))}" placeholder="Youth Basketball" maxlength="40" required></label>
     <div class="editrow">
       <label style="flex:1">Web address<input name="slug" value="${esc(slug)}" placeholder="youth" maxlength="21" required></label>
@@ -4857,8 +4868,25 @@ function programForm({ action, id = null, spec, slug, approval, submit, DAYS, ho
     </div>
     <p class="tally-note" style="margin:0 0 10px">Teams: 0 turns team picking off. Friends: the most people who can sign up together as a group (0 turns it off).</p>
     <label>Colour<select name="theme">${themes.map(t => `<option value="${t}"${v('theme', 'default') === t ? ' selected' : ''}>${THEME_LABEL[t] || t}</option>`).join('')}</select></label>
+    <label>Positions <span style="text-transform:none;font-weight:400;color:var(--muted)">(optional — one per line, like "GK Goalkeeper")</span><textarea name="positions" rows="3" placeholder="GK Goalkeeper&#10;DF Defender">${esc((s.positions || []).map(([c, l]) => `${c} ${l}`.trim()).join('\n'))}</textarea></label>
+    <p class="tally-note" style="margin:0 0 10px">Players pick these on their profile; the short code shows on rosters. Leave empty for no position picker.</p>
+    <label>Waiver<select name="waiverMode">
+      <option value="shared"${w ? '' : ' selected'}>The shared club waiver everyone signs</option>
+      <option value="own"${w ? ' selected' : ''}>This program has its own waiver</option>
+    </select></label>
+    <label class="lvl"><input type="checkbox" name="waiverGuardian" value="1"${w && w.guardian ? ' checked' : ''}> Under-18s need a parent or guardian's consent</label>
+    <p class="tally-note" style="margin:0 0 10px">With its own waiver, members sign this program's waiver before their first join (guardian consent turns this on automatically). Organizers confirm sighted documents on People.</p>
+    <label>Season starts <span style="text-transform:none;font-weight:400;color:var(--muted)">(optional — no runs before this date)</span><input name="seasonStart" type="date" value="${esc(seasonStart)}"></label>
     <label class="lvl" style="margin-top:8px"><input type="checkbox" name="autoRenew" value="1"${v('autoRenew', true) ? ' checked' : ''}> Members keep their spot each week unless they sit out</label>
     <button class="btn" type="submit" style="margin-top:12px">${esc(submit)}</button>
+    ${id ? '' : `<script>document.currentScript.closest('form').querySelectorAll('.preset').forEach(b => b.addEventListener('click', () => {
+      const p = JSON.parse(b.dataset.preset), f = b.closest('form');
+      for (const [k, val] of Object.entries(p)) {
+        const el = f.elements[k]; if (!el) continue;
+        if (el.type === 'checkbox') el.checked = !!val; else el.value = String(val);
+      }
+      f.querySelectorAll('.preset').forEach(x => x.classList.remove('voted')); b.classList.add('voted');
+    }))</script>`}
   </form>`;
 }
 
@@ -5172,17 +5200,30 @@ const bannerCropScript = () => `<script>
 
 // One-time waiver gate — shown when a member without waiver_ok tries to join ANY run's
 // queue. They confirm they've signed, we set waiver_ok, and they're returned to the run.
-export function waiverPage({ email, next = '/checkin', err = '' } = {}) {
+export function waiverPage({ email, next = '/checkin', err = '', programId = 0, programName = '', guardian = false } = {}) {
+  // Program variant (F6): the program's OWN waiver — no club QR block (that's the shared
+  // document), and a guardian consent section when the program requires it for this minor.
+  const guardianBlock = guardian ? `
+      <div class="subhead" style="margin-top:14px">Parent / guardian consent</div>
+      <p class="tally-note" style="margin:4px 0 8px">This player is under 18, so a parent or guardian completes this part.</p>
+      <label>Guardian name<input name="guardian_name" maxlength="60" required autocomplete="off"></label>
+      <label>Guardian phone<input name="guardian_phone" maxlength="30" inputmode="tel" required autocomplete="off"></label>
+      <label>Guardian email<input name="guardian_email" type="email" required autocomplete="off"></label>
+      <label class="check"><input type="checkbox" name="guardian_agree" value="1" required><span>I am this player's parent or guardian and I consent to their participation.</span></label>` : '';
   return HEAD('Waiver — The Bridge', '', { wall: false }) + header(`<b>WAIVER</b>${esc(email)}`, '') + `
     <div class="rule"></div>
     <span class="eyebrow">One-time — before your first check-in</span>
-    <h1>Sign the waiver first</h1>
-    <p class="lead">Before you join a run, you need to complete the waiver. It's a one-time step — sign it once and you won't be asked again. No waiver, no play.</p>
+    <h1>${programName ? `Sign the ${esc(programName)} waiver` : 'Sign the waiver first'}</h1>
+    <p class="lead">${programName
+      ? `${esc(programName)} has its own waiver${guardian ? ' and, for players under 18, a parent or guardian’s consent' : ''}. It's a one-time step for this program. No waiver, no play.`
+      : `Before you join a run, you need to complete the waiver. It's a one-time step — sign it once and you won't be asked again. No waiver, no play.`}</p>
     ${err ? `<div class="notice bad">${esc(err)}</div>` : ''}
-    ${qrBlock}
+    ${programId ? '' : qrBlock}
     <form method="POST" action="/waiver" class="card rail" style="margin-top:14px">
       <input type="hidden" name="next" value="${esc(next)}">
+      ${programId ? `<input type="hidden" name="p" value="${Number(programId)}">` : ''}
       <label class="check"><input type="checkbox" name="agree" value="1" required><span>I've signed the waiver and agree to its terms.</span></label>
+      ${guardianBlock}
       <div style="height:12px"></div>
       <button class="btn primary" type="submit">Continue →</button>
     </form>
@@ -5224,7 +5265,7 @@ export function bannerPage({ err = '', bannerVer = '0', action = '/admin/banner'
 }
 
 // ---------- PEOPLE MANAGEMENT (admin-only) ----------
-export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = '', invites = [], newInviteLink = '', msg = '', ann = null, dmUnread = 0, groupUnread = 0, groupMention = 0 }) {
+export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = '', invites = [], newInviteLink = '', msg = '', ann = null, dmUnread = 0, groupUnread = 0, groupMention = 0, waiverProgs = [], waiverRecs = {} }) {
   const pill = (s) => `<span class="pill ${s}">${s}</span>`;
   // Last-active chip (proposal #4): the churn signal — quiet for anyone seen this week, amber
   // past 30 days. last_seen_at counting started Aug 2026; older accounts show nothing until
@@ -5260,6 +5301,19 @@ export function peoplePage({ people, q = '', approvedPhones = [], signInUrl = ''
            <label style="flex:1">Signed on <span style="text-transform:none;font-weight:400;color:var(--muted)">(optional — leave blank if you don't know)</span><input name="signed_on" type="date"></label>
            <button class="btn sm" type="submit">I've seen their signed waiver</button>
          </form>`}
+    ${a.guardian_name ? `<p class="tally-note" style="margin:6px 0 0">Guardian: <b>${esc(a.guardian_name)}</b>${a.guardian_phone ? ` · ${esc(a.guardian_phone)}` : ''}${a.guardian_email ? ` · ${esc(a.guardian_email)}` : ''}</p>` : ''}
+    ${waiverProgs.map(wp => {
+      const rec = (waiverRecs[a.email] || []).find(r => r.waiver_key === wp.key);
+      const state = !rec ? '<b>not on file</b>'
+        : rec.verified_at ? `<b>confirmed on file</b> · seen by an organizer ${esc(String(rec.verified_at).slice(0, 10))}`
+        : rec.attested_at
+          ? `<b>self-reported</b> — confirmed ${esc(String(rec.attested_at).slice(0, 10))}${rec.guardian_consent_at ? ` · guardian ${esc(rec.guardian_name || '')} consented ${esc(String(rec.guardian_consent_at).slice(0, 10))}` : ''}`
+          : '<b>not on file</b>';
+      const btn = rec && rec.verified_at
+        ? `<form method="POST" action="/admin/people/waiver-record" class="swapform" style="display:inline;margin-left:6px"><input type="hidden" name="id" value="${a.id}"><input type="hidden" name="key" value="${esc(wp.key)}"><input type="hidden" name="on" value="0"><button class="btn ghost sm" type="submit" style="padding:3px 10px">Undo</button></form>`
+        : `<form method="POST" action="/admin/people/waiver-record" class="swapform" style="display:inline;margin-left:6px"><input type="hidden" name="id" value="${a.id}"><input type="hidden" name="key" value="${esc(wp.key)}"><input type="hidden" name="on" value="1"><button class="btn ghost sm" type="submit" style="padding:3px 10px">I've seen it signed</button></form>`;
+      return `<p class="tally-note" style="margin:6px 0 0">${esc(wp.label)} waiver: ${state}${btn}</p>`;
+    }).join('')}
     ${a.suspended
       ? `<form method="POST" action="/admin/people/suspend" class="swapform" style="margin:6px 0 0">
            <input type="hidden" name="id" value="${a.id}"><input type="hidden" name="on" value="0">
