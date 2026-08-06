@@ -1535,6 +1535,7 @@ const opsNav = (current, { isAdmin = false, isTeam = false, isCouncil = false } 
     ${item('/checkin', 'Check-in', 'checkin')}
     ${item('/admin', 'Council', 'admin')}
     ${isAdmin ? item('/admin/people', 'People', 'people') : ''}
+    ${isAdmin ? item('/admin/programs', 'Programs', 'programs') : ''}
   </nav>`;
 };
 
@@ -4796,6 +4797,7 @@ export function programsAdminPage({ rows = [], msg = '', form = false, themes = 
 
   return HEAD('Programs — The Bridge', '', { wall: false }) + header('<b>PROGRAMS</b>') + `
     ${backBtn('/admin/people')}
+    ${opsNav('programs', { isAdmin: true })}
     <div class="rule"></div>
     ${msg ? `<div class="notice">${esc(msg)}</div>` : ''}
     <span class="eyebrow">Every run on the platform</span>
