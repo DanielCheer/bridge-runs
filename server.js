@@ -5748,7 +5748,7 @@ function runTeamLeave(programId, req, res) {
 // Operator: assign/move any floor player, or unassign (team 0/blank).
 function runTeamAssign(programId, req, res) {
   const base = P(programId).paths.run;
-  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const g = programGate(programId, req, res); if (!g) return; if (!g.canOperate) return res.redirect(base);
   if (!teamsFeature(programId)) return res.redirect(base);
   const rd = programRunDate(programId), em = String(req.body.email || '').toLowerCase(), n = String(req.body.team || '');
   if (n === '0' || n === '') clearTeamAssignment(programId, rd, em);
@@ -5763,7 +5763,7 @@ function runTeamAssign(programId, req, res) {
 // enabled config.autoRenewPenalty (harmless no-op otherwise — state stays empty).
 function runPenaltyClear(programId, req, res) {
   const base = P(programId).paths.run;
-  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const g = programGate(programId, req, res); if (!g) return; if (!g.canOperate) return res.redirect(base);
   const em = String(req.body.email || '').toLowerCase();
   if (em) {
     stmtPmEnsureRow.run(programId, em);
@@ -5807,7 +5807,7 @@ function teamFillCore(programId, rd, by) {
 }
 function runTeamFill(programId, req, res) {
   const base = P(programId).paths.run;
-  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const g = programGate(programId, req, res); if (!g) return; if (!g.canOperate) return res.redirect(base);
   if (!teamsFeature(programId)) return res.redirect(base);
   teamFillCore(programId, programRunDate(programId), req.userEmail);
   res.redirect(base);
@@ -6223,7 +6223,7 @@ function pkEnsureWeek() { return ensureWeekFor(2); }
 // program under its own paths. Basketball keeps its own /checkin/* routes (migrate post-freeze).
 function runOpen(programId, req, res) {
   const base = P(programId).paths.run;
-  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const g = programGate(programId, req, res); if (!g) return; if (!g.canOperate) return res.redirect(base);
   const rd = programRunDate(programId); if (runCancelledFor(programId, rd)) return res.redirect(base);
   setRunStateFor(programId, rd, 'is_open', 1);
   // Don't re-seat auto-renewers past the confirm cutoff — a manual re-open after the 4:30 sweep
@@ -6235,7 +6235,7 @@ function runOpen(programId, req, res) {
 }
 function runClose(programId, req, res) {
   const base = P(programId).paths.run;
-  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const g = programGate(programId, req, res); if (!g) return; if (!g.canOperate) return res.redirect(base);
   setRunStateFor(programId, programRunDate(programId), 'is_open', 0); res.redirect(base);
 }
 function runConfirm(programId, req, res) {
@@ -6292,7 +6292,7 @@ function runJoinRun(programId, req, res) {
 // Hosts/admins act on pending requests from the run page.
 function runRequests(programId, req, res) {
   const base = P(programId).paths.run;
-  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const g = programGate(programId, req, res); if (!g) return; if (!g.canOperate) return res.redirect(base);
   const email = String(req.body.email || '').toLowerCase();
   const row = db.prepare("SELECT 1 FROM program_membership WHERE program_id = ? AND email = ? AND status = 'pending'").get(programId, email);
   if (!row) return res.redirect(base);
@@ -6312,7 +6312,7 @@ function runRequests(programId, req, res) {
 }
 function runBump(programId, req, res) {
   const base = P(programId).paths.run;
-  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const g = programGate(programId, req, res); if (!g) return; if (!g.canOperate) return res.redirect(base);
   const rd = programRunDate(programId); if (runCancelledFor(programId, rd)) return res.redirect(base);
   const wlBefore = waitlistOrderFor(programId, rd);   // F4 (P3-2): bumping a waitlister up shifts those behind (bball twin pings)
   const row = db.prepare('SELECT MIN(sort_order) m FROM checkins WHERE run_date = ? AND program_id = ?').get(rd, programId);
@@ -6349,7 +6349,7 @@ function runJoin(programId, req, res) {
 }
 function runCancel(programId, req, res) {
   const base = P(programId).paths.run;
-  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const g = programGate(programId, req, res); if (!g) return; if (!g.canOperate) return res.redirect(base);
   const rd = programRunDate(programId), on = req.body.on !== '0';
   const cfg = P(programId).config;
   setRunStateFor(programId, rd, 'cancelled', on);
@@ -6434,7 +6434,7 @@ function removeFromRun(programId, rd, em, req = null) {
 }
 function runRemove(programId, req, res) {
   const base = P(programId).paths.run;
-  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const g = programGate(programId, req, res); if (!g) return; if (!g.canOperate) return res.redirect(base);
   removeFromRun(programId, programRunDate(programId), String(req.body.email || '').toLowerCase(), req);
   res.redirect(base);
 }
@@ -6488,7 +6488,7 @@ function runIcs(programId, req, res) {
 }
 function runAnnounce(programId, req, res) {
   const base = P(programId).paths.run, cfg = P(programId).config;
-  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const g = programGate(programId, req, res); if (!g) return; if (!g.canOperate) return res.redirect(base);
   const body = (req.body.body || '').trim().slice(0, 1000);
   if (!body) return res.redirect(base);
   if (rateLimited(`${cfg.logTag}-announce`, req.userEmail, 6, 10 * 60 * 1000)) return res.redirect(base);
@@ -6518,7 +6518,7 @@ function runAnnounce(programId, req, res) {
 }
 function runAnnounceRetract(programId, req, res) {
   const base = P(programId).paths.run, cfg = P(programId).config;
-  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const g = programGate(programId, req, res); if (!g) return; if (!g.canOperate) return res.redirect(base);
   const cur = latestAnnouncementFor(programId);
   if (cur) { db.prepare('UPDATE announcements SET archived = 1 WHERE id = ? AND program_id = ?').run(cur.id, programId); audit(req.userEmail, g.admin ? 'admin' : 'host', `${cfg.logTag}:announce:retract`, String(cur.id)); }
   res.redirect(base);
@@ -6527,7 +6527,7 @@ function runAnnounceRetract(programId, req, res) {
 // THEIR program's token from the run page — no admin round-trip, revocable per program.
 function runKioskRotate(programId, req, res) {
   const base = P(programId).paths.run;
-  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const g = programGate(programId, req, res); if (!g) return; if (!g.canOperate) return res.redirect(base);
   // The demo program has no kiosk (/kiosk/:pid refuses 90 by design) — minting a token for it
   // built a door the room refuses (2026-08-04 bug: 'Not found' on tap). No static tokens, ever.
   if (P(programId).config.static) return res.redirect(base);
@@ -6538,7 +6538,7 @@ function runKioskRotate(programId, req, res) {
 // Cancel a SCHEDULED post before it fires (P2-4 twin of /announce/cancel) — pending-only delete.
 function runAnnounceCancel(programId, req, res) {
   const base = P(programId).paths.run, cfg = P(programId).config;
-  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const g = programGate(programId, req, res); if (!g) return; if (!g.canOperate) return res.redirect(base);
   const id = Number(req.body.id);
   if (Number.isInteger(id) && id > 0) {
     const r = db.prepare('DELETE FROM announcements WHERE id = ? AND pending = 1 AND program_id = ?').run(id, programId);
@@ -6601,7 +6601,7 @@ function runGetSeason(programId, req, res) {
 // and records the consumed standing day as the base of the cycle being MOVED (see the comment below).
 function runDate(programId, req, res) {
   const base = P(programId).paths.run, cfg = P(programId).config;
-  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const g = programGate(programId, req, res); if (!g) return; if (!g.canOperate) return res.redirect(base);
   const d = String(req.body.date || '').trim();
   const oldRd = programRunDate(programId);
   // autoping is NOT blind-carried — it pairs with the confirm sweep (migrateConfirmMarkers below):
@@ -6658,7 +6658,7 @@ function runDate(programId, req, res) {
 }
 function runGuest(programId, req, res) {
   const base = P(programId).paths.run, cfg = P(programId).config;
-  const g = programGate(programId, req, res); if (!g || !g.canOperate) return res.redirect(base);
+  const g = programGate(programId, req, res); if (!g) return; if (!g.canOperate) return res.redirect(base);
   const rd = programRunDate(programId); if (runCancelledFor(programId, rd)) return res.redirect(base);
   const name = (req.body.name || '').trim().slice(0, 60);
   if (name) {
