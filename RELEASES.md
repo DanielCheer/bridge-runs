@@ -11,6 +11,7 @@ Backfilled below from git history for the releases that shipped before this file
 
 | Date (local) | Tag | Commit | Summary |
 |---|---|---|---|
+| 2026-08-06 | rel-20260806-0002 | 2289fc9 | Penalty engine assess was unreachable (rd rolls at endHour) — moved to archive-time + 28-assert strike-level suite; operator routes stop double-responding after a programGate 404 |
 | 2026-08-05 | rel-20260805-1726 | c3906c4 | Kiosk PIN-gated exit (0000) + footer stripped — door iPad is a closed screen; pair with iOS Guided Access |
 | 2026-08-05 | rel-20260805-1716 | 5b0046a | Door mode ON (owner decision: no confirm ping — PCO door tap is the confirmation) + auto-renew penalty dormant under door mode (false-strike guard) |
 | 2026-08-05 | rel-20260805-1529 | cae3cef | Opt-in per-message chat pushes (Profile toggle, default off — announcements/offers/mentions unchanged) + docs: confirm-your-spot framing dropped, council vote scoped to Adv Basketball |
