@@ -24,7 +24,7 @@ import {
 import webpush from 'web-push';
 import {
   setSession, clearSession, currentUser, isAdmin,
-  requireLogin, requireAdmin, makeRequireApprover, ADMINS, setSessionVersionLookup,
+  requireLogin, requireAdmin, makeRequireApprover, makeRequireCouncil, ADMINS, setSessionVersionLookup,
 } from './auth.js';
 import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage, exportPage, logoutPage, APP_JS,
@@ -53,6 +53,7 @@ let PREREG_CAP = PREREG_CAP_ENV; // max team+regular pre-joining while closed; r
 const OFFER_WINDOW_HOURS = Number(process.env.OFFER_WINDOW_HOURS || 3);
 const OFFER_WINDOW_MS = OFFER_WINDOW_HOURS * 60 * 60 * 1000;
 const requireApprover = makeRequireApprover(db);
+const requireCouncil = makeRequireCouncil(db);   // /admin + /admin/vote only — the council's one surface
 
 // Prepared once at module scope — node:sqlite has no statement cache, so re-preparing
 // this INSERT on every audited action (every check-in, vote, edit…) is pure waste.
@@ -65,7 +66,7 @@ function audit(actor, actorRole, action, target) {
   // admin logins, PCO connects) would otherwise age out while the state it explains lives on.
   if (KEY_EVENT_RE.test(action)) stmtAuditKey.run(actor, actorRole, action, target || '');
 }
-const KEY_EVENT_RE = /^(waiver:|people:waiver|admin:role|people:approve|people:delete|people:suspend|invite:claimed|session:|pco:connected|pco:oauth-connected|pco:disconnected|kiosk:token-rotated|program:(create|delete|host-granted|host-revoked|request-approved|request-declined|member-added|member-removed))/;
+const KEY_EVENT_RE = /^(waiver:|people:waiver|admin:role|role:|people:approve|people:delete|people:suspend|invite:claimed|session:|pco:connected|pco:oauth-connected|pco:disconnected|kiosk:token-rotated|program:(create|delete|host-granted|host-revoked|request-approved|request-declined|member-added|member-removed))/;   // role: = team/Pillar/host/council toggles — who holds power is exactly what S6 keeps forever
 const stmtAuditKey = db.prepare('INSERT INTO audit_key_events (actor,actor_role,action,target) VALUES (?,?,?,?)');
 // ---- metrics layer (2026-08-03): append-only product events, identity-free ----
 // One insert per event, never on a hot read path, and NEVER an email in the row — kinds, counts
@@ -293,8 +294,11 @@ function annPanel(email) {
 // The people who vote: TEAM MEMBERS ONLY. Admins run the app but do not vote —
 // approval decisions belong to the team (unanimous).
 function approverEmails() {
+  // The voting pool = explicit council members (owner rule 2026-08-06: council is its own role,
+  // separate from team/host/admin; the migration seeded it from team-minus-host so nobody lost
+  // their vote on the flip).
   return new Set(
-    db.prepare('SELECT email FROM applicants WHERE is_team = 1 AND is_host = 0').all()
+    db.prepare('SELECT email FROM applicants WHERE is_council = 1').all()
       .map(r => r.email.toLowerCase()));
 }
 
@@ -2452,7 +2456,7 @@ app.get('/checkin', requireLogin, (req, res) => {
     // Kiosk link parity with the generic run pages — per-program token, operator-mintable.
     kioskUrl: (canOperate && getSetting('kiosk_token_1')) ? `/kiosk/1?k=${getSetting('kiosk_token_1')}` : '',
     myState, myWaitPos, myOffer, offerWindowHours: OFFER_WINDOW_HOURS,
-    iAmTeam, iAmRegular, iOptedOut, iAutoRenew,
+    iAmTeam, iAmCouncil: !!(a && a.is_council), iAmRegular, iOptedOut, iAutoRenew,
     viewerIsAdmin, canOperate, canSeeRoster,
     suspended: !!(a && a.suspended), suspendReason: (a && a.suspend_reason) || '',
     myConfirmed, confirmBy: effectiveConfirmCutoff(P(1).config.confirmCutoff) ? fmtClockLabel(P(1).config.confirmCutoff) : '', msg: req.query.msg || '', bannerVer: bannerVersion(),
@@ -3968,7 +3972,7 @@ app.post('/checkin/optin', requireLogin, (req, res) => {
 });
 
 // ---------- ADMIN / COUNCIL ----------
-app.get('/admin', requireApprover, (req, res) => {
+app.get('/admin', requireCouncil, (req, res) => {
   const order = `CASE status WHEN 'pending' THEN 0 WHEN 'rejected' THEN 1 WHEN 'approved' THEN 2 ELSE 3 END`;
   const allRows = db.prepare(`SELECT * FROM applicants ORDER BY ${order}, created_at DESC`).all();
   const viewerIsAdmin = isAdmin(req.userEmail);
@@ -4002,14 +4006,16 @@ app.get('/admin', requireApprover, (req, res) => {
   const checkedInCount = db.prepare('SELECT COUNT(*) n FROM checkins WHERE run_date = ? AND program_id = 1').get(runDate).n;
   const log = viewerIsAdmin
     ? db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 40').all() : [];
-  // The voting pool ("The Council"): team members. Shown to all operators as a
-  // roster, and (admin-only) their names back the who-voted lines below.
+  // The voting pool ("The Council"): explicit is_council members — its own role now, separate
+  // from team/host/admin. Shown to all viewers of this page; (admin-only) names back the
+  // who-voted lines below.
   const teamMembers = db.prepare(
-    'SELECT full_name, email, is_host FROM applicants WHERE is_team = 1 AND is_host = 0 ORDER BY full_name ASC').all();
+    'SELECT full_name, email, is_host FROM applicants WHERE is_council = 1 ORDER BY full_name ASC').all();
   res.send(adminPage({
     applicants, runLabel: runLabelFor(runDate), runDate, hours: runTimeRange(runDate), checkedInCount, cap: CAP,
     waitlistCap: WAITLIST_CAP, preregCap: PREREG_CAP,
     viewerIsAdmin, viewerIsTeam: req.actorRole === 'team',
+    viewerCanVote: pool.has(String(req.userEmail).toLowerCase()),   // council flag, not team/host inference
     viewerIsHost: !!(db.prepare('SELECT is_host FROM applicants WHERE email = ?').get(String(req.userEmail).toLowerCase())?.is_host),
     viewerEmail: req.userEmail, log, msg: req.query.msg || '',
     filter, counts, teamMembers, ann: annPanel(req.userEmail),
@@ -4105,14 +4111,13 @@ function runBannerPost(programId, req, res) {
 app.get('/pickleball/banner', requireAdmin, (req, res) => runBannerGet(2, req, res));
 app.post('/pickleball/banner', requireAdmin, (req, res) => runBannerPost(2, req, res));
 
-// An approver casts (or changes) their vote. Unanimous approve → approved;
-// any reject → rejected. Recomputed live.
-app.post('/admin/vote', requireApprover, (req, res) => {
+// A council member casts (or changes) their vote. Recomputed live.
+app.post('/admin/vote', requireCouncil, (req, res) => {
   const { id, vote } = req.body;
-  // Only team members vote. Admins run the app but don't get a vote.
-  if (req.actorRole !== 'team') return res.status(403).send('Only team members vote on applicants.');
-  const voter = db.prepare('SELECT is_host FROM applicants WHERE email = ?').get(String(req.userEmail).toLowerCase());
-  if (voter && voter.is_host) return res.status(403).send('The host has oversight, not a vote.');
+  // Only the COUNCIL votes (applicants.is_council — the same pool recomputeStatus counts).
+  // Admins run the app but don't get a vote; team/host membership no longer implies one.
+  const voter = db.prepare('SELECT is_council FROM applicants WHERE email = ?').get(String(req.userEmail).toLowerCase());
+  if (!voter || !voter.is_council) return res.status(403).send('Only council members vote on applicants.');
   if (!['approve', 'reject'].includes(vote)) return res.redirect('/admin');
   const a = db.prepare('SELECT email, is_team FROM applicants WHERE id = ?').get(id);
   if (!a || a.is_team) return res.redirect('/admin'); // team aren't voted on
@@ -4147,11 +4152,16 @@ app.post('/admin/reset', requireAdmin, (req, res) => {
 });
 
 app.post('/admin/role', requireAdmin, (req, res) => {
-  const { id, role, on } = req.body; // role: 'team' | 'regular'
+  const { id, role, on } = req.body; // role: 'team' | 'regular' | 'host' | 'council'
   const turnOn = on === '1';
   const a = db.prepare('SELECT status, email FROM applicants WHERE id = ?').get(id);
   if (!a) return res.redirect('/admin');
-  if (role === 'team') {
+  if (role === 'council') {
+    // Council = a vote on Adv Basketball applicants, NOTHING else (no operator tools, no
+    // auto-seat, no admin). Pure flag — no status side-effect; grant it to approved people.
+    db.prepare('UPDATE applicants SET is_council = ? WHERE id = ?').run(turnOn ? 1 : 0, id);
+    audit(req.userEmail, 'admin', `role:council:${turnOn ? 'on' : 'off'}`, a.email);
+  } else if (role === 'team') {
     // Making someone team AUTO-APPROVES them (they skip the vote).
     if (turnOn) {
       db.prepare("UPDATE applicants SET is_team = 1, status = 'approved' WHERE id = ?").run(id);
@@ -4445,7 +4455,7 @@ app.get('/admin/people/export.csv', requireAdmin, (req, res) => {
     if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;                 // neutralize spreadsheet formula injection (a name like =HYPERLINK(...))
     return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   };
-  const roleOf = (a) => a.is_host ? 'Host' : a.is_team ? 'Team' : a.is_regular ? 'Core' : '';
+  const roleOf = (a) => [a.is_host ? 'Host' : a.is_team ? 'Team' : a.is_regular ? 'Core' : '', a.is_council ? 'Council' : ''].filter(Boolean).join('+');
   const lines = [['Name', 'Email', 'Phone', 'Status', 'Role', 'Position', 'Waiver', 'Waiver date', 'Email opt-out', 'Applied'].join(',')];
   for (const a of rows) lines.push([
     a.full_name, a.email, a.phone, a.status, roleOf(a), a.position,

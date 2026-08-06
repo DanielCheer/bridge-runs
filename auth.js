@@ -102,4 +102,21 @@ export function makeRequireApprover(db) {
   };
 }
 
+// Council = the Adv Basketball voting pool (applicants.is_council) — SEPARATE from admin/team
+// (owner rule: council aren't admins, they just vote players in). Admits admins and team too so
+// the Council screen stays their oversight surface, but this gate guards ONLY /admin + /admin/vote;
+// every other operator surface keeps requireApprover, so a council member gets the vote and
+// nothing else.
+export function makeRequireCouncil(db) {
+  return function requireCouncil(req, res, next) {
+    const email = currentUser(req);
+    if (!email) return res.status(403).send('Sign in first.');
+    if (isAdmin(email)) { req.userEmail = email; req.actorRole = 'admin'; return next(); }
+    const row = db.prepare('SELECT is_team, is_council FROM applicants WHERE email = ?').get(email);
+    if (row && row.is_team) { req.userEmail = email; req.actorRole = 'team'; return next(); }
+    if (row && row.is_council) { req.userEmail = email; req.actorRole = 'council'; return next(); }
+    return res.status(403).send('Council access only. Ask an organizer.');
+  };
+}
+
 export { ADMINS };

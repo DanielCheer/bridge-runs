@@ -1528,8 +1528,8 @@ const tabNav = (current, { dm = 0, group = 0, groupMention = 0, program = 1 } = 
 // Operator page-switcher — shows on the check-in / council / people pages so
 // admins & team can jump between them. Manage People is admin-only, so team
 // members don't get that button. Hidden entirely for regular players.
-const opsNav = (current, { isAdmin = false, isTeam = false } = {}) => {
-  if (!isAdmin && !isTeam) return '';
+const opsNav = (current, { isAdmin = false, isTeam = false, isCouncil = false } = {}) => {
+  if (!isAdmin && !isTeam && !isCouncil) return '';
   const item = (href, label, key) => `<a href="${href}"${current === key ? ' class="on"' : ''}>${label}</a>`;
   return `<nav class="opsnav">
     ${item('/checkin', 'Check-in', 'checkin')}
@@ -2145,7 +2145,7 @@ function runDayControls({ runDay, rdMsg = '' }) {
 }
 
 export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–10:30 PM', startLabel = '8:30 PM', tipoff = 0, openDay = 'Monday', openTime = '5 PM', cap, waitlistCap, going, waiting, full, runFull, isOpen, canSeeCount, regularSlotsFull,
-                             myState, myWaitPos, myOffer = null, offerWindowHours = 3, iAmTeam, iAmRegular, iOptedOut, iAutoRenew,
+                             myState, myWaitPos, myOffer = null, offerWindowHours = 3, iAmTeam, iAmCouncil = false, iAmRegular, iOptedOut, iAutoRenew,
                              viewerIsAdmin, canOperate, canSeeRoster, kioskUrl = '', suspended = false, suspendReason = '', myConfirmed = false, confirmBy = '', msg = '', bannerVer = '4', cancelled = false, locked = false, announcement = null, announcementLog = [], inPlayers, offeredPlayers = [], waitPlayers, host = null, runDay = null, rdMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
 
   // Not cleared to play yet (admins always get through — they run the check-in)
@@ -2414,7 +2414,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
 
   return HEAD(`${wdayFull(runDate)} Check-in — The Bridge`, 'has-tabs') + header(`<b>CHECK-IN</b>${esc(email)}`, wdayShort(runDate), ann, hours) + WELCOME_MODAL + `
     ${backToRuns}
-    ${opsNav('checkin', { isAdmin: viewerIsAdmin, isTeam: iAmTeam })}
+    ${opsNav('checkin', { isAdmin: viewerIsAdmin, isTeam: iAmTeam, isCouncil: iAmCouncil })}
     ${canOperate ? `<div id="tgnudge" class="notice" style="margin-top:10px;display:flex;align-items:center;gap:10px;justify-content:space-between">
       <span>🏀 <b>You’re on the team</b> — you’ve got extra controls.</span>
       <span style="display:flex;gap:8px;align-items:center;flex-shrink:0">
@@ -4400,7 +4400,7 @@ ${mentionAutocompleteJS()}
 // ---------- ADMIN / COUNCIL ----------
 export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–10:30 PM', checkedInCount, cap,
                            waitlistCap = 5, preregCap = 10, msg = '',
-                           viewerIsAdmin = true, viewerIsTeam = false, viewerIsHost = false, viewerEmail = '', log = [],
+                           viewerIsAdmin = true, viewerIsTeam = false, viewerIsHost = false, viewerCanVote = false, viewerEmail = '', log = [],
                            filter = 'all', counts = {}, teamMembers = [], ann = null,
                            dmUnread = 0, groupUnread = 0, groupMention = 0 }) {
   const pill = (s) => `<span class="pill ${s}">${s}</span>`;
@@ -4422,12 +4422,14 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–
     // Make Pillar auto-approves (like team), so it's offered for pending applicants too, not just approved.
     const regBtn  = roleBtn('regular', a.is_regular, '★ Pillar — remove', 'Make Pillar', true);
     const hostBtn = roleBtn('host', a.is_host, '★ Host — remove', 'Make Host', a.status === 'approved' && viewerIsAdmin);
+    // Council = a vote on applicants and nothing else (its own role — not team, not admin).
+    const councilBtn = roleBtn('council', a.is_council, '⚖ Council — remove', 'Add to council', a.status === 'approved' && viewerIsAdmin);
 
     // Team members are auto-approved and not voted on.
     let decisionBlock;
     if (a.is_team) {
       decisionBlock = `<div class="ad" style="margin-top:10px">◆ Team — auto-approved, no vote needed.</div>
-        <div class="acts">${teamBtn}${regBtn}${hostBtn}</div>`;
+        <div class="acts">${teamBtn}${regBtn}${hostBtn}${councilBtn}</div>`;
     } else {
       const v = a.vote || { poolSize: 0, threshold: 3, approved: [], rejected: [], waiting: [], myVote: null };
       const th = v.threshold || 3;
@@ -4445,8 +4447,8 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–
       // admin-only: who's still to vote (names, not raw emails)
       const waiting = (viewerIsAdmin && v.waiting.length && a.status === 'pending')
         ? `<div class="tally-note">Waiting on: ${v.waiting.map(voterName).join(', ')}</div>` : '';
-      const voteButtons = (!viewerIsTeam || viewerIsHost)
-        ? '<span class="ad" style="margin:0">Team decides — you have oversight, not a vote.</span>'
+      const voteButtons = !viewerCanVote
+        ? '<span class="ad" style="margin:0">The council decides — you have oversight, not a vote.</span>'
         : (isSelf
           ? '<span class="ad" style="margin:0">Your own application — you can\'t vote.</span>'
           : `${voteBtn(a.id, 'approve', 'Approve', 'approve', v.myVote === 'approve')}
@@ -4454,7 +4456,7 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–
       const resetBtn = viewerIsAdmin
         ? `<form method="POST" action="/admin/reset" class="swapform"><input type="hidden" name="id" value="${a.id}"><button class="btn ghost sm" type="submit">Reset votes</button></form>` : '';
       decisionBlock = `${tally}${whoVoted}${waiting}
-        <div class="acts"${__i === 0 ? ' data-tour="council"' : ''}>${voteButtons}${resetBtn}${teamBtn}${regBtn}${hostBtn}</div>`;
+        <div class="acts"${__i === 0 ? ' data-tour="council"' : ''}>${voteButtons}${resetBtn}${teamBtn}${regBtn}${hostBtn}${councilBtn}</div>`;
     }
 
     return `<details class="arow"${a.status === 'pending' ? ' open' : ''}>
@@ -4492,19 +4494,19 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–
     <div class="subhead">The Council · ${teamMembers.length} voting</div>
     <div class="card" style="padding:10px 14px;margin-top:6px">
       <div class="roster">${teamMembers.map(m =>
-        `<div class="r"><span class="av">${avatarInner(m.email, m.full_name)}</span><span class="nm">${esc(m.full_name)}</span>${m.is_host ? '<span class="bdg host">★ Host</span>' : '<span class="bdg team">◆ Team</span>'}</div>`
+        `<div class="r"><span class="av">${avatarInner(m.email, m.full_name)}</span><span class="nm">${esc(m.full_name)}</span><span class="bdg team">⚖ Council</span></div>`
       ).join('')}</div>
     </div>` : '';
 
-  return HEAD('Council — The Bridge', 'has-tabs') + header(`<b>COUNCIL</b>${viewerIsAdmin ? 'admin' : 'team'}`, wdayShort(runDate), ann, hours) + `
+  return HEAD('Council — The Bridge', 'has-tabs') + header(`<b>COUNCIL</b>${viewerIsAdmin ? 'admin' : (viewerCanVote ? 'council' : 'team')}`, wdayShort(runDate), ann, hours) + `
     ${backBtn('/checkin')}
-    ${opsNav('admin', { isAdmin: viewerIsAdmin, isTeam: viewerIsTeam })}${firstRunTour}
+    ${opsNav('admin', { isAdmin: viewerIsAdmin, isTeam: viewerIsTeam, isCouncil: viewerCanVote })}${firstRunTour}
     <div class="rule"></div>
     <span class="eyebrow">${applicants.length} ${filter === 'all' ? 'applicant' : filter}${applicants.length===1?'':'s'}</span>
     <h1>Council review</h1>
-    <p class="lead">${viewerIsAdmin
-      ? 'Approval is decided by the <b>team</b>: 3 approvals gets an applicant in, 3 rejects blocks them. You have oversight and manage people, but you don\'t vote. Team members are auto-approved and skip the vote.'
-      : 'It takes <b>3 approvals</b> to get an applicant in, or <b>3 rejects</b> to block them. Cast your vote below.'}</p>
+    <p class="lead">${viewerCanVote
+      ? 'It takes <b>3 approvals</b> to get an applicant in, or <b>3 rejects</b> to block them. Cast your vote below.'
+      : 'Approval is decided by the <b>council</b>: 3 approvals gets an applicant in, 3 rejects blocks them. You have oversight and manage people, but you don\'t vote. Team members are auto-approved and skip the vote.'}</p>
     <div class="notice">This ${wdayFull(runDate)} (${esc(runLabel)}): <b>${checkedInCount}/${cap}</b> checked in.</div>
     ${msg ? `<div class="notice good">${esc(msg)}</div>` : ''}
     ${viewerIsAdmin ? `<details class="announce-compose" style="margin-top:12px"><summary>⚙️ Run settings — capacity</summary>

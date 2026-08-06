@@ -586,6 +586,18 @@ if (pmCols.length && !pmCols.includes('ar_strikes')) db.exec('ALTER TABLE progra
 if (pmCols.length && !pmCols.includes('ar_paused_until')) db.exec('ALTER TABLE program_membership ADD COLUMN ar_paused_until TEXT');
 if (pmCols.length && !pmCols.includes('ar_strike_at')) db.exec('ALTER TABLE program_membership ADD COLUMN ar_strike_at TEXT');
 
+// applicants.is_council — the Adv Basketball voting pool, SEPARATE from team/admin (owner rule
+// 2026-08-06: "council aren't admin, they're just part of the process"). The seed rides the ALTER
+// (column-absence is the one-time marker): today's voters — team minus host — keep their vote;
+// from here on, council is granted explicitly and team/host/admin no longer imply it.
+{
+  const aCols = db.prepare('PRAGMA table_info(applicants)').all().map(c => c.name);
+  if (aCols.length && !aCols.includes('is_council')) {
+    db.exec('ALTER TABLE applicants ADD COLUMN is_council INTEGER NOT NULL DEFAULT 0');
+    db.exec('UPDATE applicants SET is_council = 1 WHERE is_team = 1 AND COALESCE(is_host, 0) = 0');
+  }
+}
+
 // One-time, versioned, all-or-nothing schema migration. Runs here — after every CREATE/ALTER
 // (so the generic tables + their program_id columns exist) and before the app serves a request.
 // A no-op once PRAGMA user_version >= 2; on failure it rolls back and the old db is untouched.
