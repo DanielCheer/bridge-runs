@@ -6122,16 +6122,8 @@ function autoRunStateFor(programId) {
     setSetting(cfg.keys.autolock, rd);
     if (runOpenFor(programId, rd)) { setRunStateFor(programId, rd, 'is_open', 0); audit('system', 'system', `${cfg.logTag}:autolock`, rd); }
   }
-  // PENALTY ASSESS (once, after the run ENDS) — strike auto-seated no-shows. Confirms are allowed right
-  // up to game time, so judge at the run's end (config.endHour), not at lock. Feature-flagged: the
-  // marker is only ever touched for a program that opted in (config.autoRenewPenalty + keys.arassess).
-  if (cfg.autoRenewPenalty) {
-    const assessAt = new Date(rd + hh(cfg.endHour)).getTime();
-    if (now >= assessAt && getSetting(cfg.keys.arassess) !== rd) {
-      setSetting(cfg.keys.arassess, rd);
-      assessRenewPenalties(programId, rd);
-    }
-  }
+  // (Penalty assess moved to ensureWeekFor's archive loop — a `now >= rd@endHour` check here was
+  // provably unreachable: programDefaultDate rolls rd to next week at that same endHour instant.)
 }
 function pkAutoRunState() { return autoRunStateFor(2); }
 // Access gate for an opt-in run (pickleball, volleyball): approved players + admins in; a hidden
@@ -6189,6 +6181,17 @@ function ensureWeekFor(programId) {
     // placement (a party that WAITED isn't credited just because a member sits early in sort order).
     const part = partitionFor(programId, rd);
     const floor = cfg.offerWindow ? part.floorReal : part.floor;
+    // PENALTY ASSESS (once) — strike this run's auto-seated ghosts NOW, while the roster still
+    // exists. This is the ONLY place the generic engine can judge a finished run: programDefaultDate
+    // rolls the run date to next week at endHour — the exact moment a clock check `now >= rd@endHour`
+    // would first hold — so an autoRunStateFor branch could never fire with a current rd (it sat
+    // unreachable from Phase 5.5 until 2026-08-05). Archive-time is also crash-safe: a run that
+    // ends while the server is down is assessed at the next boot's catch-up, roster intact. The
+    // marker keeps it once-per-run if a crash lands between the strike writes and the purge below.
+    if (cfg.autoRenewPenalty && getSetting(cfg.keys.arassess) !== rd) {
+      setSetting(cfg.keys.arassess, rd);
+      assessRenewPenalties(programId, rd);
+    }
     writeRunSummary(programId, rd);   // metrics layer: before the purge erases the evidence
     for (const p of floor) if (!/@guest\.local$/.test(p.email)) stmtRollArchiveIns.run(rd, p.email, p.name, programId);
     stmtRollDelCheckinsByDate.run(rd, programId); stmtRollDelStateByDate.run(rd, programId);
