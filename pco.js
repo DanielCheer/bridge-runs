@@ -1061,3 +1061,32 @@ export function pcoStatus() {
     checkinsReport: JSON.parse(getSetting('pco_checkins_report') || 'null'),
   };
 }
+
+// ---------- Groups roster (2026-09-08) ----------
+// Read one PCO group's people so a program's LADDER roster can fill itself instead of being typed.
+// Read-only by construction: it only GETs, and the caller decides what to do with the names.
+// /groups/v2/groups/<id>/people hands back first/last name AND email_addresses inline, so this is
+// one paged call rather than a person-lookup per member (34 people = 34 requests at 250ms pacing).
+// The email is the ladder's identity, so a person with no email address in Planning Center is
+// returned with email:'' and the caller decides — silently dropping them would make a roster that
+// is quietly short, which is worse than a visible skip count.
+export async function pcoGroupRoster(groupId) {
+  if (!pcoAuthMode()) throw new Error('Planning Center is not connected.');
+  const out = [];
+  let path = `/groups/v2/groups/${encodeURIComponent(groupId)}/people?per_page=100`;
+  while (path) {
+    const json = await pcoFetch(path);
+    for (const p of json.data || []) {
+      const a = p.attributes || {};
+      const email = (a.email_addresses || []).map(e => e && (e.address || e)).filter(Boolean)[0] || '';
+      out.push({
+        pcoId: String(p.id),
+        name: [a.first_name, a.last_name].filter(Boolean).join(' ').trim() || (email.split('@')[0] || 'Member'),
+        email: String(email).toLowerCase(),
+      });
+    }
+    const next = json.links?.next;
+    path = next ? next.replace(/^https?:\/\/[^/]+/, '') : null;
+  }
+  return out;
+}

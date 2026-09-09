@@ -20,6 +20,7 @@ import {
   pcoSaveOAuthApp, pcoOAuthStartUrl, pcoOAuthCallback, pcoOAuthConfigured, pcoSetNotifier, pcoFieldsPending,
   pcoSetRosterProvider,
   pcoPushFields, pcoSetAttendanceFields, pcoSetWaiverFields, pcoSetProgramLabels,
+  pcoGroupRoster, pcoConnected,
 } from './pco.js';
 import webpush from 'web-push';
 import {
@@ -31,6 +32,7 @@ import {
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap, setProgramMeta,
   STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, demoProfileCard, pickleballPage, runPage, runsPage, pkJoinPage, runJoinPage, pastRunPage, waiverPage,
   friendsPage, friendsSearchFragment, chatLockedPage, runChatPage, pcoAdminPage, programsAdminPage, kioskPage, analyticsPage, auditViewerPage, runHistoryPage,
+  ladderPage, ladderBoardPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -4896,14 +4898,18 @@ function fireScheduledAnnouncements() {
 // A big-screen live roster for the gym door (TV/laptop): floor + waitlist, refreshing itself.
 // Auth: an admin session works directly; for a shared screen with no login, an admin mints a
 // kiosk link carrying a token (`?k=`), revocable by regenerating. Read-only by construction.
-app.get('/kiosk/:pid', (req, res) => {
+// The one gate every screen-on-the-wall route passes through — door roster, ladder board, and any
+// future one. It lives here ONCE: a second copy of a token comparison is a second place to get the
+// timing-safe compare, the legacy-token fallback or the hidden-program rule subtly wrong.
+// Returns null (having answered the request) when the caller must stop.
+function kioskGate(req, res) {
   const pid = Number(req.params.pid);
-  if (!PROGRAMS.has(pid)) return res.status(404).send('Not found');
+  if (!PROGRAMS.has(pid)) { res.status(404).send('Not found'); return null; }
   const admin = isAdmin(currentUser(req));
   // The static DEMO kiosk is ADMIN-SESSION-ONLY (owner ask 2026-08-05: show the door screen on
   // the synthetic roster while demoing). No demo token exists or can ever mint (runKioskRotate's
   // static guard), so there is no shareable demo link; everyone else 404s like any hidden program.
-  if (pid === 90 && !admin) return res.status(404).send('Not found');
+  if (pid === 90 && !admin) { res.status(404).send('Not found'); return null; }
   // Timing-safe token compare (P3-3) — an early-exit === leaks prefix-match timing. Length guard
   // first: timingSafeEqual throws on unequal lengths. Per-program tokens (proposal #3) so one
   // program's leaked link is revocable alone; the legacy global token keeps old screens working.
@@ -4914,9 +4920,28 @@ app.get('/kiosk/:pid', (req, res) => {
   // (the rotate confirm) is actually true (2026-08-05 audit P3-3).
   const perProg = String(getSetting(`kiosk_token_${pid}`) || '');
   const tokenOk = tokEq(perProg) || (!perProg && tokEq(String(getSetting('kiosk_token') || '')));
-  if (!tokenOk && !admin) return res.status(403).send('Kiosk link required.');
+  if (!tokenOk && !admin) { res.status(403).send('Kiosk link required.'); return null; }
   // A token must not expose an UNPUBLISHED program's roster (P3-3): hidden = admins only.
-  if (!programActive(pid) && !admin) return res.status(404).send('Not found');
+  if (!programActive(pid) && !admin) { res.status(404).send('Not found'); return null; }
+  return { pid, admin };
+}
+// The ladder on the wall: same revocable link as the door screen, no login, read-only by
+// construction (nothing here writes, and the page carries no controls). Self-refreshing so a
+// projector left on all night follows the standings as games land.
+app.get('/kiosk/:pid/ladder', (req, res) => {
+  const k = kioskGate(req, res); if (!k) return;
+  const cfg = ladderCfg(k.pid); if (!cfg) return res.status(404).send('Not found');
+  const p = P(k.pid), from = ladderFrom(k.pid);
+  res.send(ladderBoardPage({
+    sport: p.displayName, emoji: p.emoji, theme: p.config.theme || '',
+    award: cfg.award || 'Sportsmanship',
+    dateLabel: runLabelFor(ladderRunDate(k.pid)),
+    standings: ladderStandings(k.pid, from), noms: ladderNominations(k.pid, from),
+  }));
+});
+app.get('/kiosk/:pid', (req, res) => {
+  const k = kioskGate(req, res); if (!k) return;
+  const pid = k.pid;
   const rd = pid === 1 ? nextRunDate() : programRunDate(pid);
   const part = partitionFor(pid, rd);
   const floor = (P(pid).config.offerWindow ? part.floorReal : part.floor) || [];
@@ -5229,9 +5254,14 @@ app.post('/admin/programs/delete', requireAdmin, (req, res) => {
   if (PROGRAM_CODE_IDS.has(id)) return res.redirect('/admin/programs?msg=' + encodeURIComponent('That program is managed in code and can’t be deleted here.'));
   // Never silently destroy history: a program that has ANY rosters, attendance or chat can only be
   // hidden. Delete is for a mis-created program, and even then it's an explicit empty-only path.
-  const used = db.prepare('SELECT (SELECT COUNT(*) FROM checkins WHERE program_id=?) c, (SELECT COUNT(*) FROM attendance WHERE program_id=?) a, (SELECT COUNT(*) FROM group_messages WHERE program_id=?) m').get(id, id, id);
-  if (used.c || used.a || used.m)
-    return res.redirect('/admin/programs?msg=' + encodeURIComponent(`${row.name} already has sign-ups, attendance or chat history — hide it instead of deleting, so the records survive.`));
+  // The ladder counts as history. A run whose ATTENDANCE lives in Planning Center and whose only
+  // record here is the board (exactly pickleball's shape) has zero checkins and zero attendance —
+  // without this term the guard called a whole season "empty" and offered to delete it.
+  const used = db.prepare(`SELECT (SELECT COUNT(*) FROM checkins WHERE program_id=?) c, (SELECT COUNT(*) FROM attendance WHERE program_id=?) a,
+                                  (SELECT COUNT(*) FROM group_messages WHERE program_id=?) m, (SELECT COUNT(*) FROM ladder_games WHERE program_id=?) l,
+                                  (SELECT COUNT(*) FROM run_headcount WHERE program_id=?) h`).get(id, id, id, id, id);
+  if (used.c || used.a || used.m || used.l || used.h)
+    return res.redirect('/admin/programs?msg=' + encodeURIComponent(`${row.name} already has sign-ups, attendance, chat or ladder history — hide it instead of deleting, so the records survive.`));
   // Every program_id-scoped table, so a later program can't inherit orphans if this id is reused.
   // (P2-3: run_summary + metrics_events joined this list when the metrics layer shipped — ids ARE
   // reused, and INSERT OR IGNORE on run_summary's PK would silently keep a dead program's rows in
@@ -5239,7 +5269,8 @@ app.post('/admin/programs/delete', requireAdmin, (req, res) => {
   const cfg = (PROGRAMS.get(id) || {}).config || {};
   transact(() => {
     for (const t of ['program_membership', 'run_state', 'run_overrides', 'announcements', 'group_reads',
-                     'regular_optout', 'team_assignments', 'group_reactions', 'votes', 'run_summary', 'metrics_events'])
+                     'regular_optout', 'team_assignments', 'group_reactions', 'votes', 'run_summary', 'metrics_events',
+                     'ladder_games', 'ladder_players', 'ladder_nominations', 'run_headcount'])
       db.prepare(`DELETE FROM ${t} WHERE program_id=?`).run(id);
     // Announcement dismissals key by announcement id — sweep rows orphaned by the announcements delete.
     db.prepare('DELETE FROM announcement_dismissals WHERE announcement_id NOT IN (SELECT id FROM announcements)').run();
@@ -5260,6 +5291,11 @@ app.post('/admin/programs/delete', requireAdmin, (req, res) => {
   // `keys` rather than inside it (a keys-only loop leaked <slug>_chat_seq on every delete).
   for (const k of Object.values(cfg.keys || {})) delSetting(k);
   if (cfg.chatSeqKey) delSetting(cfg.chatSeqKey);
+  // Keys built from the program ID rather than its slug, so they are not in cfg.keys. The kiosk
+  // token matters most: ids ARE reused, and a surviving token would leave an old wall-board link
+  // (already on a projector, already texted around) opening the NEXT program that takes this id.
+  delSetting(`kiosk_token_${id}`);
+  delSetting(ladderNomsKey(id));
   buildPrograms();
   MOUNTED_PROGRAMS.delete(id);
   audit(req.userEmail, 'admin', 'program:delete', `${id}:${row.slug}`);
@@ -5569,6 +5605,10 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
     db.prepare('DELETE FROM announcement_dismissals WHERE email = ?').run(a.email);
     db.prepare('DELETE FROM login_tokens WHERE email = ?').run(a.email);
     db.prepare('DELETE FROM waiver_records WHERE email = ?').run(a.email);   // per-program waivers (F6) — guardian contact details are PII, gone on hard-delete
+    // The ladder is a SECOND identity space (it holds people who never had an app account), so it
+    // is not reached by any of the email-keyed sweeps above. Without this the deleted person stayed
+    // in the picker and kept their name on the public wall board.
+    purgeLadderIdentity(a.email);
     // Social graph (Phase 6): drop every edge touching this person, in BOTH directions, so a
     // same-email re-registration can't inherit stale friendships/blocks (mirrors the votes purge).
     db.prepare('DELETE FROM social_edges WHERE from_email = ? OR to_email = ?').run(a.email, a.email);
@@ -6797,6 +6837,510 @@ function runGetSeason(programId, req, res) {
     dmUnread: unreadCount(me), groupUnread: cc.group, groupMention: cc.gm, ann: null,
   }));
 }
+// ---------- LADDER (2026-09-08): doubles results → season standings ----------
+// Program-generic and feature-flagged (config.features.ladder). Everything below is a no-op for a
+// program without the flag, and its routes 404 — a run that doesn't keep score never grows a board.
+//
+// The roster is NOT typed anywhere: the picker is tonight's CHECK-IN list (checkins while the run
+// is live, attendance once it archives), so the people who tapped in are exactly the people who can
+// be logged. Identity is the email throughout; names are resolved for display only.
+// Audit actor role. requireLogin routes never get req.actorRole (only the admin/approver gates set
+// it), and audit() binds it straight into SQLite — passing undefined throws mid-write. Same idiom
+// the other run handlers use, extended with 'player' for the member-level action (nominate).
+const ladderActor = (g, req) => req.actorRole || (g.admin ? 'admin' : (g.canOperate ? 'host' : 'player'));
+const ladderTag = (programId) => P(programId).config.logTag || P(programId).key || 'run';
+const ladderCfg = (programId) => (P(programId).config.features || {}).ladder || null;
+// Basketball derives its run date from nextRunDate(); every generic program stores its own. Same
+// split the kiosk route makes — one helper so a ladder on program 1 can never read the wrong night.
+// THE NIGHT THE LADDER IS SCORING — deliberately NOT the check-in date.
+// programRunDate rolls forward to next week the moment the run's end hour passes, which is right
+// for check-in (sign-ups reopen that evening) and WRONG for scoring: a game logged at 8:05, or the
+// sportsmanship vote taken while people pack up, belongs to the night that just finished. Reusing
+// the check-in date stamped those onto NEXT week, made "undo the last game of tonight" a silent
+// no-op after the final whistle, and left next week's first undo deleting this week's game.
+// (Audit 2026-09-08 — pickleball ends at 20:00, so the bug opened exactly at the buzzer.)
+// Rule: if today is a run day for this program, today IS the night. Otherwise use the scheduled
+// date, which is what a mid-week look at the board should show.
+function ladderRunDate(programId) {
+  const scheduled = Number(programId) === 1 ? nextRunDate() : programRunDate(programId);
+  const today = ymdLocal(new Date(schedNow()));
+  if (scheduled === today) return today;                 // run day, before the end hour
+  const dow = (P(programId).config || {}).dow;
+  const todayIsRunDay = dow != null && new Date(`${today}T12:00:00`).getDay() === Number(dow);
+  return todayIsRunDay ? today : scheduled;
+}
+// Is award voting open? The award is a season-END event, so the config default is closed — but
+// opening it must NOT need a code edit and a restart on the last night of the season. The operator
+// toggle writes ladder_noms_<pid>; absent, the program's config decides. Same shape as every other
+// host-configurable setting in the app: config is the default, app_settings is the override.
+const ladderNomsKey = (programId) => `ladder_noms_${Number(programId)}`;
+function ladderNomsOpen(programId, cfg) {
+  const v = getSetting(ladderNomsKey(programId));
+  if (v === '1') return true;
+  if (v === '0') return false;
+  return (cfg || ladderCfg(programId) || {}).nominations !== false;
+}
+const LADDER_SCORE_MAX = 99;      // a typo like 111 is a mis-tap, not a game
+const LADDER_NOTE_MAX = 140;      // one line under a name on the board
+
+// The season the standings cover: the program's own season-start gate (the same app_settings key
+// the season board reads) or, before one is set, the calendar year. Derived — never stored — so
+// moving the season start re-cuts the board instead of leaving a stale copy behind.
+function ladderFrom(programId) {
+  const key = (P(programId).config.keys || {}).seasonStart || 'season_start';
+  const s = getSetting(key);
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')) ? s : `${ymdLocal(new Date(schedNow())).slice(0, 4)}-01-01`;
+}
+// Display names for a set of emails, best source first: the member's own profile, then the name the
+// run recorded (guests have no applicant row), then the address. One query per source, not per
+// player — a 20-person night must not become 20 round trips.
+function ladderNames(programId, emails) {
+  const out = new Map();
+  const list = [...new Set(emails.map(lc).filter(Boolean))];
+  if (!list.length) return out;
+  const marks = list.map(() => '?').join(',');
+  // The ladder's own roster first — for a ladder-only player it is the ONLY source of a name, and
+  // without it the board renders raw addresses. Everything after it overrides on purpose.
+  for (const r of db.prepare(`SELECT email, name FROM ladder_players WHERE program_id = ? AND email IN (${marks})`).all(programId, ...list)) {
+    if (r.name) out.set(lc(r.email), r.name);
+  }
+  for (const r of db.prepare(`SELECT email, name FROM attendance WHERE program_id = ? AND email IN (${marks})`).all(programId, ...list)) {
+    if (r.name) out.set(lc(r.email), r.name);
+  }
+  for (const r of db.prepare(`SELECT email, name FROM checkins WHERE program_id = ? AND email IN (${marks})`).all(programId, ...list)) {
+    if (r.name) out.set(lc(r.email), r.name);
+  }
+  for (const r of db.prepare(`SELECT email, full_name FROM applicants WHERE email IN (${marks})`).all(...list)) {
+    if (r.full_name) out.set(lc(r.email), r.full_name);   // profile wins: it's the one the member edits
+  }
+  for (const e of list) if (!out.has(e)) out.set(e, e.split('@')[0]);
+  return out;
+}
+// Who the picker offers. THE ROSTER IS NOT DERIVABLE for a run the church signs up in Planning
+// Center: PCO Check-Ins needs a Check-Ins grant this account doesn't have, and this app's own
+// checkins/attendance stay empty while nobody signs up here. So ladder_players is the durable
+// source — typed once, kept for the season — and everything the app DOES know is unioned on top:
+//   · ladder_players (not retired)          the entered roster
+//   · checkins for this run date            in-app sign-ups, when the run uses them
+//   · attendance for this run date          the same list once the night archives
+//   · anyone already in a game tonight      so an undo-and-relog always has its players
+// `here` marks the last two: the people the app can prove are at tonight's run, sorted first.
+function ladderRoster(programId, rd) {
+  const seen = new Map();
+  const add = (email, name, here) => {
+    const e = lc(email); if (!e) return;
+    const cur = seen.get(e);
+    if (cur) { if (here) cur.here = true; if (name && !cur.name) cur.name = name; return; }
+    seen.set(e, { email: e, name: name || '', here: !!here });
+  };
+  for (const r of db.prepare('SELECT email, name FROM ladder_players WHERE program_id = ? AND retired_at IS NULL').all(programId)) add(r.email, r.name, false);
+  for (const r of db.prepare('SELECT email, name FROM checkins WHERE program_id = ? AND run_date = ?').all(programId, rd)) add(r.email, r.name, true);
+  for (const r of db.prepare('SELECT email, name FROM attendance WHERE program_id = ? AND run_date = ?').all(programId, rd)) add(r.email, r.name, true);
+  for (const g of db.prepare('SELECT w1,w2,l1,l2 FROM ladder_games WHERE program_id = ? AND run_date = ?').all(programId, rd)) {
+    for (const e of [g.w1, g.w2, g.l1, g.l2]) add(e, '', true);
+  }
+  // ONE name per person, from ONE resolver. The picker used to take the first name it happened to
+  // read (the roster row) while the board took ladderNames (where the member's own profile wins), so
+  // the same person could sit in the picker as "Daniel Cheer" and on the projector as "daniel".
+  // ladderNames is the single source of a display name; the row name is only its fallback.
+  const names = ladderNames(programId, [...seen.keys()]);
+  return [...seen.values()]
+    .map(p => ({ ...p, name: names.get(p.email) || p.name || p.email }))
+    .sort((a, b) => (b.here - a.here) || a.name.localeCompare(b.name));
+}
+// A ladder-only player gets a synthetic address in the app's existing @*.local family, so every
+// query, export and rekey treats them like anyone else while nothing can ever push them into the
+// church's directory. Collisions get a numeric suffix — two Daniels are two players.
+function ladderMintEmail(programId, name) {
+  const base = String(name).toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'player';
+  const taken = (e) => !!db.prepare('SELECT 1 FROM ladder_players WHERE program_id = ? AND email = ?').get(programId, e);
+  let e = `${base}@ladder.local`;
+  for (let n = 2; taken(e) && n < 100; n++) e = `${base}-${n}@ladder.local`;
+  return e;
+}
+// The board itself. Wins first, then POINT DIFFERENTIAL, then win rate, then name — the owner's
+// rule (2026-09-08): "wins then differential". PD is summed from the stored scores every time, so
+// an undone game leaves nothing behind.
+function ladderStandings(programId, from) {
+  const games = db.prepare(
+    'SELECT * FROM ladder_games WHERE program_id = ? AND run_date >= ? ORDER BY id DESC').all(programId, from);
+  const names = ladderNames(programId, games.flatMap(g => [g.w1, g.w2, g.l1, g.l2]));
+  const nm = (e) => names.get(lc(e)) || lc(e);
+  // ONE standings table: the PERSON. Partners rotate all night at an open gym, so a per-pairing
+  // table was twenty duos with one game each — noise on a projector, and it split a player's record
+  // across every partner they had. (Owner, 2026-09-08: "the only thing that matters is individual
+  // points".) Pairs are still shown in the games log below, where they're a fact about the game
+  // rather than a standings line of their own.
+  const players = new Map(), nights = new Set();
+  const seat = (key, label) => {
+    let row = players.get(key);
+    if (!row) { row = { key, label, w: 0, l: 0, pf: 0, pa: 0 }; players.set(key, row); }
+    return row;
+  };
+  const duoLabel = (a, b) => [nm(a), nm(b)].sort((x, y) => x.localeCompare(y));
+  for (const g of games) {
+    nights.add(g.run_date);
+    for (const e of [g.w1, g.w2]) { const p = seat(lc(e), nm(e)); p.w++; p.pf += g.w_score; p.pa += g.l_score; }
+    for (const e of [g.l1, g.l2]) { const p = seat(lc(e), nm(e)); p.l++; p.pf += g.l_score; p.pa += g.w_score; }
+  }
+  const rank = (a, b) => {
+    if (b.w !== a.w) return b.w - a.w;
+    const da = a.pf - a.pa, dbb = b.pf - b.pa;
+    if (dbb !== da) return dbb - da;
+    const ra = a.w / (a.w + a.l || 1), rb = b.w / (b.w + b.l || 1);
+    if (rb !== ra) return rb - ra;
+    return String(a.label).localeCompare(String(b.label));
+  };
+  const fin = (r) => ({ ...r, pd: r.pf - r.pa, played: r.w + r.l });
+  return {
+    from,
+    players: [...players.values()].map(fin).sort(rank),
+    nights: nights.size,
+    games: games.map(g => ({
+      id: g.id, runDate: g.run_date, at: g.created_at,
+      winners: duoLabel(g.w1, g.w2), losers: duoLabel(g.l1, g.l2),
+      ws: g.w_score, ls: g.l_score,
+    })),
+  };
+}
+// Sportsmanship award tally — one nomination per voter per night, so the count IS the number of
+// people who named them (never one enthusiastic voter ten times).
+function ladderNominations(programId, from) {
+  const rows = db.prepare(
+    `SELECT email, note, at FROM ladder_nominations
+      WHERE program_id = ? AND run_date >= ? ORDER BY at DESC`).all(programId, from);
+  const names = ladderNames(programId, rows.map(r => r.email));
+  const tally = new Map();
+  for (const r of rows) {
+    const e = lc(r.email);
+    let row = tally.get(e);
+    if (!row) { row = { email: e, name: names.get(e) || e, n: 0, note: '' }; tally.set(e, row); }
+    row.n++;
+    if (!row.note && r.note) row.note = r.note;   // the most recent reason, not a wall of them
+  }
+  return [...tally.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name));
+}
+// Who may record a result: operators always; every member on tonight's roster when the program's
+// config says features.ladder.log === 'players'.
+function ladderCanLog(programId, cfg, gate, email, roster) {
+  if (gate.canOperate) return true;
+  if (cfg.log !== 'players') return false;
+  // Being on tonight's roster is not enough: a guest or a lapsed member can appear there. Writing to
+  // the program's record requires membership OF the program, same bar as nominate.
+  if (!memberOf(programId, email)) return false;
+  return roster.some(p => p.email === lc(email));
+}
+function runLadderGet(programId, req, res) {
+  const cfg = ladderCfg(programId); if (!cfg) return res.status(404).send('Not found');
+  const g = programGate(programId, req, res); if (!g) return;
+  const p = P(programId), me = req.userEmail;
+  if (!memberOf(programId, me) && !g.canOperate) return res.redirect(p.paths.run);
+  const rd = ladderRunDate(programId);
+  const roster = ladderRoster(programId, rd);
+  const from = ladderFrom(programId);
+  const a = applicantByEmail(me), cc = p.unread(me, a ? a.id : 0);
+  res.send(ladderPage({
+    program: programId, theme: p.config.theme || '', emoji: p.emoji, sport: p.displayName,
+    title: `${p.displayName} Ladder`, award: cfg.award || 'Sportsmanship',
+    email: me, runDate: rd, dateLabel: runLabelFor(rd), seasonFrom: from,
+    roster, standings: ladderStandings(programId, from), noms: ladderNominations(programId, from),
+    canLog: ladderCanLog(programId, cfg, g, me, roster), canOperate: g.canOperate,
+    canSync: !!(cfg.pcoGroup && pcoConnected()),
+    nominationsOpen: ladderNomsOpen(programId, cfg),
+    headcounts: headcountSeason(programId, from),
+    headcountToday: (db.prepare('SELECT n FROM run_headcount WHERE program_id = ? AND run_date = ?').get(programId, rd) || {}).n,
+    pointsTo: Number(cfg.pointsTo) || 11, basePath: p.paths.run,
+    kioskUrl: g.canOperate && getSetting(`kiosk_token_${programId}`)
+      ? `/kiosk/${programId}/ladder?k=${getSetting(`kiosk_token_${programId}`)}` : '',
+    msg: String(req.query.msg || ''), err: String(req.query.err || ''),
+    dmUnread: unreadCount(me), groupUnread: cc.group, groupMention: cc.gm,
+  }));
+}
+// Record one game. Rejects anything the board could not honestly display: a player twice, someone
+// who wasn't on tonight's roster, a non-integer or out-of-range score, or a "winner" who scored
+// fewer points than the loser (the single most likely mis-tap at the court).
+function runLadderLog(programId, req, res) {
+  const cfg = ladderCfg(programId); if (!cfg) return res.status(404).send('Not found');
+  const g = programGate(programId, req, res); if (!g) return;
+  const p = P(programId), back = `${p.paths.run}/ladder`;
+  const rd = ladderRunDate(programId);
+  const roster = ladderRoster(programId, rd);
+  if (!ladderCanLog(programId, cfg, g, req.userEmail, roster)) return res.redirect(back);
+  const bad = (m) => res.redirect(`${back}?err=${encodeURIComponent(m)}`);
+  const picked = ['w1', 'w2', 'l1', 'l2'].map(k => lc(String(req.body[k] || '').trim()));
+  if (picked.some(e => !e)) return bad('Pick two winners and two losers.');
+  if (new Set(picked).size !== 4) return bad('Nobody can play on both sides of the same game.');
+  const known = new Set(roster.map(r => r.email));
+  if (picked.some(e => !known.has(e))) return bad('Everyone in a game has to be on the roster — add them first.');
+  const ws = Number(req.body.w_score), ls = Number(req.body.l_score);
+  if (!Number.isInteger(ws) || !Number.isInteger(ls) || ws < 0 || ls < 0 || ws > LADDER_SCORE_MAX || ls > LADDER_SCORE_MAX) {
+    return bad('Scores have to be whole numbers.');
+  }
+  if (ls >= ws) return bad("The winners' score has to be the higher one.");
+  const [w1, w2] = [picked[0], picked[1]].sort();
+  const [l1, l2] = [picked[2], picked[3]].sort();
+  // Idempotency window. A POST with no idempotency key + a phone that double-fires the tap = two
+  // identical rows, and nothing downstream can tell the phantom from a real rematch. The SAME four
+  // people cannot genuinely replay the SAME scoreline within seconds — a game to 11 takes minutes —
+  // so an exact repeat inside 20s is the double-tap, and it answers as the success it looks like.
+  const dupe = db.prepare(`SELECT id FROM ladder_games
+     WHERE program_id=? AND run_date=? AND w1=? AND w2=? AND l1=? AND l2=? AND w_score=? AND l_score=?
+       AND created_at >= datetime('now', '-20 seconds')`).get(programId, rd, w1, w2, l1, l2, ws, ls);
+  if (dupe) return res.redirect(`${back}?msg=${encodeURIComponent(`Logged ${ws}–${ls}.`)}`);
+  db.prepare(`INSERT INTO ladder_games (program_id, run_date, w1, w2, l1, l2, w_score, l_score, logged_by)
+              VALUES (?,?,?,?,?,?,?,?,?)`).run(programId, rd, w1, w2, l1, l2, ws, ls, lc(req.userEmail));
+  audit(req.userEmail, ladderActor(g, req), `${ladderTag(programId)}:ladder:log`, `${w1}+${w2} def ${l1}+${l2} ${ws}-${ls}`);
+  res.redirect(`${back}?msg=${encodeURIComponent(`Logged ${ws}–${ls}.`)}`);
+}
+// Undo the last game of THIS run date. Scoped to the night on purpose: a mis-tap is corrected at
+// the court, and nobody should be able to quietly rewrite an earlier week from tonight's screen.
+function runLadderUndo(programId, req, res) {
+  const cfg = ladderCfg(programId); if (!cfg) return res.status(404).send('Not found');
+  const g = programGate(programId, req, res); if (!g) return;
+  const p = P(programId), back = `${p.paths.run}/ladder`, rd = ladderRunDate(programId);
+  const last = db.prepare(
+    'SELECT * FROM ladder_games WHERE program_id = ? AND run_date = ? ORDER BY id DESC LIMIT 1').get(programId, rd);
+  if (!last) return res.redirect(back);
+  // A player-logger can take back their OWN last game; anything else is an operator call.
+  if (!g.canOperate && lc(last.logged_by) !== lc(req.userEmail)) return res.redirect(back);
+  db.prepare('DELETE FROM ladder_games WHERE id = ?').run(last.id);
+  audit(req.userEmail, ladderActor(g, req), `${ladderTag(programId)}:ladder:undo`,
+    `${last.w1}+${last.w2} def ${last.l1}+${last.l2} ${last.w_score}-${last.l_score}`);
+  res.redirect(`${back}?msg=${encodeURIComponent('Game removed.')}`);
+}
+// Add a player to the ladder's own roster — the one-time typing that replaces re-entering names
+// every week. An operator may attach a real member (their address, so the ladder and their profile
+// are one identity) or just a name (synthetic @ladder.local). Re-adding a retired player revives
+// them with their record intact.
+function runLadderAdd(programId, req, res) {
+  const cfg = ladderCfg(programId); if (!cfg) return res.status(404).send('Not found');
+  const g = programGate(programId, req, res); if (!g) return;
+  const p = P(programId), back = `${p.paths.run}/ladder`;
+  if (!g.canOperate) return res.redirect(back);
+  const bad = (m) => res.redirect(`${back}?err=${encodeURIComponent(m)}`);
+  const name = String(req.body.name || '').trim().slice(0, 60);
+  const typed = lc(String(req.body.email || '').trim());
+  if (!name && !typed) return bad('Give the player a name.');
+  // An address that belongs to a member links the two; anything else is ladder-only.
+  const member = typed ? applicantByEmail(typed) : null;
+  if (typed && !member && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(typed)) return bad("That doesn't look like an email address.");
+  // Re-adding a name that is already on the roster REVIVES that player instead of minting a second
+  // identity. Without this, "add Ann Ace" twice quietly splits one person's record in half — and
+  // re-adding someone who was retired is exactly how a player comes back.
+  // Re-adding a RETIRED player by name revives them (that is how someone comes back). But an ACTIVE
+  // player with that name is a different question: two real people can share a name, and silently
+  // folding them into one identity would merge two season records with no way back. Refuse, and say
+  // how to tell them apart.
+  const sameName = !typed && db.prepare(
+    'SELECT email, retired_at FROM ladder_players WHERE program_id = ? AND lower(name) = lower(?)').get(programId, name);
+  if (sameName && !sameName.retired_at) {
+    return bad(`${name} is already on the roster. If this is a different person, add them with their email address.`);
+  }
+  const email = typed || (sameName ? sameName.email : ladderMintEmail(programId, name));
+  const label = name || (member ? member.full_name : typed.split('@')[0]);
+  const existing = db.prepare('SELECT * FROM ladder_players WHERE program_id = ? AND email = ?').get(programId, email);
+  if (existing) {
+    db.prepare('UPDATE ladder_players SET name = ?, retired_at = NULL WHERE program_id = ? AND email = ?').run(label, programId, email);
+  } else {
+    db.prepare('INSERT INTO ladder_players (program_id, email, name, added_by) VALUES (?,?,?,?)').run(programId, email, label, lc(req.userEmail));
+  }
+  audit(req.userEmail, ladderActor(g, req), `${ladderTag(programId)}:ladder:player-add`, email);
+  res.redirect(`${back}?msg=${encodeURIComponent(`${label} added.`)}`);
+}
+// Pull the roster from the program's Planning Center group. This is the answer to "I don't want to
+// type": Groups is readable with the church's ordinary member permissions, so the picker can fill
+// itself. ADDITIVE ONLY — a person who left the PCO group is left alone rather than retired, because
+// the group is a membership list and the ladder is a record of who plays; the two drift for good
+// reasons (a guest who never joined, someone who left the group mid-season with games on the board).
+async function runLadderSync(programId, req, res) {
+  const cfg = ladderCfg(programId); if (!cfg) return res.status(404).send('Not found');
+  const g = programGate(programId, req, res); if (!g) return;
+  const p = P(programId), back = `${p.paths.run}/ladder`;
+  if (!g.canOperate) return res.redirect(back);
+  if (!cfg.pcoGroup) return res.redirect(`${back}?err=${encodeURIComponent('No Planning Center group is configured for this ladder.')}`);
+  let people;
+  try {
+    people = await pcoGroupRoster(cfg.pcoGroup);
+  } catch (e) {
+    audit(req.userEmail, ladderActor(g, req), `${ladderTag(programId)}:ladder:sync-failed`, String(e.message).slice(0, 120));
+    return res.redirect(`${back}?err=${encodeURIComponent('Planning Center: ' + String(e.message).slice(0, 90))}`);
+  }
+  const existing = new Set(db.prepare('SELECT email FROM ladder_players WHERE program_id = ?').all(programId).map(r => lc(r.email)));
+  const ins = db.prepare(`INSERT INTO ladder_players (program_id, email, name, added_by) VALUES (?,?,?,?)
+    ON CONFLICT(program_id, email) DO UPDATE SET
+      name = CASE WHEN ladder_players.added_by LIKE 'pco:%' THEN excluded.name ELSE ladder_players.name END`);
+  let added = 0, updated = 0, skipped = 0;
+  transact(() => {
+    for (const person of people) {
+      if (!person.email) { skipped++; continue; }   // no address in PCO = no identity for the ladder
+      if (existing.has(lc(person.email))) updated++; else added++;
+      ins.run(programId, lc(person.email), person.name, `pco:group:${cfg.pcoGroup}`);
+    }
+  });
+  audit(req.userEmail, ladderActor(g, req), `${ladderTag(programId)}:ladder:sync`, `+${added} new, ${updated} refreshed, ${skipped} skipped`);
+  const msg = `Roster synced from Planning Center — ${added} added, ${updated} already on it` +
+    (skipped ? `, ${skipped} skipped (no email in Planning Center)` : '') + '.';
+  res.redirect(`${back}?msg=${encodeURIComponent(msg)}`);
+}
+// Headcount for a night. Program-generic (any run can use it, ladder or not) — the ladder page is
+// simply where the operator already is at 8 PM. Reads back the whole season so the number has a
+// denominator: a single "12" is trivia, "12, 9, 14 over three nights" is a decision.
+const HEADCOUNT_MAX = 500;                    // a typo like 1200 is a mis-tap, not a gym
+function headcountSeason(programId, from) {
+  return db.prepare(
+    'SELECT run_date, n FROM run_headcount WHERE program_id = ? AND run_date >= ? ORDER BY run_date DESC')
+    .all(programId, from);
+}
+function runHeadcountSet(programId, req, res) {
+  const g = programGate(programId, req, res); if (!g) return;
+  const p = P(programId), back = `${p.paths.run}/ladder`;
+  if (!g.canOperate) return res.redirect(back);
+  const rd = ladderRunDate(programId);
+  const raw = String(req.body.n ?? '').trim();
+  // Empty CLEARS the night — the way to undo a mis-typed count without leaving a wrong number up.
+  if (raw === '') {
+    db.prepare('DELETE FROM run_headcount WHERE program_id = ? AND run_date = ?').run(programId, rd);
+    audit(req.userEmail, ladderActor(g, req), `${ladderTag(programId)}:headcount`, `${rd} cleared`);
+    return res.redirect(`${back}?msg=${encodeURIComponent('Headcount cleared.')}`);
+  }
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0 || n > HEADCOUNT_MAX) {
+    return res.redirect(`${back}?err=${encodeURIComponent('Headcount has to be a whole number.')}`);
+  }
+  db.prepare(`INSERT INTO run_headcount (program_id, run_date, n, noted_by) VALUES (?,?,?,?)
+              ON CONFLICT(program_id, run_date) DO UPDATE SET n = excluded.n, noted_by = excluded.noted_by, at = datetime('now')`)
+    .run(programId, rd, n, lc(req.userEmail));
+  audit(req.userEmail, ladderActor(g, req), `${ladderTag(programId)}:headcount`, `${rd} = ${n}`);
+  res.redirect(`${back}?msg=${encodeURIComponent(`${n} in the gym on ${runLabelFor(rd)} — logged.`)}`);
+}
+// Merge two roster rows that are the SAME human. The ladder is a second identity space — it holds
+// people who have no app account — so the same person arrives twice as a matter of course: typed in
+// as a walk-in one week ("Vincent"), then pulled from Planning Center the next ("Vincent Kua").
+// Nothing upstream can prevent it, so the operator gets the repair rather than a duplicate that
+// splits one person's record across two lines of the standings forever.
+function runLadderMerge(programId, req, res) {
+  const cfg = ladderCfg(programId); if (!cfg) return res.status(404).send('Not found');
+  const g = programGate(programId, req, res); if (!g) return;
+  const p = P(programId), back = `${p.paths.run}/ladder`;
+  if (!g.canOperate) return res.redirect(back);
+  const bad = (m) => res.redirect(`${back}?err=${encodeURIComponent(m)}`);
+  const from = lc(String(req.body.from || '').trim()), into = lc(String(req.body.into || '').trim());
+  if (!from || !into) return bad('Pick both players to merge.');
+  if (from === into) return bad('Those are the same roster entry.');
+  const rowFrom = db.prepare('SELECT * FROM ladder_players WHERE program_id = ? AND email = ?').get(programId, from);
+  const rowInto = db.prepare('SELECT * FROM ladder_players WHERE program_id = ? AND email = ?').get(programId, into);
+  if (!rowFrom || !rowInto) return bad('Both players have to be on this roster.');
+  // A game with BOTH identities in it cannot be one person playing twice — it means a seat was
+  // mis-picked on that night. Merging would silently collapse it into a corrupt 3-player row, so it
+  // is refused with the nights named: the operator fixes those games, then merges.
+  const clash = db.prepare(`SELECT DISTINCT run_date FROM ladder_games WHERE program_id = ?
+      AND (w1=? OR w2=? OR l1=? OR l2=?)
+      AND (w1=? OR w2=? OR l1=? OR l2=?)
+      ORDER BY run_date`)
+    .all(programId, from, from, from, from, into, into, into, into).map(r => r.run_date);
+  if (clash.length) return bad(`${rowFrom.name} and ${rowInto.name} are both in the same game on ${clash.join(', ')} — fix those results first, then merge.`);
+  transact(() => {
+    for (const col of ['w1', 'w2', 'l1', 'l2'])
+      db.prepare(`UPDATE ladder_games SET ${col} = ? WHERE program_id = ? AND ${col} = ?`).run(into, programId, from);
+    // Nominations key on (program, night, voter): OR REPLACE drops the duplicate vote rather than
+    // throwing and rolling the whole merge back.
+    db.prepare('UPDATE OR REPLACE ladder_nominations SET email = ? WHERE program_id = ? AND email = ?').run(into, programId, from);
+    db.prepare('UPDATE OR REPLACE ladder_nominations SET voter = ? WHERE program_id = ? AND voter = ?').run(into, programId, from);
+    db.prepare('DELETE FROM ladder_players WHERE program_id = ? AND email = ?').run(programId, from);
+    // A merge INTO a retired row would hide the surviving player: they just proved they still play.
+    db.prepare('UPDATE ladder_players SET retired_at = NULL WHERE program_id = ? AND email = ?').run(programId, into);
+  });
+  audit(req.userEmail, ladderActor(g, req), `${ladderTag(programId)}:ladder:merge`, `${from} -> ${into}`);
+  res.redirect(`${back}?msg=${encodeURIComponent(`${rowFrom.name} merged into ${rowInto.name} — one line on the board now.`)}`);
+}
+// PII purge for a hard-deleted person, called from the people-delete cascade.
+//
+// The tension: a hard delete must leave no trace of the person, but a ladder GAME is a SHARED
+// record — three other people's results sit in the same row, and deleting it would silently rewrite
+// their standings (the same reason retire never deletes). So their seats are rekeyed onto a
+// per-person tombstone that carries no address and no name, and everyone else's history survives
+// untouched. Their roster row and their votes (cast and received) are deleted outright.
+function purgeLadderIdentity(email) {
+  const e = lc(email);
+  if (!e) return;
+  const seats = db.prepare(
+    'SELECT DISTINCT program_id FROM ladder_games WHERE w1=? OR w2=? OR l1=? OR l2=?').all(e, e, e, e);
+  if (seats.length) {
+    // One tombstone per PERSON, not per delete-of-the-same-address and not shared between people:
+    // a shared address would merge two deleted players into one duo on the board.
+    const tomb = `former-${crypto.randomBytes(4).toString('hex')}@ladder.local`;
+    for (const col of ['w1', 'w2', 'l1', 'l2'])
+      db.prepare(`UPDATE ladder_games SET ${col} = ? WHERE ${col} = ?`).run(tomb, e);
+    for (const { program_id } of seats)
+      db.prepare(`INSERT OR IGNORE INTO ladder_players (program_id, email, name, added_by, retired_at)
+                  VALUES (?,?,?,?,datetime('now'))`).run(program_id, tomb, 'Former player', 'system:delete');
+  }
+  db.prepare('DELETE FROM ladder_players WHERE email = ?').run(e);
+  db.prepare('DELETE FROM ladder_nominations WHERE email = ? OR voter = ?').run(e, e);
+}
+// Retire a player from the picker. Their games STAY — the standings are summed from results, and
+// deleting a person would silently rewrite finished nights.
+function runLadderRetire(programId, req, res) {
+  const cfg = ladderCfg(programId); if (!cfg) return res.status(404).send('Not found');
+  const g = programGate(programId, req, res); if (!g) return;
+  const p = P(programId), back = `${p.paths.run}/ladder`;
+  if (!g.canOperate) return res.redirect(back);
+  const email = lc(String(req.body.email || '').trim());
+  const row = db.prepare('SELECT * FROM ladder_players WHERE program_id = ? AND email = ?').get(programId, email);
+  if (!row) return res.redirect(back);
+  db.prepare("UPDATE ladder_players SET retired_at = datetime('now') WHERE program_id = ? AND email = ?").run(programId, email);
+  audit(req.userEmail, ladderActor(g, req), `${ladderTag(programId)}:ladder:player-retire`, email);
+  res.redirect(`${back}?msg=${encodeURIComponent(`${row.name} taken off the roster — their results stay.`)}`);
+}
+// Open or close award voting — the operator's one tap in the final weeks of the season. Writes the
+// override ladder_noms_<pid>; clearing it would fall back to config, so both states are stored
+// explicitly and the button always says what the next tap does.
+function runLadderVoting(programId, req, res) {
+  const cfg = ladderCfg(programId); if (!cfg) return res.status(404).send('Not found');
+  const g = programGate(programId, req, res); if (!g) return;
+  const p = P(programId), back = `${p.paths.run}/ladder`;
+  if (!g.canOperate) return res.redirect(back);
+  const open = String(req.body.open || '') === '1';
+  setSetting(ladderNomsKey(programId), open ? '1' : '0');
+  audit(req.userEmail, ladderActor(g, req), `${ladderTag(programId)}:ladder:voting`, open ? 'opened' : 'closed');
+  res.redirect(`${back}?msg=${encodeURIComponent(open
+    ? `${cfg.award || 'Sportsmanship'} voting is open — everyone gets one pick.`
+    : 'Award voting closed.')}`);
+}
+// Nominate someone for the sportsmanship award. ANY member votes (that's the point of the award);
+// one pick per person per night, replaceable.
+function runLadderNominate(programId, req, res) {
+  const cfg = ladderCfg(programId); if (!cfg) return res.status(404).send('Not found');
+  const g = programGate(programId, req, res); if (!g) return;
+  const p = P(programId), back = `${p.paths.run}/ladder`, me = lc(req.userEmail);
+  if (!memberOf(programId, me) && !g.canOperate) return res.redirect(p.paths.run);
+  // Voting is a season-END event, not a running tally: the form is hidden while voting is closed,
+  // and the handler refuses too — a hidden form is a UI state, not a permission.
+  if (!ladderNomsOpen(programId, cfg)) return res.redirect(`${back}?err=${encodeURIComponent('Award voting opens at the end of the season.')}`);
+  // A suspended member keeps their login but loses the floor; they do not get to publish a note on
+  // the board either (the other member-level surfaces check this; this one did not).
+  if (g.a && g.a.status !== 'approved' && !g.admin) return res.redirect(back);
+  const rd = ladderRunDate(programId);
+  const who = lc(String(req.body.email || '').trim());
+  const roster = ladderRoster(programId, rd);
+  if (!roster.some(r => r.email === who)) return res.redirect(`${back}?err=${encodeURIComponent('Pick someone who played tonight.')}`);
+  if (who === me && !g.canOperate) return res.redirect(`${back}?err=${encodeURIComponent('Nominate someone else.')}`);
+  const note = String(req.body.note || '').trim().slice(0, LADDER_NOTE_MAX);
+  db.prepare(`INSERT OR REPLACE INTO ladder_nominations (program_id, run_date, email, voter, note)
+              VALUES (?,?,?,?,?)`).run(programId, rd, who, me, note);
+  audit(req.userEmail, ladderActor(g, req), `${ladderTag(programId)}:ladder:nominate`, who);
+  res.redirect(`${back}?msg=${encodeURIComponent('Nomination in.')}`);
+}
+// A run moved AFTER games were logged: results are keyed by the night's date, so leaving them on the
+// old date empties tonight's board and makes "undo the last game" a silent no-op — the same class of
+// bug the ladderRunDate fix closed, reached from the other direction. Nominations carry a
+// (program, run_date, voter) PK, so UPDATE OR REPLACE drops a vote already cast on the destination
+// date instead of throwing and rolling the whole move back.
+function migrateLadderNight(programId, oldRd, newRd) {
+  if (!oldRd || !newRd || oldRd === newRd) return;
+  db.prepare('UPDATE ladder_games SET run_date = ? WHERE run_date = ? AND program_id = ?').run(newRd, oldRd, programId);
+  db.prepare('UPDATE OR REPLACE ladder_nominations SET run_date = ? WHERE run_date = ? AND program_id = ?').run(newRd, oldRd, programId);
+}
 // Operator moves this week's run to another date, or clears back to the standing day. Migrates the
 // roster + state + once-per-cycle markers to the new date (else it's stranded → phantom attendance),
 // and records the consumed standing day as the base of the cycle being MOVED (see the comment below).
@@ -6817,6 +7361,7 @@ function runDate(programId, req, res) {
         db.prepare('UPDATE checkins SET run_date = ? WHERE run_date = ? AND program_id = ?').run(newRd, oldRd, programId);
         db.prepare('UPDATE OR IGNORE regular_optout SET run_date = ? WHERE run_date = ? AND program_id = ?').run(newRd, oldRd, programId);
         db.prepare('UPDATE signup_groups SET run_date = ? WHERE run_date = ? AND program_id = ?').run(newRd, oldRd, programId); // parties follow the run (Phase 6b)
+        migrateLadderNight(programId, oldRd, newRd);   // tonight's results follow the night
         const st = db.prepare('SELECT is_open, cancelled FROM run_state WHERE run_date = ? AND program_id = ?').get(oldRd, programId);
         if (st) {
           db.prepare("INSERT INTO run_state (run_date, is_open, cancelled, program_id) VALUES (?,?,?,?) ON CONFLICT(run_date, program_id) DO UPDATE SET is_open = excluded.is_open, cancelled = excluded.cancelled").run(newRd, st.is_open, st.cancelled, programId);
@@ -6840,6 +7385,7 @@ function runDate(programId, req, res) {
       db.prepare('UPDATE checkins SET run_date = ? WHERE run_date = ? AND program_id = ?').run(d, oldRd, programId);
       db.prepare('UPDATE OR IGNORE regular_optout SET run_date = ? WHERE run_date = ? AND program_id = ?').run(d, oldRd, programId);
       db.prepare('UPDATE signup_groups SET run_date = ? WHERE run_date = ? AND program_id = ?').run(d, oldRd, programId); // parties follow the run (Phase 6b)
+      migrateLadderNight(programId, oldRd, d);   // tonight's results follow the night
       const st = db.prepare('SELECT is_open, cancelled FROM run_state WHERE run_date = ? AND program_id = ?').get(oldRd, programId);
       if (st) {
         db.prepare("INSERT INTO run_state (run_date, is_open, cancelled, program_id) VALUES (?,?,?,?) ON CONFLICT(run_date, program_id) DO UPDATE SET is_open = excluded.is_open, cancelled = excluded.cancelled").run(d, st.is_open, st.cancelled, programId);
@@ -6988,6 +7534,18 @@ app.post('/pickleball/announce', requireLogin, (req, res) => runAnnounce(2, req,
 app.post('/pickleball/announce/retract', requireLogin, (req, res) => runAnnounceRetract(2, req, res));
 app.post('/pickleball/announce/cancel', requireLogin, (req, res) => runAnnounceCancel(2, req, res));
 app.post('/pickleball/kiosk-rotate', requireLogin, (req, res) => runKioskRotate(2, req, res));
+// Ladder — the season board the court screen shows. Same handlers mountRunProgram registers for
+// every other program; pickleball just has its routes written out like the rest of its block.
+app.get('/pickleball/ladder', requireLogin, (req, res) => runLadderGet(2, req, res));
+app.post('/pickleball/ladder/log', requireLogin, (req, res) => runLadderLog(2, req, res));
+app.post('/pickleball/ladder/undo', requireLogin, (req, res) => runLadderUndo(2, req, res));
+app.post('/pickleball/ladder/nominate', requireLogin, (req, res) => runLadderNominate(2, req, res));
+app.post('/pickleball/ladder/voting', requireLogin, (req, res) => runLadderVoting(2, req, res));
+app.post('/pickleball/ladder/merge', requireLogin, (req, res) => runLadderMerge(2, req, res));
+app.post('/pickleball/headcount', requireLogin, (req, res) => runHeadcountSet(2, req, res));
+app.post('/pickleball/ladder/player', requireLogin, (req, res) => runLadderAdd(2, req, res));
+app.post('/pickleball/ladder/retire', requireLogin, (req, res) => runLadderRetire(2, req, res));
+app.post('/pickleball/ladder/sync', requireLogin, (req, res) => runLadderSync(2, req, res));
 
 // ---------- DEMO run controls (admin-only showcase) ----------
 // Seed/reset/clear the synthetic demo roster (program 90). All rows are @demo.local checkins-only
@@ -7243,7 +7801,17 @@ const PROGRAM_DEFS = {
       mentionTag: 'pkmention', chatSeqKey: 'pk_chat_seq',
       // groupQueue ON: parties can check into pickleball ("a party can join any run"). Simple
       // model + packParties reduction-proof — with no group_ids the roster is byte-identical.
-      features: { teams: false, groupQueue: { maxSize: 4 } },
+      // ladder ON: doubles results logged at the court feed a season board (owner 2026-09-08).
+      // `log` decides who may record a game — 'operator' (host/admin) or 'players' (any member on
+      // tonight's roster); `pointsTo` only prefills the winners' score box. Absent/false = the
+      // whole feature is dark for that program, routes included.
+      features: { teams: false, groupQueue: { maxSize: 4 },
+        // pcoGroup: the Church Center group whose membership IS the ladder roster. With it set,
+        // the operator can pull the roster instead of typing it (Groups is readable on a plain
+        // People-viewer token; Check-Ins is not). Absent = the roster is entered by hand.
+        // nominations: CLOSED until the end of the season (owner 2026-09-08) — the award is voted
+        // once, in the final weeks, not accumulated all season. Flip to true to open voting.
+        ladder: { pointsTo: 11, log: 'operator', award: 'Iron Sharpens Iron', nominations: false, pcoGroup: 3185612 } },
     },
     unread: genericUnread(2),
     hubCard: genericHubCard(2),
@@ -7674,6 +8242,17 @@ function mountRunProgram(app, program) {
   app.post(`${b}/guest`, requireLogin, (req, res) => runGuest(id, req, res));
   app.get(`${b}/season`, requireLogin, (req, res) => runGetSeason(id, req, res));
   app.post(`${b}/season`, requireLogin, (req, res) => runSeasonSet(id, req, res));
+  // Ladder (registered for every program; the handlers 404 unless config.features.ladder is on).
+  app.get(`${b}/ladder`, requireLogin, (req, res) => runLadderGet(id, req, res));
+  app.post(`${b}/ladder/log`, requireLogin, (req, res) => runLadderLog(id, req, res));
+  app.post(`${b}/ladder/undo`, requireLogin, (req, res) => runLadderUndo(id, req, res));
+  app.post(`${b}/ladder/nominate`, requireLogin, (req, res) => runLadderNominate(id, req, res));
+  app.post(`${b}/ladder/voting`, requireLogin, (req, res) => runLadderVoting(id, req, res));
+  app.post(`${b}/ladder/merge`, requireLogin, (req, res) => runLadderMerge(id, req, res));
+  app.post(`${b}/headcount`, requireLogin, (req, res) => runHeadcountSet(id, req, res));
+  app.post(`${b}/ladder/player`, requireLogin, (req, res) => runLadderAdd(id, req, res));
+  app.post(`${b}/ladder/retire`, requireLogin, (req, res) => runLadderRetire(id, req, res));
+  app.post(`${b}/ladder/sync`, requireLogin, (req, res) => runLadderSync(id, req, res));
   app.get(`${b}/banner`, requireAdmin, (req, res) => runBannerGet(id, req, res));
   app.post(`${b}/banner`, requireAdmin, (req, res) => runBannerPost(id, req, res));
   // Run chat (own room on the unified group_messages tables) — GET + seen/older + post/react/delete/pin/voice/video.
@@ -7826,7 +8405,10 @@ function buildPrograms() {
   // Hand the view layer the presentation subset so it renders run-aware links (Chat tab href,
   // season link) without hardcoding paths — the server is the single source of program truth.
   const meta = {};
-  for (const [id, p] of PROGRAMS) meta[id] = { chat: p.paths.chat, season: p.paths.season, seasonLabel: p.seasonLabel };
+  // ladder: the path only when that program keeps score, '' otherwise — so a view can offer the
+  // link without knowing anything about the feature flag.
+  for (const [id, p] of PROGRAMS) meta[id] = { chat: p.paths.chat, season: p.paths.season, seasonLabel: p.seasonLabel,
+    ladder: ((p.config.features || {}).ladder ? `${p.paths.run}/ladder` : '') };
   setProgramMeta(meta);
   // Same idea for the PCO sync: it labels the "sports played" custom field from the registry, so
   // adding a program needs no edit in pco.js. Built from the program KEY (the canonical sport

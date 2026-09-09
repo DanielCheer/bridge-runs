@@ -555,6 +555,81 @@ db.prepare("INSERT OR IGNORE INTO program (id,name,sport,slug,active,approval) V
 // synthetic checkins-only rows (@demo.local, no applicant rows) confined to program_id=90, so it
 // can never touch live basketball/pickleball/volleyball rosters, attendance, or exports.
 db.prepare("INSERT OR IGNORE INTO program (id,name,sport,slug,active,approval) VALUES (90,'Demo','demo','demo',0,'invite')").run();
+// --- Ladder (2026-09-08): in-run game results, per program ------------------
+// The season standings a program projects on the gym screen. ONE row per finished game, keyed by
+// program + run date so it partitions exactly like checkins/attendance, and by EMAIL (never a typed
+// name) so the roster IS the check-in list: who played resolves through applicants/checkins and
+// survives a rename or an email rekey. Doubles is the shape the runs actually play — four columns,
+// not a join table: a pairing is only ever two players, and a fixed shape keeps the standings query
+// a single scan with no fan-out. Scores are stored raw (not a differential) because point
+// differential is derived — storing the derived number is what goes stale when a game is undone.
+// Additive + migration-guarded like every table above; dark until a program's config turns the
+// ladder feature on.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS ladder_games (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    program_id INTEGER NOT NULL,
+    run_date   TEXT NOT NULL,
+    w1 TEXT NOT NULL, w2 TEXT NOT NULL,      -- winning pair (lowercased emails, sorted)
+    l1 TEXT NOT NULL, l2 TEXT NOT NULL,      -- losing pair
+    w_score INTEGER NOT NULL,
+    l_score INTEGER NOT NULL,
+    logged_by TEXT NOT NULL,                 -- who tapped Log it (audit trail for an undo dispute)
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_ladder_games_prog ON ladder_games(program_id, run_date);
+  -- The ladder's OWN roster. It exists because the roster cannot be derived: the church runs these
+  -- nights in Planning Center, PCO Check-Ins is read-walled without a Check-Ins grant, and this
+  -- app's checkins/attendance are empty for a program that signs up elsewhere. So the names are
+  -- entered ONCE and live here for the season — never re-typed per night (owner ask 2026-09-08).
+  -- Whoever the app DOES know (a member, a guest, a check-in) is unioned in at read time, so the
+  -- day PCO or in-app check-in becomes available the picker fills itself and this table is just
+  -- the people that neither knows about.
+  -- The email column is the identity everywhere in the ladder: a real address for someone with an
+  -- account, else a synthetic slug@ladder.local — the same convention as @guest.local, and equally
+  -- never eligible for the church directory (nothing writes these rows into applicants).
+  -- retired_at soft-deletes: a player who stops coming leaves the picker but KEEPS their results,
+  -- which a hard delete would silently rewrite (standings are summed from games, not stored).
+  CREATE TABLE IF NOT EXISTS ladder_players (
+    program_id INTEGER NOT NULL,
+    email      TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    added_by   TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    retired_at TEXT,
+    PRIMARY KEY (program_id, email)
+  );
+  -- Sportsmanship nominations ("Iron Sharpens Iron"): ONE nomination per voter per night, so the
+  -- PK enforces one-person-one-vote without a uniqueness check in the handler. A re-nomination
+  -- REPLACES that voter's pick (INSERT OR REPLACE) — changing your mind is not a second vote.
+  CREATE TABLE IF NOT EXISTS ladder_nominations (
+    program_id INTEGER NOT NULL,
+    run_date   TEXT NOT NULL,
+    email      TEXT NOT NULL,                -- who is nominated
+    voter      TEXT NOT NULL,                -- who nominated them
+    note       TEXT NOT NULL DEFAULT '',
+    at         TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (program_id, run_date, voter)
+  );
+  -- HEADCOUNT: how many people were actually in the gym on a given night.
+  --
+  -- It cannot be derived. checkins/attendance are empty for a run that signs up in Planning Center,
+  -- and ladder_games only knows people who appear in a LOGGED game — on 2026-09-08 pickleball had
+  -- 12 people and zero logged games, so every existing source said "nobody came". A gauge that
+  -- reads zero on a 12-person night is worse than no gauge, so the number is entered once by the
+  -- operator and stored as itself.
+  -- Deliberately a COUNT, not rows-per-person: nobody is taking names at an open gym, and inventing
+  -- one row per head would be fabricating attendance records that later look like real identities.
+  -- One row per program-night (PK), so re-entering a corrected number overwrites rather than doubles.
+  CREATE TABLE IF NOT EXISTS run_headcount (
+    program_id INTEGER NOT NULL,
+    run_date   TEXT NOT NULL,
+    n          INTEGER NOT NULL,
+    noted_by   TEXT NOT NULL DEFAULT '',
+    at         TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (program_id, run_date)
+  );
+`);
 // program.config (2026-07-31) — the JSON spec for programs CREATED IN THE APP (admin "New program"
 // wizard). NULL for the four code-defined programs above: buildPrograms prefers PROGRAM_DEFS by id,
 // so basketball/pickleball/volleyball/demo behaviour is untouched, and only DB-defined rows (id ≥ 4)
@@ -866,6 +941,23 @@ function rekeyEmailTx(oldEmail, newEmail) {
     db.prepare('UPDATE group_messages        SET pinned_by=?   WHERE pinned_by=?').run(newEmail, oldEmail);
     db.prepare('UPDATE group_reactions       SET from_email=?  WHERE from_email=?').run(newEmail, oldEmail);
     db.prepare('UPDATE push_subscriptions    SET email=?       WHERE email=?').run(newEmail, oldEmail);
+    // Ladder results are keyed by email in FOUR player columns — a rename must carry every seat or
+    // the standings silently split one person into two duos. Nominations carry both sides (the
+    // nominee and the voter); the (program,run_date,voter) PK can collide only if the SAME person
+    // nominated under both addresses on one night, so the target's row loses (same doctrine as
+    // program_membership) and the migrating identity's pick stands.
+    for (const c of ['w1', 'w2', 'l1', 'l2']) {
+      db.prepare(`UPDATE ladder_games SET ${c}=? WHERE ${c}=?`).run(newEmail, oldEmail);
+    }
+    db.prepare(`DELETE FROM ladder_players WHERE email=? AND EXISTS
+      (SELECT 1 FROM ladder_players o WHERE o.email=? AND o.program_id=ladder_players.program_id)`)
+      .run(newEmail, oldEmail);
+    db.prepare('UPDATE ladder_players SET email=? WHERE email=?').run(newEmail, oldEmail);
+    db.prepare('UPDATE ladder_nominations SET email=? WHERE email=?').run(newEmail, oldEmail);
+    db.prepare(`DELETE FROM ladder_nominations WHERE voter=? AND EXISTS
+      (SELECT 1 FROM ladder_nominations o WHERE o.voter=? AND o.program_id=ladder_nominations.program_id
+        AND o.run_date=ladder_nominations.run_date)`).run(newEmail, oldEmail);
+    db.prepare('UPDATE ladder_nominations SET voter=? WHERE voter=?').run(newEmail, oldEmail);
     // pco_outbox rows are keyed on email but not UNIQUE on it — a plain carry is safe, and the
     // applicants.pco_id link rides the applicants row itself (updated by the caller in this txn).
     db.prepare('UPDATE pco_outbox            SET email=?       WHERE email=?').run(newEmail, oldEmail);
