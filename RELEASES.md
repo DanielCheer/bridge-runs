@@ -11,6 +11,7 @@ Backfilled below from git history for the releases that shipped before this file
 
 | Date (local) | Tag | Commit | Summary |
 |---|---|---|---|
+| 2026-09-09 | rel-20260909-0944 | ba7c792 | Pickleball ladder (individual points) + wall board + turnout capture; ladder night-identity and audit fixes |
 | 2026-08-06 | rel-20260806-1854 | 13e8bda | Programs is a first-class operator tab (Check-in · Council · People · Programs) |
 | 2026-08-06 | rel-20260806-1807 | 901e4cd | F6 youth pack (per-program waivers + guardian consent + per-sport positions) + council role split + wizard presets/season field |
 | 2026-08-06 | rel-20260806-0002 | 2289fc9 | Penalty engine assess was unreachable (rd rolls at endHour) — moved to archive-time + 28-assert strike-level suite; operator routes stop double-responding after a programGate 404 |
