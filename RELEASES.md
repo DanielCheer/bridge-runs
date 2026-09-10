@@ -11,6 +11,7 @@ Backfilled below from git history for the releases that shipped before this file
 
 | Date (local) | Tag | Commit | Summary |
 |---|---|---|---|
+| 2026-09-10 | rel-20260910-0120 | 262ed22 | Roster sync moved out of checkins into run_roster — fixes confirm-sweep roster deletion, waiver-gate bypass, offer-engine leak and cap blindness found in review |
 | 2026-09-10 | rel-20260910-0100 | c8ed6c2 | Teams board for the advanced run (two sides, one-tap swap) + weekly roster sync from Planning Center Registrations |
 | 2026-09-09 | rel-20260909-0944 | ba7c792 | Pickleball ladder (individual points) + wall board + turnout capture; ladder night-identity and audit fixes |
 | 2026-08-06 | rel-20260806-1854 | 13e8bda | Programs is a first-class operator tab (Check-in · Council · People · Programs) |
