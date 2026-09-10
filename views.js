@@ -5592,6 +5592,88 @@ function ladderTable(rows, shown, noun) {
 }
 const ladderCapNote = (rows, shown, noun) => rows.length > shown
   ? `<p class="lbcap">Top ${shown} of ${rows.length} ${esc(noun)}</p>` : '';
+// ---------- TEAMS BOARD — the operator's courtside surface ----------
+// Design target: ONE TAP per change, thumb-sized, readable in a gym. Sides shift constantly, so
+// anything requiring "select then place" is too slow. With two sides a tap needs no destination:
+// tapping a player moves them to the other side. The small x benches them; a benched player taps
+// back onto the shorter side.
+// No swapform/fetch interception here on purpose — a full POST-redirect is more robust than an
+// optimistic swap when the phone's wifi is patchy at the back of a gym.
+const TEAMS_CSS = `
+  .tmwrap{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px}
+  @media (max-width:520px){ .tmwrap{grid-template-columns:1fr 1fr;gap:8px} }
+  .tmside{background:var(--card,#fff);border-radius:14px;padding:12px 10px 14px;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+  .tmhead{display:flex;align-items:baseline;justify-content:space-between;margin:0 2px 8px}
+  .tmhead h3{margin:0;font-size:15px;letter-spacing:.04em;text-transform:uppercase}
+  .tmhead .n{font-size:26px;font-weight:800;line-height:1}
+  .tmrow{display:flex;align-items:stretch;gap:6px;margin-bottom:7px}
+  .tmname{flex:1;min-width:0;display:block;text-align:left;font-size:17px;font-weight:600;
+    padding:13px 12px;border-radius:11px;border:1px solid rgba(34,35,29,.14);background:transparent;
+    color:inherit;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tmname:active{transform:scale(.985)}
+  .tmx{flex:0 0 42px;border-radius:11px;border:1px solid rgba(34,35,29,.12);background:transparent;
+    color:var(--muted);font-size:17px;cursor:pointer}
+  .tmempty{color:var(--muted);font-size:13px;padding:10px 2px}
+  .tmbench{margin-top:14px}
+  .tmbench .tmname{font-weight:500;opacity:.85}
+  .tmbar{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+`;
+export function teamsBoardPage({
+  program = 1, theme = '', emoji = '', sport = '', email = '', runDate = '', dateLabel = '',
+  sides = [], bench = [], basePath = '', canSync = false,
+  msg = '', err = '', dmUnread = 0, groupUnread = 0, groupMention = 0,
+}) {
+  // A player button posts only their address; the server decides where they land. Keeping the
+  // destination server-side is what lets one tap mean "the other side" from either side, and
+  // "the shorter side" from the bench, without the page having to know the counts.
+  const chip = (p, benchable = true) => `
+    <div class="tmrow">
+      <form method="post" action="${esc(basePath)}/team/swap" style="flex:1;min-width:0;display:flex">
+        <input type="hidden" name="email" value="${esc(p.email)}">
+        <button class="tmname" type="submit" title="Move ${esc(p.name)} to the other side">${esc(p.name)}</button>
+      </form>
+      ${benchable ? `<form method="post" action="${esc(basePath)}/team/bench" style="display:flex">
+        <input type="hidden" name="email" value="${esc(p.email)}">
+        <button class="tmx" type="submit" title="Bench ${esc(p.name)}">&times;</button>
+      </form>` : ''}
+    </div>`;
+  const side = (players, i) => `
+    <div class="tmside">
+      <div class="tmhead"><h3>Side ${i + 1}</h3><span class="n">${players.length}</span></div>
+      ${players.length ? players.map(p => chip(p)).join('') : '<p class="tmempty">Tap a name from the bench.</p>'}
+    </div>`;
+  const total = sides.reduce((n, x) => n + x.length, 0) + bench.length;
+  return HEAD(`Teams — ${esc(sport)}`, 'has-tabs' + (theme ? ' ' + theme : ''))
+    + header(`<b>TEAMS</b>${esc(email)}`, '', null) + `
+    ${backToRuns}
+    <div class="rule"></div>
+    <style>${TEAMS_CSS}</style>
+    <div class="phead"><h1>Teams ${esc(emoji)}</h1></div>
+    <p class="psub" style="margin:-4px 0 10px;color:var(--muted)">${esc(dateLabel)} &middot; ${total} player${total === 1 ? '' : 's'} &middot; tap a name to move them across</p>
+    ${msg ? `<div class="note ok">${esc(msg)}</div>` : ''}
+    ${err ? `<div class="note warn">${esc(err)}</div>` : ''}
+    ${total ? '' : `<div class="card"><b>Nobody on the floor yet.</b><p class="foot" style="margin:6px 0 0">${canSync
+      ? 'Pull tonight&rsquo;s registered players from Planning Center below.'
+      : 'Players appear here once they&rsquo;re on tonight&rsquo;s roster.'}</p></div>`}
+    <div class="tmwrap">${sides.map(side).join('')}</div>
+    <div class="tmbench">
+      <div class="subhead">Bench &middot; ${bench.length}</div>
+      <div class="card" style="padding:10px">
+        ${bench.length ? bench.map(p => chip(p, false)).join('')
+          : '<p class="tmempty" style="margin:0">Everyone&rsquo;s on a side.</p>'}
+      </div>
+    </div>
+    <div class="tmbar">
+      ${canSync ? `<form method="post" action="${esc(basePath)}/roster-sync"
+        onsubmit="var b=this.querySelector('button');if(b.dataset.s)return false;b.dataset.s=1;b.disabled=true;b.textContent='Syncing…';">
+        <button class="btn sm" style="width:auto" type="submit">&#8635; Sync tonight&rsquo;s roster</button></form>` : ''}
+      ${total ? `<form method="post" action="${esc(basePath)}/teams/clear"
+        onsubmit="return confirm('Clear both sides? Everyone goes back to the bench.');">
+        <button class="btn ghost sm" style="width:auto" type="submit">Clear sides</button></form>` : ''}
+    </div>
+    <p class="foot" style="margin-top:14px">Tap a name to send them to the other side. Tap &times; to bench them. A benched player goes to whichever side is shorter.</p>
+    ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention, program }));
+}
 // The in-app page: standings first (what everyone opens it for), then the operator's tools.
 export function ladderPage({
   program = 2, theme = '', emoji = '', title = 'Ladder', award = 'Sportsmanship',

@@ -20,7 +20,7 @@ import {
   pcoSaveOAuthApp, pcoOAuthStartUrl, pcoOAuthCallback, pcoOAuthConfigured, pcoSetNotifier, pcoFieldsPending,
   pcoSetRosterProvider,
   pcoPushFields, pcoSetAttendanceFields, pcoSetWaiverFields, pcoSetProgramLabels,
-  pcoGroupRoster, pcoConnected,
+  pcoGroupRoster, pcoConnected, pcoSignupRosterForDate,
 } from './pco.js';
 import webpush from 'web-push';
 import {
@@ -32,7 +32,7 @@ import {
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap, setProgramMeta,
   STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, demoProfileCard, pickleballPage, runPage, runsPage, pkJoinPage, runJoinPage, pastRunPage, waiverPage,
   friendsPage, friendsSearchFragment, chatLockedPage, runChatPage, pcoAdminPage, programsAdminPage, kioskPage, analyticsPage, auditViewerPage, runHistoryPage,
-  ladderPage, ladderBoardPage,
+  ladderPage, ladderBoardPage, teamsBoardPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -5888,6 +5888,48 @@ function simplePartition(programId, rd) {
   return { floor: rows.slice(0, cap), wait: rows.slice(cap), rows };
 }
 function pkPartition(rd) { return partitionFor(2, rd); }
+// ---------- WEEKLY ROSTER SYNC (Planning Center Registrations -> this run's floor) ----------
+// The advanced run's roster lives in PCO, so `checkins` is empty for it and every floor-derived
+// feature is blind. Pulling the week's registrants in as checkins makes the EXISTING machinery
+// (partition, teams, the door screen) work with no new concepts — the floor is simply sourced
+// from PCO instead of from people tapping "I'm in".
+//
+// Rows are marked auto_seated=1, the same flag auto-renew uses: it means "the app put them here",
+// not "they checked themselves in".
+async function syncRunRosterFromPco(programId, rd, byEmail) {
+  const cfg = P(programId).config;
+  if (!cfg.pcoSignupPrefix) throw new Error('This run has no Planning Center signup configured.');
+  const { signup, people } = await pcoSignupRosterForDate(cfg.pcoSignupPrefix, rd);
+  if (!signup) return { signup: null, added: 0, skipped: 0, total: 0 };
+  const ins = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, program_id, auto_seated) VALUES (?,?,?,?,1)');
+  let added = 0, skipped = 0;
+  for (const person of people) {
+    // Only people actually holding a spot. A cancelled or waitlisted registration is not a floor
+    // seat, and seating them would quietly overfill the night.
+    if (!person.active || person.waitlisted) { skipped++; continue; }
+    // No address in PCO = no identity here. Mint one in the app's existing synthetic family so the
+    // player still appears and can be put on a side; it simply never links to an account.
+    const email = person.email || `pco-${person.pcoId || Math.random().toString(36).slice(2)}@adv.local`;
+    if (ins.run(rd, lc(email), person.name, programId).changes) added++;
+  }
+  audit(byEmail, 'admin', `${P(programId).config.logTag || 'run'}:roster-sync`,
+    `${rd} from "${signup.name}" — +${added} seated, ${skipped} not active`);
+  return { signup, added, skipped, total: people.length };
+}
+function runRosterSync(programId, req, res) {
+  const cfg = P(programId).config;
+  const g = programGate(programId, req, res); if (!g) return;
+  const back = `${P(programId).paths.run}/teams`;
+  if (!g.canOperate) return res.redirect(P(programId).paths.run);
+  const rd = runNightFor(programId);
+  syncRunRosterFromPco(programId, rd, req.userEmail).then((r) => {
+    if (!r.signup) return res.redirect(`${back}?err=${encodeURIComponent(`No Planning Center signup found for ${runLabelFor(rd)}.`)}`);
+    res.redirect(`${back}?msg=${encodeURIComponent(`${r.added} added from ${r.signup.name}${r.skipped ? ` (${r.skipped} cancelled or waitlisted, left off)` : ''}.`)}`);
+  }).catch((e) => {
+    audit(req.userEmail, 'admin', `${cfg.logTag || 'run'}:roster-sync-failed`, String(e.message).slice(0, 120));
+    res.redirect(`${back}?err=${encodeURIComponent(String(e.message).slice(0, 140))}`);
+  });
+}
 // ---------- RUN TEAMS (Phase 5) — program-generic, config-driven (config.features.teams) ----------
 // Numbered teams (1..count) players join after the roster locks; count/size come from config so the
 // SAME code serves casual pickup, a tournament bracket, or a standing league later. Dark unless a
@@ -5968,6 +6010,88 @@ function runTeamLeave(programId, req, res) {
   const g = programGate(programId, req, res); if (!g) return;
   clearTeamAssignment(programId, programRunDate(programId), req.userEmail);
   res.redirect(base);
+}
+// ---------- THE TEAMS BOARD (operator surface, built for a phone at courtside) ----------
+// Sides shift all night, so the whole design target is ONE TAP per change. With exactly two teams a
+// tap needs no destination: tapping a player on a side moves them to the OTHER side. Bench is a
+// separate small control, and a benched player taps back onto whichever side is shorter.
+//
+// Deliberately NOT gated on teamsOpen(): that gate exists so PLAYERS can't self-pick before the
+// roster locks. Whoever is running the night arranges sides whenever they like.
+function teamsBoardData(programId) {
+  const rd = runNightFor(programId);
+  const t = teamsFeature(programId);
+  const part = partitionFor(programId, rd);
+  const floor = teamFloor(programId, rd, part);
+  const seats = new Map(runTeamsFor(programId, rd, part).map(r => [lc(r.email), r.team_no]));
+  const sides = Array.from({ length: t ? t.count : 0 }, () => []);
+  const bench = [];
+  for (const pl of floor) {
+    const n = seats.get(lc(pl.email));
+    const row = { email: pl.email, name: pl.name || pl.email.split('@')[0] };
+    if (n >= 1 && n <= sides.length) sides[n - 1].push(row); else bench.push(row);
+  }
+  return { rd, sides, bench, count: t ? t.count : 0 };
+}
+function runTeamsBoard(programId, req, res) {
+  const t = teamsFeature(programId); if (!t) return res.status(404).send('Not found');
+  const g = programGate(programId, req, res); if (!g) return;
+  const p = P(programId);
+  if (!g.canOperate) return res.redirect(p.paths.run);
+  const d = teamsBoardData(programId);
+  const a = applicantByEmail(req.userEmail), cc = p.unread(req.userEmail, a ? a.id : 0);
+  res.send(teamsBoardPage({
+    program: programId, theme: p.config.theme || '', emoji: p.emoji, sport: p.displayName,
+    email: req.userEmail, runDate: d.rd, dateLabel: runLabelFor(d.rd),
+    sides: d.sides, bench: d.bench, basePath: p.paths.run,
+    canSync: !!(p.config.pcoSignupPrefix && pcoConnected()),
+    msg: String(req.query.msg || ''), err: String(req.query.err || ''),
+    dmUnread: unreadCount(req.userEmail), groupUnread: cc.group, groupMention: cc.gm,
+  }));
+}
+// ONE TAP = the other side. The whole point of the board.
+function runTeamSwap(programId, req, res) {
+  const t = teamsFeature(programId); if (!t) return res.status(404).send('Not found');
+  const g = programGate(programId, req, res); if (!g) return;
+  const p = P(programId), back = `${p.paths.run}/teams`;
+  if (!g.canOperate) return res.redirect(p.paths.run);
+  const rd = runNightFor(programId);
+  const email = lc(String(req.body.email || '').trim());
+  if (!teamFloor(programId, rd).some(x => lc(x.email) === email)) return res.redirect(back);
+  const cur = (db.prepare('SELECT team_no FROM team_assignments WHERE program_id = ? AND run_date = ? AND email = ?')
+    .get(programId, rd, email) || {}).team_no;
+  // From a side -> the other side. From the bench -> whichever side is shorter (so a tap on the
+  // bench always does the sensible thing without the operator having to look at the counts).
+  let target;
+  if (cur >= 1 && cur <= t.count) target = (Number(cur) % t.count) + 1;
+  else {
+    const counts = db.prepare('SELECT team_no, COUNT(*) c FROM team_assignments WHERE program_id = ? AND run_date = ? GROUP BY team_no').all(programId, rd);
+    const size = (n) => (counts.find(r => Number(r.team_no) === n) || {}).c || 0;
+    target = 1; for (let n = 2; n <= t.count; n++) if (size(n) < size(target)) target = n;
+  }
+  if (!assignTeam(programId, rd, email, target, lc(req.userEmail)))
+    return res.redirect(`${back}?err=${encodeURIComponent(`Side ${target} is full.`)}`);
+  res.redirect(back);
+}
+// Off the sides entirely — sitting out, subbed, gone home. Their floor seat is untouched.
+function runTeamBench(programId, req, res) {
+  const t = teamsFeature(programId); if (!t) return res.status(404).send('Not found');
+  const g = programGate(programId, req, res); if (!g) return;
+  const p = P(programId), back = `${p.paths.run}/teams`;
+  if (!g.canOperate) return res.redirect(p.paths.run);
+  clearTeamAssignment(programId, runNightFor(programId), lc(String(req.body.email || '').trim()));
+  res.redirect(back);
+}
+// Wipe the sides and start again — faster than benching thirteen people one at a time.
+function runTeamsClear(programId, req, res) {
+  const t = teamsFeature(programId); if (!t) return res.status(404).send('Not found');
+  const g = programGate(programId, req, res); if (!g) return;
+  const p = P(programId), back = `${p.paths.run}/teams`;
+  if (!g.canOperate) return res.redirect(p.paths.run);
+  const rd = runNightFor(programId);
+  clearRunTeams(programId, rd);
+  audit(req.userEmail, 'admin', `${p.config.logTag || 'run'}:teams-clear`, rd);
+  res.redirect(`${back}?msg=${encodeURIComponent('Sides cleared.')}`);
 }
 // Operator: assign/move any floor player, or unassign (team 0/blank).
 function runTeamAssign(programId, req, res) {
@@ -6861,7 +6985,10 @@ const ladderCfg = (programId) => (P(programId).config.features || {}).ladder || 
 // (Audit 2026-09-08 — pickleball ends at 20:00, so the bug opened exactly at the buzzer.)
 // Rule: if today is a run day for this program, today IS the night. Otherwise use the scheduled
 // date, which is what a mid-week look at the board should show.
-function ladderRunDate(programId) {
+function runNightFor(programId) {
+  // Basketball predates the generic engine and keeps its date in nextRunDate(); every other program
+  // stores its own. Getting this wrong doesn't error, it silently reads the WRONG NIGHT — which is
+  // how teams and results end up on next week.
   const scheduled = Number(programId) === 1 ? nextRunDate() : programRunDate(programId);
   const today = ymdLocal(new Date(schedNow()));
   if (scheduled === today) return today;                 // run day, before the end hour
@@ -6869,6 +6996,7 @@ function ladderRunDate(programId) {
   const todayIsRunDay = dow != null && new Date(`${today}T12:00:00`).getDay() === Number(dow);
   return todayIsRunDay ? today : scheduled;
 }
+const ladderRunDate = runNightFor;   // the ladder's original name; same night, one implementation
 // Is award voting open? The award is a season-END event, so the config default is closed — but
 // opening it must NOT need a code edit and a restart on the last night of the season. The operator
 // toggle writes ladder_noms_<pid>; absent, the program's config decides. Same shape as every other
@@ -7534,6 +7662,13 @@ app.post('/pickleball/announce', requireLogin, (req, res) => runAnnounce(2, req,
 app.post('/pickleball/announce/retract', requireLogin, (req, res) => runAnnounceRetract(2, req, res));
 app.post('/pickleball/announce/cancel', requireLogin, (req, res) => runAnnounceCancel(2, req, res));
 app.post('/pickleball/kiosk-rotate', requireLogin, (req, res) => runKioskRotate(2, req, res));
+// Teams board for the advanced run — its roster comes from Planning Center, so the sync lives here
+// too. Basketball's routes are written out rather than mounted by mountRunProgram (id < 3).
+app.get('/checkin/teams', requireLogin, (req, res) => runTeamsBoard(1, req, res));
+app.post('/checkin/roster-sync', requireLogin, (req, res) => runRosterSync(1, req, res));
+app.post('/checkin/team/swap', requireLogin, (req, res) => runTeamSwap(1, req, res));
+app.post('/checkin/team/bench', requireLogin, (req, res) => runTeamBench(1, req, res));
+app.post('/checkin/teams/clear', requireLogin, (req, res) => runTeamsClear(1, req, res));
 // Ladder — the season board the court screen shows. Same handlers mountRunProgram registers for
 // every other program; pickleball just has its routes written out like the rest of its block.
 app.get('/pickleball/ladder', requireLogin, (req, res) => runLadderGet(2, req, res));
@@ -7755,7 +7890,14 @@ const PROGRAM_DEFS = {
       positions: [['PG', 'Point'], ['SG', 'Shoot'], ['SF', 'Small F'], ['PF', 'Power F'], ['C', 'Center']],   // profile picker chips (F6: per-program)
       // autoRenewPenalty: { strikes: 3, pauseWeeks: 2 },   // DARK — add to police team no-shows (autoRunState assess + seatRenewers skip already wired; marker app_settings 'arassess_done')
       mentionTag: 'mention', chatSeqKey: 'chat_seq',   // push-dedup tag + app_settings key for this room
-      features: { teams: false, groupQueue: false },
+      // TWO sides, because that is what a full-court run is. `size` is deliberately loose (cap is 15,
+      // so 10 a side never legitimately fills): the size guard exists to stop a mis-tap stacking one
+      // team, and a guard that fights the operator mid-night is worse than no guard.
+      // selfServe:false — sides are called by whoever is running the night, not self-picked.
+      features: { teams: { count: 2, size: 10, opensAt: 'lock', selfServe: false }, groupQueue: false },
+      // This run signs up in Planning Center, not here, so its floor is synced in. Prefix only
+      // NARROWS the candidate signups; pcoSignupRosterForDate matches on the event date.
+      pcoSignupPrefix: 'YA Advanced Run - Wed',
     },
     unread: (email, aid) => ({ group: groupUnread(email), gm: groupMentionUnread(email, aid) }),
     hubCard: (req) => {
@@ -8275,6 +8417,11 @@ function mountRunProgram(app, program) {
   app.post(`${b}/team/leave`, requireLogin, (req, res) => runTeamLeave(id, req, res));
   app.post(`${b}/team/assign`, requireLogin, (req, res) => runTeamAssign(id, req, res));
   app.post(`${b}/team/fill`, requireLogin, (req, res) => runTeamFill(id, req, res));
+  app.get(`${b}/teams`, requireLogin, (req, res) => runTeamsBoard(id, req, res));
+  app.post(`${b}/team/swap`, requireLogin, (req, res) => runTeamSwap(id, req, res));
+  app.post(`${b}/team/bench`, requireLogin, (req, res) => runTeamBench(id, req, res));
+  app.post(`${b}/teams/clear`, requireLogin, (req, res) => runTeamsClear(id, req, res));
+  app.post(`${b}/roster-sync`, requireLogin, (req, res) => runRosterSync(id, req, res));
   app.post(`${b}/penalty/clear`, requireLogin, (req, res) => runPenaltyClear(id, req, res));  // operator: forgive an auto-renew strike/pause
   // Queue-with-friends (registered for every program; the handlers no-op unless config.features.groupQueue).
   // Parties are created/managed on the FRIENDS tab now (/friends/party/*); the run keeps only
@@ -8408,7 +8555,8 @@ function buildPrograms() {
   // ladder: the path only when that program keeps score, '' otherwise — so a view can offer the
   // link without knowing anything about the feature flag.
   for (const [id, p] of PROGRAMS) meta[id] = { chat: p.paths.chat, season: p.paths.season, seasonLabel: p.seasonLabel,
-    ladder: ((p.config.features || {}).ladder ? `${p.paths.run}/ladder` : '') };
+    ladder: ((p.config.features || {}).ladder ? `${p.paths.run}/ladder` : ''),
+    teams: ((p.config.features || {}).teams ? `${p.paths.run}/teams` : '') };
   setProgramMeta(meta);
   // Same idea for the PCO sync: it labels the "sports played" custom field from the registry, so
   // adding a program needs no edit in pco.js. Built from the program KEY (the canonical sport

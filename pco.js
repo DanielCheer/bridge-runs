@@ -1070,6 +1070,87 @@ export function pcoStatus() {
 // The email is the ladder's identity, so a person with no email address in Planning Center is
 // returned with email:'' and the caller decides — silently dropping them would make a roster that
 // is quietly short, which is worse than a visible skip count.
+// ONE NIGHT'S REGISTERED PLAYERS, from Planning Center Registrations.
+//
+// The advanced run signs up in PCO, not in this app, so the app's floor is empty for it and every
+// floor-derived feature (teams, the door screen, the ladder picker) has nothing to work with. This
+// pulls the week's roster so nobody re-types thirteen names.
+//
+// The signup is resolved by DATE, never by title. The 13 weekly signups are hand-named
+// ("YA Advanced Run - Wed Sep 23") and a typo in one would silently sync the WRONG night's roster —
+// which is worse than syncing nothing, because it looks like it worked. The title prefix only
+// narrows the candidates; `signup_times.starts_at` decides.
+export async function pcoSignupRosterForDate(namePrefix, ymd) {
+  if (!pcoAuthMode()) throw new Error('Planning Center is not connected.');
+  const prefix = String(namePrefix || '').toLowerCase();
+  // 1. Candidate signups by title prefix (cheap filter; the date check below is the real one).
+  const candidates = [];
+  let path = '/registrations/v2/signups?per_page=100';
+  while (path) {
+    const json = await pcoFetch(path);
+    for (const d of json.data || []) {
+      const a = d.attributes || {};
+      if (a.archived) continue;
+      if (prefix && !String(a.name || '').toLowerCase().startsWith(prefix)) continue;
+      candidates.push({ id: String(d.id), name: a.name || '' });
+    }
+    const next = json.links?.next;
+    path = next ? next.replace(/^https?:\/\/[^/]+/, '') : null;
+  }
+  // 2. The one whose event STARTS on ymd, in the church's local time (the API answers in UTC, and a
+  //    Wednesday 8:30 PM run is already "Thursday" there — comparing raw ISO would miss every week).
+  let signup = null;
+  for (const c of candidates) {
+    const t = await pcoFetch(`/registrations/v2/signups/${c.id}/signup_times?per_page=10`);
+    const starts = (t.data || []).map(x => x.attributes?.starts_at).filter(Boolean);
+    if (starts.some(iso => localYmd(iso) === ymd)) { signup = c; break; }
+  }
+  if (!signup) return { signup: null, people: [] };
+  // 3. Its attendees. Cancelled and waitlisted rows are returned too so the caller can decide;
+  //    only `active` people belong on a floor.
+  const people = [];
+  let ap = `/registrations/v2/signups/${signup.id}/attendees?per_page=100&include=person`;
+  while (ap) {
+    const json = await pcoFetch(ap);
+    const names = {};
+    for (const i of json.included || []) if (i.type === 'Person') names[i.id] = i.attributes || {};
+    for (const d of json.data || []) {
+      const a = d.attributes || {};
+      const pid = d.relationships?.person?.data?.id;
+      const pa = names[pid] || {};
+      people.push({
+        pcoId: pid ? String(pid) : '',
+        name: (pa.name || [pa.first_name, pa.last_name].filter(Boolean).join(' ')).trim() || 'Player',
+        email: '',
+        active: !!a.active && !a.canceled,
+        waitlisted: !!a.waitlisted,
+      });
+    }
+    const next = json.links?.next;
+    ap = next ? next.replace(/^https?:\/\/[^/]+/, '') : null;
+  }
+  // 4. Emails, one call each. The attendee payload carries no address, and email is this app's
+  //    identity everywhere — without it a synced player cannot match their own account.
+  for (const p of people) {
+    if (!p.pcoId) continue;
+    try {
+      const r = await pcoFetch(`/people/v2/people/${p.pcoId}?include=emails`);
+      const first = (r.included || []).find(i => i.type === 'Email');
+      if (first) p.email = String(first.attributes?.address || '').toLowerCase();
+    } catch { /* leave blank; the caller mints a synthetic address */ }
+  }
+  return { signup, people };
+}
+// A UTC instant's calendar date in the SERVER's local time — the same convention ymdLocal() uses in
+// server.js, so a signup matches the run date the app already computed. (The box runs in Eastern;
+// deriving the date any other way would put a Wednesday 8:30 PM run on Thursday.)
+function localYmd(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 export async function pcoGroupRoster(groupId) {
   if (!pcoAuthMode()) throw new Error('Planning Center is not connected.');
   const out = [];
