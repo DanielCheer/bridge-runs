@@ -5888,33 +5888,52 @@ function simplePartition(programId, rd) {
   return { floor: rows.slice(0, cap), wait: rows.slice(cap), rows };
 }
 function pkPartition(rd) { return partitionFor(2, rd); }
-// ---------- WEEKLY ROSTER SYNC (Planning Center Registrations -> this run's floor) ----------
-// The advanced run's roster lives in PCO, so `checkins` is empty for it and every floor-derived
-// feature is blind. Pulling the week's registrants in as checkins makes the EXISTING machinery
-// (partition, teams, the door screen) work with no new concepts — the floor is simply sourced
-// from PCO instead of from people tapping "I'm in".
+// ---------- WEEKLY ROSTER SYNC (Planning Center Registrations -> run_roster) ----------
+// This writes to run_roster, NOT to checkins. See the table comment in db.js: checkins is an
+// economy (sweep, offers, penalties) that assumes a row can respond, and a synced registrant never
+// opens this app. The first version of this wrote to checkins and the confirm sweep would have
+// deleted the whole roster at 4:30 PM on run day.
 //
-// Rows are marked auto_seated=1, the same flag auto-renew uses: it means "the app put them here",
-// not "they checked themselves in".
+// A sync is a full RECONCILE of its own source, not an append: someone who cancels in Planning
+// Center after the first sync has to actually leave the list, or re-syncing courtside silently
+// keeps a player who is not coming.
 async function syncRunRosterFromPco(programId, rd, byEmail) {
   const cfg = P(programId).config;
   if (!cfg.pcoSignupPrefix) throw new Error('This run has no Planning Center signup configured.');
   const { signup, people } = await pcoSignupRosterForDate(cfg.pcoSignupPrefix, rd);
-  if (!signup) return { signup: null, added: 0, skipped: 0, total: 0 };
-  const ins = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, program_id, auto_seated) VALUES (?,?,?,?,1)');
-  let added = 0, skipped = 0;
-  for (const person of people) {
-    // Only people actually holding a spot. A cancelled or waitlisted registration is not a floor
-    // seat, and seating them would quietly overfill the night.
-    if (!person.active || person.waitlisted) { skipped++; continue; }
-    // No address in PCO = no identity here. Mint one in the app's existing synthetic family so the
-    // player still appears and can be put on a side; it simply never links to an account.
-    const email = person.email || `pco-${person.pcoId || Math.random().toString(36).slice(2)}@adv.local`;
-    if (ins.run(rd, lc(email), person.name, programId).changes) added++;
+  if (!signup) return { signup: null, added: 0, removed: 0, kept: 0, skipped: 0 };
+  // Only people actually holding a spot. A cancelled or waitlisted registration is not on the
+  // roster, and showing them would have the operator building sides around someone who isn't there.
+  const active = people.filter(x => x.active && !x.waitlisted);
+  const seen = new Set();
+  const rows = [];
+  for (const person of active) {
+    // No address in PCO = no identity here. A synthetic one keyed on the PCO person id is STABLE
+    // across syncs; a random one would mint a fresh phantom player every time the button is tapped.
+    const email = lc(person.email || (person.pcoId ? `pco-${person.pcoId}@adv.local` : ''));
+    if (!email || seen.has(email)) continue;   // one row per human, even if PCO lists them twice
+    seen.add(email);
+    rows.push({ email, name: person.name });
   }
-  audit(byEmail, 'admin', `${P(programId).config.logTag || 'run'}:roster-sync`,
-    `${rd} from "${signup.name}" — +${added} seated, ${skipped} not active`);
-  return { signup, added, skipped, total: people.length };
+  let added = 0, kept = 0, removed = 0;
+  transact(() => {
+    const before = new Set(db.prepare("SELECT email FROM run_roster WHERE program_id = ? AND run_date = ? AND source = 'pco'")
+      .all(programId, rd).map(r => lc(r.email)));
+    const ins = db.prepare(`INSERT INTO run_roster (program_id, run_date, email, name, source) VALUES (?,?,?,?,'pco')
+      ON CONFLICT(program_id, run_date, email) DO UPDATE SET name = excluded.name, synced_at = datetime('now')`);
+    for (const r of rows) { ins.run(programId, rd, r.email, r.name); before.has(r.email) ? kept++ : added++; }
+    // Anyone this source put here who is no longer registered. Hand-added rows (source <> 'pco')
+    // are never touched by a sync.
+    const gone = [...before].filter(e => !seen.has(e));
+    for (const e of gone) {
+      db.prepare("DELETE FROM run_roster WHERE program_id = ? AND run_date = ? AND email = ? AND source = 'pco'").run(programId, rd, e);
+      clearTeamAssignment(programId, rd, e);   // and off whichever side they were on
+    }
+    removed = gone.length;
+  });
+  audit(byEmail, 'admin', `${cfg.logTag || 'run'}:roster-sync`,
+    `${rd} from "${signup.name}" — ${added} new, ${kept} unchanged, ${removed} no longer registered`);
+  return { signup, added, removed, kept, skipped: people.length - active.length };
 }
 function runRosterSync(programId, req, res) {
   const cfg = P(programId).config;
@@ -5924,11 +5943,24 @@ function runRosterSync(programId, req, res) {
   const rd = runNightFor(programId);
   syncRunRosterFromPco(programId, rd, req.userEmail).then((r) => {
     if (!r.signup) return res.redirect(`${back}?err=${encodeURIComponent(`No Planning Center signup found for ${runLabelFor(rd)}.`)}`);
-    res.redirect(`${back}?msg=${encodeURIComponent(`${r.added} added from ${r.signup.name}${r.skipped ? ` (${r.skipped} cancelled or waitlisted, left off)` : ''}.`)}`);
+    const bits = [`${r.added + r.kept} registered`];
+    if (r.added) bits.push(`${r.added} new`);
+    if (r.removed) bits.push(`${r.removed} cancelled, removed`);
+    if (r.skipped) bits.push(`${r.skipped} cancelled or waitlisted in PCO`);
+    res.redirect(`${back}?msg=${encodeURIComponent(`${r.signup.name} — ${bits.join(' · ')}.`)}`);
   }).catch((e) => {
     audit(req.userEmail, 'admin', `${cfg.logTag || 'run'}:roster-sync-failed`, String(e.message).slice(0, 120));
     res.redirect(`${back}?err=${encodeURIComponent(String(e.message).slice(0, 140))}`);
   });
+}
+// Who the teams board arranges. A run whose sign-ups live in Planning Center uses its synced
+// roster; every other program uses the app's own floor, exactly as the teams feature always has.
+function teamsRosterFor(programId, rd) {
+  if (P(programId).config.pcoSignupPrefix) {
+    return db.prepare('SELECT email, name FROM run_roster WHERE program_id = ? AND run_date = ? ORDER BY name COLLATE NOCASE')
+      .all(programId, rd).map(r => ({ email: lc(r.email), name: r.name }));
+  }
+  return teamFloor(programId, rd).map(p => ({ email: lc(p.email), name: p.name || p.email.split('@')[0] }));
 }
 // ---------- RUN TEAMS (Phase 5) — program-generic, config-driven (config.features.teams) ----------
 // Numbered teams (1..count) players join after the roster locks; count/size come from config so the
@@ -6021,16 +6053,22 @@ function runTeamLeave(programId, req, res) {
 function teamsBoardData(programId) {
   const rd = runNightFor(programId);
   const t = teamsFeature(programId);
-  const part = partitionFor(programId, rd);
-  const floor = teamFloor(programId, rd, part);
-  const seats = new Map(runTeamsFor(programId, rd, part).map(r => [lc(r.email), r.team_no]));
+  const roster = teamsRosterFor(programId, rd);
+  // Read assignments straight from the table. runTeamsFor()'s self-heal drops anyone not on the
+  // app's FLOOR — correct for a run that checks in here, wrong for one whose roster is synced,
+  // where it would wipe every side on the next page load.
+  const here = new Set(roster.map(r => r.email));
+  const seats = new Map(db.prepare('SELECT email, team_no FROM team_assignments WHERE program_id = ? AND run_date = ?')
+    .all(programId, rd).map(r => [lc(r.email), r.team_no]));
   const sides = Array.from({ length: t ? t.count : 0 }, () => []);
   const bench = [];
-  for (const pl of floor) {
-    const n = seats.get(lc(pl.email));
-    const row = { email: pl.email, name: pl.name || pl.email.split('@')[0] };
-    if (n >= 1 && n <= sides.length) sides[n - 1].push(row); else bench.push(row);
+  for (const pl of roster) {
+    const n = seats.get(pl.email);
+    if (n >= 1 && n <= sides.length) sides[n - 1].push(pl); else bench.push(pl);
   }
+  // A side assignment for someone no longer on the roster is dead weight; drop it so the counts
+  // shown on the board are the counts on the floor.
+  for (const [email] of seats) if (!here.has(email)) clearTeamAssignment(programId, rd, email);
   return { rd, sides, bench, count: t ? t.count : 0 };
 }
 function runTeamsBoard(programId, req, res) {
@@ -6057,9 +6095,14 @@ function runTeamSwap(programId, req, res) {
   if (!g.canOperate) return res.redirect(p.paths.run);
   const rd = runNightFor(programId);
   const email = lc(String(req.body.email || '').trim());
-  if (!teamFloor(programId, rd).some(x => lc(x.email) === email)) return res.redirect(back);
+  if (!teamsRosterFor(programId, rd).some(x => x.email === email)) return res.redirect(back);
   const cur = (db.prepare('SELECT team_no FROM team_assignments WHERE program_id = ? AND run_date = ? AND email = ?')
     .get(programId, rd, email) || {}).team_no;
+  // IDEMPOTENCY. The tap says "move them off the side I can see them on". A double-tap on gym wifi,
+  // a browser resubmit, or a second operator working from a stale board would otherwise toggle them
+  // straight back and look like the tap never landed. If they have already moved, do nothing.
+  const from = String(req.body.from ?? '');
+  if (from !== '' && String(cur ?? '') !== from) return res.redirect(back);
   // From a side -> the other side. From the bench -> whichever side is shorter (so a tap on the
   // bench always does the sensible thing without the operator having to look at the counts).
   let target;

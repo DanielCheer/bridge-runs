@@ -5626,10 +5626,14 @@ export function teamsBoardPage({
   // A player button posts only their address; the server decides where they land. Keeping the
   // destination server-side is what lets one tap mean "the other side" from either side, and
   // "the shorter side" from the bench, without the page having to know the counts.
-  const chip = (p, benchable = true) => `
+  // `from` is the side the operator can SEE them on (blank = bench). The server refuses the move if
+  // they have since been moved elsewhere, so a double-tap or a stale second phone can't silently
+  // toggle a player back and forth.
+  const chip = (p, from = '', benchable = true) => `
     <div class="tmrow">
       <form method="post" action="${esc(basePath)}/team/swap" style="flex:1;min-width:0;display:flex">
         <input type="hidden" name="email" value="${esc(p.email)}">
+        <input type="hidden" name="from" value="${esc(String(from))}">
         <button class="tmname" type="submit" title="Move ${esc(p.name)} to the other side">${esc(p.name)}</button>
       </form>
       ${benchable ? `<form method="post" action="${esc(basePath)}/team/bench" style="display:flex">
@@ -5640,7 +5644,7 @@ export function teamsBoardPage({
   const side = (players, i) => `
     <div class="tmside">
       <div class="tmhead"><h3>Side ${i + 1}</h3><span class="n">${players.length}</span></div>
-      ${players.length ? players.map(p => chip(p)).join('') : '<p class="tmempty">Tap a name from the bench.</p>'}
+      ${players.length ? players.map(p => chip(p, i + 1)).join('') : '<p class="tmempty">Tap a name from the bench.</p>'}
     </div>`;
   const total = sides.reduce((n, x) => n + x.length, 0) + bench.length;
   return HEAD(`Teams — ${esc(sport)}`, 'has-tabs' + (theme ? ' ' + theme : ''))
@@ -5659,7 +5663,7 @@ export function teamsBoardPage({
     <div class="tmbench">
       <div class="subhead">Bench &middot; ${bench.length}</div>
       <div class="card" style="padding:10px">
-        ${bench.length ? bench.map(p => chip(p, false)).join('')
+        ${bench.length ? bench.map(p => chip(p, '', false)).join('')
           : '<p class="tmempty" style="margin:0">Everyone&rsquo;s on a side.</p>'}
       </div>
     </div>

@@ -1099,12 +1099,23 @@ export async function pcoSignupRosterForDate(namePrefix, ymd) {
   }
   // 2. The one whose event STARTS on ymd, in the church's local time (the API answers in UTC, and a
   //    Wednesday 8:30 PM run is already "Thursday" there — comparing raw ISO would miss every week).
-  let signup = null;
+  const matches = [];
   for (const c of candidates) {
-    const t = await pcoFetch(`/registrations/v2/signups/${c.id}/signup_times?per_page=10`);
-    const starts = (t.data || []).map(x => x.attributes?.starts_at).filter(Boolean);
-    if (starts.some(iso => localYmd(iso) === ymd)) { signup = c; break; }
+    // Paginated: a signup can carry many times (a single season-long signup would carry one per
+    // week), and stopping at the first page would silently miss every later week.
+    let tp = `/registrations/v2/signups/${c.id}/signup_times?per_page=100`, hit = false;
+    while (tp && !hit) {
+      const t = await pcoFetch(tp);
+      hit = (t.data || []).some(x => x.attributes?.starts_at && localYmd(x.attributes.starts_at) === ymd);
+      const nx = t.links?.next;
+      tp = nx ? nx.replace(/^https?:\/\/[^/]+/, '') : null;
+    }
+    if (hit) matches.push(c);
   }
+  // Ambiguity is reported, never guessed. Two live signups for one night means a duplicate was
+  // created; silently syncing whichever the API listed first would look like it worked.
+  if (matches.length > 1) throw new Error(`${matches.length} Planning Center signups match that date (${matches.map(m => m.name).join('; ')}). Archive the duplicate first.`);
+  signup = matches[0] || null;
   if (!signup) return { signup: null, people: [] };
   // 3. Its attendees. Cancelled and waitlisted rows are returned too so the caller can decide;
   //    only `active` people belong on a floor.

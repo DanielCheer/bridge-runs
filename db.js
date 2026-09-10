@@ -621,6 +621,29 @@ db.exec(`
   -- Deliberately a COUNT, not rows-per-person: nobody is taking names at an open gym, and inventing
   -- one row per head would be fabricating attendance records that later look like real identities.
   -- One row per program-night (PK), so re-entering a corrected number overwrites rather than doubles.
+  -- THE NIGHT'S ROSTER, for a run whose sign-ups live somewhere else (Planning Center).
+  --
+  -- Deliberately NOT checkins. checkins is a cap/waitlist/offer/confirm ECONOMY built around
+  -- people who use this app: unconfirmed floor seats are swept at the confirm cutoff, freed seats
+  -- are offered onward with a 3h hold, auto_seated rows are policed by the penalty engine. Every
+  -- one of those rules assumes the row can RESPOND. A synced registrant cannot — they never open
+  -- this app — so putting them in checkins had the sweep deleting the entire roster at 4:30 PM on
+  -- run day and the offer engine emailing spot-offers to synthetic addresses (found in review,
+  -- 2026-09-10, before it ever ran on a live night).
+  --
+  -- So this is a plain LIST: who is registered for this night, nothing more. It grants no floor
+  -- seat, claims no waiver, and no scheduler touches it. The teams board reads it to know who is
+  -- around; that is its whole job. Same reasoning as ladder_players.
+  CREATE TABLE IF NOT EXISTS run_roster (
+    program_id INTEGER NOT NULL,
+    run_date   TEXT NOT NULL,
+    email      TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    source     TEXT NOT NULL DEFAULT 'pco',   -- where the row came from; a sync only ever reconciles its own
+    synced_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (program_id, run_date, email)
+  );
+  CREATE INDEX IF NOT EXISTS idx_run_roster_night ON run_roster(program_id, run_date);
   CREATE TABLE IF NOT EXISTS run_headcount (
     program_id INTEGER NOT NULL,
     run_date   TEXT NOT NULL,
