@@ -652,6 +652,43 @@ db.exec(`
     at         TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (program_id, run_date)
   );
+  -- Full-court game results, logged from the teams board. A game EXISTS only once someone says
+  -- who won: there is no start, no clock, no in-progress state. On a winners-stay court the sides
+  -- reform constantly, so the arrangement showing on the board when the result is tapped IS the
+  -- game that just finished, and that is what gets snapshotted into run_game_players.
+  --
+  -- ladder_games cannot hold this. It is doubles-shaped on purpose (w1,w2,l1,l2) because a
+  -- pickleball pairing is exactly two people; a basketball side is three to seven and changes
+  -- every game. Widening it to wN columns would just move the same wrong assumption.
+  --
+  -- The score is OPTIONAL and that is deliberate. Winner is one tap and can be trusted from a
+  -- phone between games; a remembered scoreline cannot, and an invented one is silently wrong
+  -- data on a public board. NULL means nobody kept count, which the standings read as "no point
+  -- differential from this game" rather than as a zero.
+  CREATE TABLE IF NOT EXISTS run_games (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    program_id INTEGER NOT NULL,
+    run_date   TEXT NOT NULL,
+    win_side   INTEGER NOT NULL,           -- the team_no that won, as sides stood at logging time
+    w_score    INTEGER,                    -- NULL together: winner recorded without a score
+    l_score    INTEGER,
+    logged_by  TEXT NOT NULL,              -- who tapped it; settles an undo dispute, like ladder_games
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_run_games_prog ON run_games(program_id, run_date);
+  -- Who was on a side when the result was logged. One row per player, not a fixed column per
+  -- seat: it makes every identity operation (rename, merge, tombstone) a one-column UPDATE
+  -- instead of the four-column dance ladder_games needs, and a benched player simply has no row.
+  --
+  -- There is no "won" column. Winning is derived from side = run_games.win_side, because a
+  -- stored derived fact is the thing that goes stale when a game is undone or corrected.
+  CREATE TABLE IF NOT EXISTS run_game_players (
+    game_id INTEGER NOT NULL,
+    email   TEXT NOT NULL,
+    side    INTEGER NOT NULL,              -- the team_no they held at logging time
+    PRIMARY KEY (game_id, email)           -- one person cannot be on both sides of one game
+  );
+  CREATE INDEX IF NOT EXISTS idx_run_game_players_email ON run_game_players(email);
 `);
 // program.config (2026-07-31) — the JSON spec for programs CREATED IN THE APP (admin "New program"
 // wizard). NULL for the four code-defined programs above: buildPrograms prefers PROGRAM_DEFS by id,
@@ -981,6 +1018,16 @@ function rekeyEmailTx(oldEmail, newEmail) {
       (SELECT 1 FROM ladder_nominations o WHERE o.voter=? AND o.program_id=ladder_nominations.program_id
         AND o.run_date=ladder_nominations.run_date)`).run(newEmail, oldEmail);
     db.prepare('UPDATE ladder_nominations SET voter=? WHERE voter=?').run(newEmail, oldEmail);
+    // Basketball game seats: one column, so a plain carry. OR IGNORE first, then delete the
+    // leftovers, because (game_id,email) collides when BOTH addresses were on the same game --
+    // which is exactly the duplicate-profile case this edit is usually fixing.
+    db.prepare('UPDATE OR IGNORE run_game_players SET email=? WHERE email=?').run(newEmail, oldEmail);
+    db.prepare('DELETE FROM run_game_players WHERE email=?').run(oldEmail);
+    // run_roster is the per-night registered list. It was missing from this cascade: without it a
+    // mid-week email edit orphaned the roster row, and the teams board's dead-weight sweep then
+    // cleared the player's SEAT on the next load. Same collision shape as above.
+    db.prepare('UPDATE OR IGNORE run_roster SET email=? WHERE email=?').run(newEmail, oldEmail);
+    db.prepare('DELETE FROM run_roster WHERE email=?').run(oldEmail);
     // pco_outbox rows are keyed on email but not UNIQUE on it — a plain carry is safe, and the
     // applicants.pco_id link rides the applicants row itself (updated by the caller in this txn).
     db.prepare('UPDATE pco_outbox            SET email=?       WHERE email=?').run(newEmail, oldEmail);

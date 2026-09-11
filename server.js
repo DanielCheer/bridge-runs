@@ -32,7 +32,7 @@ import {
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap, setProgramMeta,
   STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, demoProfileCard, pickleballPage, runPage, runsPage, pkJoinPage, runJoinPage, pastRunPage, waiverPage,
   friendsPage, friendsSearchFragment, chatLockedPage, runChatPage, pcoAdminPage, programsAdminPage, kioskPage, analyticsPage, auditViewerPage, runHistoryPage,
-  ladderPage, ladderBoardPage, teamsBoardPage,
+  ladderPage, ladderBoardPage, teamsBoardPage, leaderboardPage,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -4300,6 +4300,13 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
       migrateConfirmMarkers(newRunDate, effectiveConfirmCutoff(P(1).config.confirmCutoff), 'autoping_done', 'confirmsweep_done');
       db.prepare('UPDATE checkins SET run_date = ? WHERE run_date = ? AND program_id = 1').run(newRunDate, oldRunDate);
       db.prepare('UPDATE regular_optout SET run_date = ? WHERE run_date = ? AND program_id = 1').run(newRunDate, oldRunDate);
+      // The night-scoped tables the teams board runs on. They were missing here: moving a run left
+      // the Planning Center roster and both sides stranded on the old date, so the board rendered
+      // blank until someone re-synced, and any games logged that night dropped off the leaderboard
+      // while Undo silently no-opped on a date that no longer had them.
+      db.prepare('UPDATE run_roster SET run_date = ? WHERE run_date = ? AND program_id = 1').run(newRunDate, oldRunDate);
+      db.prepare('UPDATE team_assignments SET run_date = ? WHERE run_date = ? AND program_id = 1').run(newRunDate, oldRunDate);
+      migrateGamesNight(1, oldRunDate, newRunDate);
       db.exec('COMMIT');
     } catch (e) { db.exec('ROLLBACK'); console.error(`[rundate] migration FAILED: ${e.message}`); throw e; }
   }
@@ -5270,8 +5277,12 @@ app.post('/admin/programs/delete', requireAdmin, (req, res) => {
   transact(() => {
     for (const t of ['program_membership', 'run_state', 'run_overrides', 'announcements', 'group_reads',
                      'regular_optout', 'team_assignments', 'group_reactions', 'votes', 'run_summary', 'metrics_events',
-                     'ladder_games', 'ladder_players', 'ladder_nominations', 'run_headcount'])
+                     'ladder_games', 'ladder_players', 'ladder_nominations', 'run_headcount',
+                     'run_roster', 'run_games'])
       db.prepare(`DELETE FROM ${t} WHERE program_id=?`).run(id);
+    // run_game_players has no program_id of its own — reach it through the games just deleted, or
+    // a reused id inherits orphaned seats pointing at game rows that no longer exist.
+    db.prepare('DELETE FROM run_game_players WHERE game_id NOT IN (SELECT id FROM run_games)').run();
     // Announcement dismissals key by announcement id — sweep rows orphaned by the announcements delete.
     db.prepare('DELETE FROM announcement_dismissals WHERE announcement_id NOT IN (SELECT id FROM announcements)').run();
     // Parties for this run are keyed by group, not program_id — reach them through their run rows.
@@ -5609,6 +5620,10 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
     // is not reached by any of the email-keyed sweeps above. Without this the deleted person stayed
     // in the picker and kept their name on the public wall board.
     purgeLadderIdentity(a.email);
+    // Same reasoning for the run roster + game results: a synced registrant is a THIRD identity
+    // space (they may never have had an app account at all). Their seats are tombstoned rather
+    // than deleted, so the games they played still show the right number of players a side.
+    purgeGameIdentity(a.email);
     // Social graph (Phase 6): drop every edge touching this person, in BOTH directions, so a
     // same-email re-registration can't inherit stale friendships/blocks (mirrors the votes purge).
     db.prepare('DELETE FROM social_edges WHERE from_email = ? OR to_email = ?').run(a.email, a.email);
@@ -6083,6 +6098,11 @@ function runTeamsBoard(programId, req, res) {
     email: req.userEmail, runDate: d.rd, dateLabel: runLabelFor(d.rd),
     sides: d.sides, bench: d.bench, basePath: p.paths.run,
     canSync: !!(p.config.pcoSignupPrefix && pcoConnected()),
+    // The fingerprint is what the sides looked like when this page rendered. The POST recomputes
+    // it and refuses on a mismatch, so a stale tab cannot solidify a game whose rosters have moved.
+    ...(gamesOn(programId)
+      ? { games: true, tonight: gamesTonight(programId, d.rd), fp: gameFingerprint(d.rd, gameSidesNow(programId, d.rd)) }
+      : {}),
     msg: String(req.query.msg || ''), err: String(req.query.err || ''),
     dmUnread: unreadCount(req.userEmail), groupUnread: cc.group, groupMention: cc.gm,
   }));
@@ -6148,6 +6168,218 @@ function runTeamAssign(programId, req, res) {
   // assignment. (Clearing above stays unconditional: clearing a stale row is always safe.)
   else if (teamFloor(programId, rd).some((p) => lc(p.email) === em)) assignTeam(programId, rd, em, n, req.userEmail);
   res.redirect(base);
+}
+// ---------------------------------------------------------------------------
+// Game results (teams board) + the leaderboard they feed.
+//
+// A game exists only once someone says who won. There is no start, no clock, no in-progress
+// state: on a winners-stay court the sides reform constantly, so the arrangement showing on the
+// board when the result is tapped IS the game that just finished. The one human contract is
+// "tap the winner before you re-mix", and the tonight-strip + one-tap Undo make a violation
+// visible and reversible rather than pretending code can prevent it.
+const GAME_MIN_SIDE = 3;     // below this the board is half-cleared, not a game
+const GAME_SCORE_MAX = 99;
+const gamesOn = (programId) => { const t = teamsFeature(programId); return !!(t && t.games && t.count === 2); };
+
+// The sides as they stand, READ ONLY. Deliberately not runTeamsFor(): its floor self-heal drops
+// anyone who is not on this app's floor, which is every Planning Center registrant — it would
+// both wipe the live sides and snapshot an empty game. Deliberately not teamsBoardData() either,
+// because that clears dead-weight assignments, and a POST that logs a result must not mutate the
+// board it is reading.
+function gameSidesNow(programId, rd) {
+  const t = teamsFeature(programId);
+  const roster = teamsRosterFor(programId, rd);
+  const here = new Set(roster.map(r => lc(r.email)));
+  const sides = Array.from({ length: t ? t.count : 0 }, () => []);
+  for (const r of db.prepare('SELECT email, team_no FROM team_assignments WHERE program_id = ? AND run_date = ?').all(programId, rd)) {
+    const em = lc(r.email), n = Number(r.team_no);
+    if (here.has(em) && n >= 1 && n <= sides.length) sides[n - 1].push(em);
+  }
+  return sides.map(s => s.sort());
+}
+// What the operator could see when the page rendered. A stale tab (last week's, a second phone,
+// the board left open past midnight) must REFUSE rather than solidify a game whose rosters have
+// since changed — the same doctrine as runTeamSwap's `from` anchor, widened to the whole board.
+function gameFingerprint(rd, sides) {
+  const body = rd + '|' + sides.map((s, i) => (i + 1) + ':' + s.join(',')).join('|');
+  return crypto.createHash('sha1').update(body).digest('hex').slice(0, 12);
+}
+// Tonight's games, newest first, with the rosters that were solidified with them.
+function gamesTonight(programId, rd) {
+  const rows = db.prepare('SELECT * FROM run_games WHERE program_id = ? AND run_date = ? ORDER BY id DESC').all(programId, rd);
+  if (!rows.length) return [];
+  const seats = db.prepare('SELECT p.game_id, p.email, p.side FROM run_game_players p JOIN run_games g ON g.id = p.game_id WHERE g.program_id = ? AND g.run_date = ?').all(programId, rd);
+  const names = ladderNames(programId, seats.map(s => s.email));
+  const byGame = new Map();
+  for (const s of seats) {
+    if (!byGame.has(s.game_id)) byGame.set(s.game_id, [[], []]);
+    const side = byGame.get(s.game_id)[s.side - 1];
+    if (side) side.push(names.get(lc(s.email)) || s.email);
+  }
+  return rows.map(r => {
+    const sides = byGame.get(r.id) || [[], []];
+    return {
+      id: r.id, win: r.win_side, ws: r.w_score, ls: r.l_score, at: r.created_at,
+      sides: sides.map(s => s.slice().sort()), counts: sides.map(s => s.length),
+    };
+  });
+}
+// Standings summed from the game rows on every read — never stored, so an Undo is simply correct
+// rather than needing a compensating write.
+function runGamesStandings(programId, from) {
+  const rows = db.prepare('SELECT p.email, p.side, g.win_side, g.w_score, g.l_score, g.run_date FROM run_game_players p JOIN run_games g ON g.id = p.game_id WHERE g.program_id = ? AND g.run_date >= ? ORDER BY g.id DESC').all(programId, from);
+  const players = new Map();
+  const nights = new Set();
+  for (const r of rows) {
+    const em = lc(r.email);
+    if (!players.has(em)) players.set(em, { email: em, w: 0, l: 0, scored: 0, pf: 0, pa: 0 });
+    const p = players.get(em);
+    const won = Number(r.side) === Number(r.win_side);
+    if (won) p.w++; else p.l++;
+    // Point differential exists ONLY for games somebody actually scored. A missing score is not a
+    // zero-point game, so it contributes nothing rather than dragging a differential toward zero.
+    if (r.w_score != null && r.l_score != null) {
+      p.scored++;
+      p.pf += won ? r.w_score : r.l_score;
+      p.pa += won ? r.l_score : r.w_score;
+    }
+    nights.add(r.run_date);
+  }
+  const names = ladderNames(programId, [...players.keys()]);
+  const fin = (p) => ({ ...p, label: names.get(p.email) || p.email, pd: p.pf - p.pa, played: p.w + p.l });
+  // Wins first (showing up and winning is the point), then win ratio, THEN differential.
+  // Differential ranks third here and not second as it does in pickleball, because a basketball
+  // margin is mostly the other four players' doing and only exists for the subset of games anyone
+  // scored — two tied players can have differentials drawn from different sample sizes.
+  const rank = (a, b) => {
+    if (b.w !== a.w) return b.w - a.w;
+    const ra = a.w / (a.played || 1), rb = b.w / (b.played || 1);
+    if (rb !== ra) return rb - ra;
+    if (b.pd !== a.pd) return b.pd - a.pd;
+    return String(a.label).localeCompare(String(b.label));
+  };
+  const gameCount = db.prepare('SELECT COUNT(*) c FROM run_games WHERE program_id = ? AND run_date >= ?').get(programId, from).c;
+  return { from, players: [...players.values()].map(fin).sort(rank), nights: nights.size, games: gameCount };
+}
+// Solidify the game showing on the board. One tap; the score is a second, optional one.
+function runGameLog(programId, req, res) {
+  if (!gamesOn(programId)) return res.status(404).send('Not found');
+  const g = programGate(programId, req, res); if (!g) return;
+  const p = P(programId), back = `${p.paths.run}/teams`;
+  if (!g.canOperate) return res.redirect(p.paths.run);
+  const fail = (m) => res.redirect(`${back}?err=${encodeURIComponent(m)}`);
+
+  const rd = runNightFor(programId);                 // recomputed here, never trusted from the form
+  const sides = gameSidesNow(programId, rd);
+  const win = Number(req.body.side || 0);
+  if (!(win >= 1 && win <= sides.length)) return fail('Pick which side won.');
+  if (sides.some(s => s.length < GAME_MIN_SIDE))
+    return fail(`Both sides need at least ${GAME_MIN_SIDE} players before a game can be logged.`);
+  if (String(req.body.fp || '') !== gameFingerprint(rd, sides))
+    return fail('The sides changed since this screen loaded — it just refreshed, tap again.');
+
+  // Score: both or neither, and the winner has to have outscored the loser.
+  const raw1 = String(req.body.s1 ?? '').trim(), raw2 = String(req.body.s2 ?? '').trim();
+  let ws = null, ls = null;
+  if (raw1 !== '' || raw2 !== '') {
+    if (raw1 === '' || raw2 === '') return fail('Enter both scores, or leave both blank.');
+    const n1 = Number(raw1), n2 = Number(raw2);
+    if (![n1, n2].every(n => Number.isInteger(n) && n >= 0 && n <= GAME_SCORE_MAX))
+      return fail(`Scores must be whole numbers between 0 and ${GAME_SCORE_MAX}.`);
+    ws = win === 1 ? n1 : n2; ls = win === 1 ? n2 : n1;
+    if (ws <= ls) return fail('The winning side has to have the higher score.');
+  }
+
+  // Gym wifi double-fire. A real game takes minutes, so the identical result logged again within
+  // seconds is a resubmit — answer as though it worked and write nothing.
+  const last = db.prepare("SELECT id FROM run_games WHERE program_id = ? AND run_date = ? AND win_side = ? AND created_at >= datetime('now','-20 seconds') ORDER BY id DESC LIMIT 1").get(programId, rd, win);
+  if (last) {
+    const prev = db.prepare('SELECT email, side FROM run_game_players WHERE game_id = ?').all(last.id);
+    const same = prev.length === sides.flat().length
+      && prev.every(r => (sides[r.side - 1] || []).includes(lc(r.email)));
+    if (same) return res.redirect(`${back}?msg=${encodeURIComponent('Already logged.')}`);
+  }
+
+  transact(() => {
+    const info = db.prepare('INSERT INTO run_games (program_id, run_date, win_side, w_score, l_score, logged_by) VALUES (?,?,?,?,?,?)')
+      .run(programId, rd, win, ws, ls, lc(req.userEmail));
+    const ins = db.prepare('INSERT INTO run_game_players (game_id, email, side) VALUES (?,?,?)');
+    sides.forEach((s, i) => s.forEach(em => ins.run(info.lastInsertRowid, em, i + 1)));
+  });
+  audit(req.userEmail, 'admin', `${ladderTag(programId)}:game:log`,
+    `${rd} side${win} ${sides.map(s => s.length).join('v')}${ws == null ? '' : ` ${ws}-${ls}`}`);
+  res.redirect(`${back}?msg=${encodeURIComponent(`Side ${win} won${ws == null ? '' : ` ${ws}-${ls}`}.`)}`);
+}
+// Undo the last game of TONIGHT — the mis-tap fix. Older nights are settled history; correcting
+// one is a merge/relog conversation, not a button on a phone mid-run.
+function runGameUndo(programId, req, res) {
+  if (!gamesOn(programId)) return res.status(404).send('Not found');
+  const g = programGate(programId, req, res); if (!g) return;
+  const p = P(programId), back = `${p.paths.run}/teams`;
+  if (!g.canOperate) return res.redirect(p.paths.run);
+  const rd = runNightFor(programId);
+  const last = db.prepare('SELECT * FROM run_games WHERE program_id = ? AND run_date = ? ORDER BY id DESC LIMIT 1').get(programId, rd);
+  if (!last) return res.redirect(`${back}?err=${encodeURIComponent('Nothing logged tonight.')}`);
+  transact(() => {
+    db.prepare('DELETE FROM run_game_players WHERE game_id = ?').run(last.id);
+    db.prepare('DELETE FROM run_games WHERE id = ?').run(last.id);
+  });
+  audit(req.userEmail, 'admin', `${ladderTag(programId)}:game:undo`, `${rd} side${last.win_side} (game ${last.id})`);
+  res.redirect(`${back}?msg=${encodeURIComponent('Last game removed.')}`);
+}
+// The leaderboard. Members can read it; only operators see the merge tool.
+function runLeaderboard(programId, req, res) {
+  if (!gamesOn(programId)) return res.status(404).send('Not found');
+  const g = programGate(programId, req, res); if (!g) return;
+  const p = P(programId);
+  const from = ladderFrom(programId);
+  const st = runGamesStandings(programId, from);
+  const rd = runNightFor(programId);
+  const a = applicantByEmail(req.userEmail), cc = p.unread(req.userEmail, a ? a.id : 0);
+  res.send(leaderboardPage({
+    program: programId, theme: p.config.theme || '', emoji: p.emoji, sport: p.displayName,
+    email: req.userEmail, basePath: p.paths.run, canOperate: !!g.canOperate,
+    from, players: st.players, nights: st.nights, games: st.games,
+    recent: gamesTonight(programId, rd), dateLabel: runLabelFor(rd),
+    msg: String(req.query.msg || ''), err: String(req.query.err || ''),
+    dmUnread: unreadCount(req.userEmail), groupUnread: cc.group, groupMention: cc.gm,
+  }));
+}
+// Two rows, one human. The roster sync keys identity on email, so the week a Planning Center
+// record gains a real address the same player starts a second column. Refuses when both were on
+// the SAME game, because that is not one person.
+function runGameMerge(programId, req, res) {
+  if (!gamesOn(programId)) return res.status(404).send('Not found');
+  const g = programGate(programId, req, res); if (!g) return;
+  const p = P(programId), back = `${p.paths.run}/leaderboard`;
+  if (!g.canOperate) return res.redirect(p.paths.run);
+  const from = lc(String(req.body.from || '').trim()), into = lc(String(req.body.into || '').trim());
+  if (!from || !into || from === into) return res.redirect(`${back}?err=${encodeURIComponent('Pick two different players.')}`);
+  const clash = db.prepare('SELECT g.run_date d FROM run_game_players p JOIN run_games g ON g.id = p.game_id WHERE g.program_id = ? AND p.email IN (?, ?) GROUP BY p.game_id HAVING COUNT(*) = 2 LIMIT 3').all(programId, from, into);
+  if (clash.length) return res.redirect(`${back}?err=${encodeURIComponent(
+    `Those two were on the same game (${[...new Set(clash.map(c => c.d))].join(', ')}), so they are not the same person.`)}`);
+  transact(() => {
+    db.prepare('UPDATE run_game_players SET email = ? WHERE email = ? AND game_id IN (SELECT id FROM run_games WHERE program_id = ?)')
+      .run(into, from, programId);
+  });
+  audit(req.userEmail, 'admin', `${ladderTag(programId)}:game:merge`, `${from} -> ${into}`);
+  res.redirect(`${back}?msg=${encodeURIComponent('Merged.')}`);
+}
+// A moved run date carries its games with it, or the night's results vanish from the board and
+// Undo silently no-ops on a date that no longer has any games.
+function migrateGamesNight(programId, oldRd, newRd) {
+  if (!oldRd || !newRd || oldRd === newRd) return;
+  db.prepare('UPDATE run_games SET run_date = ? WHERE program_id = ? AND run_date = ?').run(newRd, programId, oldRd);
+}
+// A hard-deleted person must not take everyone else's results with them. Their seats are rekeyed
+// to a tombstone so the games they were in still have the right number of players on each side.
+function purgeGameIdentity(email) {
+  const em = lc(String(email || '').trim()); if (!em) return;
+  const seats = db.prepare('SELECT 1 FROM run_game_players WHERE email = ? LIMIT 1').get(em);
+  db.prepare('DELETE FROM run_roster WHERE email = ?').run(em);
+  if (!seats) return;
+  const tomb = `former-${crypto.randomBytes(4).toString('hex')}@adv.local`;
+  db.prepare('UPDATE run_game_players SET email = ? WHERE email = ?').run(tomb, em);
 }
 // Operator/admin: forgive a member's auto-renew penalty — clear strikes + lift any pause. The safety
 // valve for a false strike or a member with a good reason. Program-generic; works for any run that
@@ -7070,7 +7302,13 @@ function ladderNames(programId, emails) {
   const list = [...new Set(emails.map(lc).filter(Boolean))];
   if (!list.length) return out;
   const marks = list.map(() => '?').join(',');
-  // The ladder's own roster first — for a ladder-only player it is the ONLY source of a name, and
+  // The Planning Center roster first, and lowest priority. For a synced registrant it is the only
+  // name the app ever sees (their address is a synthetic pco-<id>@adv.local), so without this pass
+  // the leaderboard is a wall of slugs. Oldest first so the most recent sync's spelling wins.
+  for (const r of db.prepare(`SELECT email, name FROM run_roster WHERE program_id = ? AND email IN (${marks}) ORDER BY synced_at ASC`).all(programId, ...list)) {
+    if (r.name) out.set(lc(r.email), r.name);
+  }
+  // The ladder's own roster next — for a ladder-only player it is the ONLY source of a name, and
   // without it the board renders raw addresses. Everything after it overrides on purpose.
   for (const r of db.prepare(`SELECT email, name FROM ladder_players WHERE program_id = ? AND email IN (${marks})`).all(programId, ...list)) {
     if (r.name) out.set(lc(r.email), r.name);
@@ -7712,6 +7950,10 @@ app.post('/checkin/roster-sync', requireLogin, (req, res) => runRosterSync(1, re
 app.post('/checkin/team/swap', requireLogin, (req, res) => runTeamSwap(1, req, res));
 app.post('/checkin/team/bench', requireLogin, (req, res) => runTeamBench(1, req, res));
 app.post('/checkin/teams/clear', requireLogin, (req, res) => runTeamsClear(1, req, res));
+app.post('/checkin/game', requireLogin, (req, res) => runGameLog(1, req, res));
+app.post('/checkin/game/undo', requireLogin, (req, res) => runGameUndo(1, req, res));
+app.post('/checkin/game/merge', requireLogin, (req, res) => runGameMerge(1, req, res));
+app.get('/checkin/leaderboard', requireLogin, (req, res) => runLeaderboard(1, req, res));
 // Ladder — the season board the court screen shows. Same handlers mountRunProgram registers for
 // every other program; pickleball just has its routes written out like the rest of its block.
 app.get('/pickleball/ladder', requireLogin, (req, res) => runLadderGet(2, req, res));
@@ -7937,7 +8179,8 @@ const PROGRAM_DEFS = {
       // so 10 a side never legitimately fills): the size guard exists to stop a mis-tap stacking one
       // team, and a guard that fights the operator mid-night is worse than no guard.
       // selfServe:false — sides are called by whoever is running the night, not self-picked.
-      features: { teams: { count: 2, size: 10, opensAt: 'lock', selfServe: false }, groupQueue: false },
+      // games:true turns on result logging from the teams board + the leaderboard it feeds.
+      features: { teams: { count: 2, size: 10, opensAt: 'lock', selfServe: false, games: true }, groupQueue: false },
       // This run signs up in Planning Center, not here, so its floor is synced in. Prefix only
       // NARROWS the candidate signups; pcoSignupRosterForDate matches on the event date.
       // Matches the weekly runs only. Andrew renamed these in Planning Center on 2026-09-10 to
@@ -8468,6 +8711,11 @@ function mountRunProgram(app, program) {
   app.post(`${b}/team/swap`, requireLogin, (req, res) => runTeamSwap(id, req, res));
   app.post(`${b}/team/bench`, requireLogin, (req, res) => runTeamBench(id, req, res));
   app.post(`${b}/teams/clear`, requireLogin, (req, res) => runTeamsClear(id, req, res));
+  // Game results + leaderboard (registered for every program; 404 unless features.teams.games).
+  app.post(`${b}/game`, requireLogin, (req, res) => runGameLog(id, req, res));
+  app.post(`${b}/game/undo`, requireLogin, (req, res) => runGameUndo(id, req, res));
+  app.post(`${b}/game/merge`, requireLogin, (req, res) => runGameMerge(id, req, res));
+  app.get(`${b}/leaderboard`, requireLogin, (req, res) => runLeaderboard(id, req, res));
   app.post(`${b}/roster-sync`, requireLogin, (req, res) => runRosterSync(id, req, res));
   app.post(`${b}/penalty/clear`, requireLogin, (req, res) => runPenaltyClear(id, req, res));  // operator: forgive an auto-renew strike/pause
   // Queue-with-friends (registered for every program; the handlers no-op unless config.features.groupQueue).
