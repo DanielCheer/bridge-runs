@@ -5687,17 +5687,18 @@ export function teamsBoardPage({
 // anyone logging by week three, and an invented one is silently wrong data on a public board.
 const GAMES_CSS = `
   .gmbar{padding:12px 14px;margin:0 0 12px}
-  .gmwin{display:flex;flex-wrap:wrap;gap:10px;margin:0}
-  .gmbtn{flex:1 1 0;min-width:130px;min-height:52px;font-size:17px;font-weight:650;cursor:pointer;
+  .gmwin{display:flex;flex-direction:column;gap:10px;margin:0}
+  .gmbtn{width:100%;min-height:52px;font-size:17px;font-weight:650;cursor:pointer;
     border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--fg)}
   .gmbtn:hover{border-color:var(--accent)}
   .gmbtn[disabled]{opacity:.55}
-  .gmsc{flex:1 1 100%;margin:2px 0 0}
-  .gmsc summary{cursor:pointer;color:var(--muted);font-size:13px;padding:4px 0}
-  .gmscrow{display:flex;gap:12px;align-items:end;padding:8px 0 2px}
+  /* Two thumb-sized number pads side by side. Big text because this is filled in a gym, standing,
+     by someone about to play the next game. */
+  .gmscrow{display:flex;gap:10px;align-items:end}
   .gmscrow label{flex:1;font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px}
-  .gmscrow input{width:100%;padding:10px;font-size:17px;border:1px solid var(--line);
-    border-radius:10px;background:var(--bg);color:var(--fg)}
+  .gmscrow input{width:100%;padding:12px;font-size:26px;font-weight:650;text-align:center;
+    border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg)}
+  .gmdash{padding-bottom:14px;color:var(--muted);font-size:20px}
   .gmton{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:0 0 12px;font-size:13px;color:var(--muted)}
   .gmton form{margin:0}
   .gmton .lk{background:none;border:0;color:var(--accent);cursor:pointer;font:inherit;padding:0;text-decoration:underline}
@@ -5720,21 +5721,21 @@ export function gamesStrip({ basePath = '', tonight = [], fp = '', canLog = true
   const last = tonight[0];
   return (canLog ? `
     <div class="card gmbar">
-      <div class="subhead" style="margin:0 0 8px">Who won that one?</div>
+      <div class="subhead" style="margin:0 0 8px">Final score</div>
       <form method="post" action="${esc(basePath)}/game" class="gmwin"
-        onsubmit="var b=this.querySelectorAll('.gmbtn');for(var i=0;i&lt;b.length;i++){if(b[i].dataset.s)return false;}
-                  for(var j=0;j&lt;b.length;j++)b[j].dataset.s=1;">
+        onsubmit="var b=this.querySelector('.gmbtn');if(b.dataset.s)return false;b.dataset.s=1;b.disabled=true;b.textContent='Saving…';">
         <input type="hidden" name="fp" value="${esc(fp)}">
-        <button class="gmbtn" type="submit" name="side" value="1">Side 1 won</button>
-        <button class="gmbtn" type="submit" name="side" value="2">Side 2 won</button>
-        <details class="gmsc">
-          <summary>Add the score (optional)</summary>
-          <div class="gmscrow">
-            <label>Side 1<input name="s1" inputmode="numeric" pattern="[0-9]*" maxlength="2" autocomplete="off"></label>
-            <label>Side 2<input name="s2" inputmode="numeric" pattern="[0-9]*" maxlength="2" autocomplete="off"></label>
-          </div>
-        </details>
+        <div class="gmscrow">
+          <label>Side 1<input name="s1" inputmode="numeric" pattern="[0-9]*" maxlength="2"
+            autocomplete="off" required aria-label="Side 1 final score"></label>
+          <span class="gmdash">&ndash;</span>
+          <label>Side 2<input name="s2" inputmode="numeric" pattern="[0-9]*" maxlength="2"
+            autocomplete="off" required aria-label="Side 2 final score"></label>
+        </div>
+        <button class="gmbtn" type="submit">Log this game</button>
       </form>
+      <p class="foot" style="margin:8px 0 0">Whoever scored more wins it &mdash; no need to say which side.
+        Move anyone who subbed in <b>before</b> you log.</p>
     </div>` : '')
     + (tonight.length ? `
     <div class="gmton">
@@ -5772,7 +5773,7 @@ export function leaderboardPage({
     <div class="phead"><h1>Leaderboard ${esc(emoji)}</h1></div>
     <p class="psub" style="margin:-4px 0 10px;color:var(--muted)">
       ${games} game${games === 1 ? '' : 's'} across ${nights} night${nights === 1 ? '' : 's'} since ${esc(from)}
-      &middot; most wins first${scored ? ' &middot; &plusmn; shown where a game was scored' : ''}</p>
+      &middot; most wins first, then point differential</p>
     ${msg ? `<div class="note ok">${esc(msg)}</div>` : ''}
     ${err ? `<div class="note warn">${esc(err)}</div>` : ''}
     ${players.length ? ladderTable(rows, 12, 'players') + ladderCapNote(rows, 12, 'players') : `
@@ -5799,8 +5800,9 @@ export function leaderboardPage({
           <button class="btn sm" style="width:auto;margin-top:8px" type="submit">Merge</button>
         </form>
       </div>` : ''}
-    <p class="foot" style="margin-top:14px">Every player on the winning side gets the win. Sides are taken from the
-      teams board at the moment the result is logged, so move anyone who subbed in <b>before</b> you tap the winner.</p>
+    <p class="foot" style="margin-top:14px">Every player on the winning side gets the win, and the margin goes to
+      everyone who was on the floor for it. Sides are taken from the teams board at the moment the score is logged,
+      so move anyone who subbed in <b>before</b> you log it.</p>
     ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention, program }));
 }
 // The in-app page: standings first (what everyone opens it for), then the operator's tools.

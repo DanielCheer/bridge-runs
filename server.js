@@ -6247,15 +6247,16 @@ function runGamesStandings(programId, from) {
   }
   const names = ladderNames(programId, [...players.keys()]);
   const fin = (p) => ({ ...p, label: names.get(p.email) || p.email, pd: p.pf - p.pa, played: p.w + p.l });
-  // Wins first (showing up and winning is the point), then win ratio, THEN differential.
-  // Differential ranks third here and not second as it does in pickleball, because a basketball
-  // margin is mostly the other four players' doing and only exists for the subset of games anyone
-  // scored — two tied players can have differentials drawn from different sample sizes.
+  // Wins, then point differential, then win ratio, then name — the same chain as the pickleball
+  // ladder. Differential can rank this high because every game carries a score: the run logs one
+  // straight after each game, so it is complete data rather than the scored subset it would be if
+  // the score were optional. (The NULL handling above stays regardless, so a game logged before
+  // the score was required contributes no margin rather than a phantom zero.)
   const rank = (a, b) => {
     if (b.w !== a.w) return b.w - a.w;
+    if (b.pd !== a.pd) return b.pd - a.pd;
     const ra = a.w / (a.played || 1), rb = b.w / (b.played || 1);
     if (rb !== ra) return rb - ra;
-    if (b.pd !== a.pd) return b.pd - a.pd;
     return String(a.label).localeCompare(String(b.label));
   };
   const gameCount = db.prepare('SELECT COUNT(*) c FROM run_games WHERE program_id = ? AND run_date >= ?').get(programId, from).c;
@@ -6271,28 +6272,27 @@ function runGameLog(programId, req, res) {
 
   const rd = runNightFor(programId);                 // recomputed here, never trusted from the form
   const sides = gameSidesNow(programId, rd);
-  const win = Number(req.body.side || 0);
-  if (!(win >= 1 && win <= sides.length)) return fail('Pick which side won.');
   if (sides.some(s => s.length < GAME_MIN_SIDE))
     return fail(`Both sides need at least ${GAME_MIN_SIDE} players before a game can be logged.`);
   if (String(req.body.fp || '') !== gameFingerprint(rd, sides))
     return fail('The sides changed since this screen loaded — it just refreshed, tap again.');
 
-  // Score: both or neither, and the winner has to have outscored the loser.
+  // The score IS the result. This run logs one straight after every game, so there is no separate
+  // "who won" to ask: two numbers already say it. Deriving the winner rather than collecting it
+  // also removes the one way the two answers could disagree — a tap on Side 1 filed against a
+  // 17-21 scoreline, which would be a silently wrong result, the worst thing this can produce.
   const raw1 = String(req.body.s1 ?? '').trim(), raw2 = String(req.body.s2 ?? '').trim();
-  let ws = null, ls = null;
-  if (raw1 !== '' || raw2 !== '') {
-    if (raw1 === '' || raw2 === '') return fail('Enter both scores, or leave both blank.');
-    const n1 = Number(raw1), n2 = Number(raw2);
-    if (![n1, n2].every(n => Number.isInteger(n) && n >= 0 && n <= GAME_SCORE_MAX))
-      return fail(`Scores must be whole numbers between 0 and ${GAME_SCORE_MAX}.`);
-    ws = win === 1 ? n1 : n2; ls = win === 1 ? n2 : n1;
-    if (ws <= ls) return fail('The winning side has to have the higher score.');
-  }
+  if (raw1 === '' || raw2 === '') return fail('Enter both scores.');
+  const n1 = Number(raw1), n2 = Number(raw2);
+  if (![n1, n2].every(n => Number.isInteger(n) && n >= 0 && n <= GAME_SCORE_MAX))
+    return fail(`Scores must be whole numbers between 0 and ${GAME_SCORE_MAX}.`);
+  if (n1 === n2) return fail('A game cannot end level — check the score.');
+  const win = n1 > n2 ? 1 : 2;
+  const ws = Math.max(n1, n2), ls = Math.min(n1, n2);
 
   // Gym wifi double-fire. A real game takes minutes, so the identical result logged again within
   // seconds is a resubmit — answer as though it worked and write nothing.
-  const last = db.prepare("SELECT id FROM run_games WHERE program_id = ? AND run_date = ? AND win_side = ? AND created_at >= datetime('now','-20 seconds') ORDER BY id DESC LIMIT 1").get(programId, rd, win);
+  const last = db.prepare("SELECT id FROM run_games WHERE program_id = ? AND run_date = ? AND win_side = ? AND w_score IS ? AND l_score IS ? AND created_at >= datetime('now','-20 seconds') ORDER BY id DESC LIMIT 1").get(programId, rd, win, ws, ls);
   if (last) {
     const prev = db.prepare('SELECT email, side FROM run_game_players WHERE game_id = ?').all(last.id);
     const same = prev.length === sides.flat().length
