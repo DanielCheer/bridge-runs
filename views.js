@@ -5621,7 +5621,7 @@ const TEAMS_CSS = `
 export function teamsBoardPage({
   program = 1, theme = '', emoji = '', sport = '', email = '', runDate = '', dateLabel = '',
   sides = [], bench = [], basePath = '', canSync = false,
-  games = false, tonight = [], fp = '',
+  games = false, tonight = [], fp = '', gameMinSide = 3,
   msg = '', err = '', dmUnread = 0, groupUnread = 0, groupMention = 0,
 }) {
   // A player button posts only their address; the server decides where they land. Keeping the
@@ -5657,7 +5657,7 @@ export function teamsBoardPage({
     <p class="psub" style="margin:-4px 0 10px;color:var(--muted)">${esc(dateLabel)} &middot; ${total} player${total === 1 ? '' : 's'} &middot; tap a name to move them across</p>
     ${msg ? `<div class="note ok">${esc(msg)}</div>` : ''}
     ${err ? `<div class="note warn">${esc(err)}</div>` : ''}
-    ${games && total ? gamesStrip({ basePath, tonight, fp, canLog: sides.every(x => x.length >= 3) }) : ''}
+    ${games ? gamesStrip({ basePath, tonight, fp, minSide: gameMinSide, canLog: total > 0 && sides.every(x => x.length >= gameMinSide) }) : ''}
     ${total ? '' : `<div class="card"><b>Nobody on the floor yet.</b><p class="foot" style="margin:6px 0 0">${canSync
       ? 'Pull tonight&rsquo;s registered players from Planning Center below.'
       : 'Players appear here once they&rsquo;re on tonight&rsquo;s roster.'}</p></div>`}
@@ -5711,7 +5711,7 @@ const GAMES_CSS = `
 const gameLine = (g) => `Side ${g.win} won${g.ws == null ? '' : ` ${g.ws}–${g.ls}`}`
   + ` &middot; ${g.counts[0]}v${g.counts[1]}`;
 
-export function gamesStrip({ basePath = '', tonight = [], fp = '', canLog = true }) {
+export function gamesStrip({ basePath = '', tonight = [], fp = '', canLog = true, minSide = 3 }) {
   const wins = [0, 0];
   for (const g of tonight) if (g.win >= 1 && g.win <= 2) wins[g.win - 1]++;
   const tally = tonight.length
@@ -5719,7 +5719,10 @@ export function gamesStrip({ basePath = '', tonight = [], fp = '', canLog = true
       : `Side ${wins[0] > wins[1] ? 1 : 2} leads ${Math.max(...wins)}–${Math.min(...wins)}`)
     : '';
   const last = tonight[0];
-  return (canLog ? `
+  return (!canLog ? `
+    <div class="card gmbar"><b>Not enough players on a side to log a game.</b>
+      <p class="foot" style="margin:6px 0 0">Both sides need ${minSide} or more. Tonight&rsquo;s games below are
+      unaffected, and Undo still works.</p></div>` : `
     <div class="card gmbar">
       <div class="subhead" style="margin:0 0 8px">Final score</div>
       <form method="post" action="${esc(basePath)}/game" class="gmwin"
@@ -5736,14 +5739,15 @@ export function gamesStrip({ basePath = '', tonight = [], fp = '', canLog = true
       </form>
       <p class="foot" style="margin:8px 0 0">Whoever scored more wins it &mdash; no need to say which side.
         Move anyone who subbed in <b>before</b> you log.</p>
-    </div>` : '')
+    </div>`)
     + (tonight.length ? `
     <div class="gmton">
       <span><b>Tonight:</b> ${tonight.length} game${tonight.length === 1 ? '' : 's'}${tally ? ' &middot; ' + tally : ''}</span>
       <span>&middot; last: ${gameLine(last)}</span>
-      ${canLog ? `<form method="post" action="${esc(basePath)}/game/undo"
+      <form method="post" action="${esc(basePath)}/game/undo"
         onsubmit="return confirm('Remove the last game? It comes off the leaderboard too.');">
-        <button class="lk" type="submit">Undo last</button></form>` : ''}
+        <input type="hidden" name="id" value="${esc(String(last.id))}">
+        <button class="lk" type="submit">Undo last</button></form>
       <details style="flex:1 1 100%">
         <summary style="cursor:pointer">Who was in tonight&rsquo;s games</summary>
         <ul class="gmlog" style="padding-left:18px;margin-top:6px">
@@ -5764,7 +5768,10 @@ export function leaderboardPage({
   // renders a dash: a player nobody kept score for has NO differential, and printing "0" for them
   // would read as an even record rather than as an absence.
   const rows = players.map(p => ({ label: p.label, w: p.w, l: p.l, pd: p.scored ? p.pd : null }));
-  const mergeOpts = players.map(p => `<option value="${esc(p.email)}">${esc(p.label)} — ${esc(p.email)}</option>`).join('');
+  // Standings already drop tombstones; belt-and-braces so a merge can never bury a live player's
+  // record under a deleted person's address.
+  const mergeOpts = players.filter(p => !/^former-[0-9a-f]+@/.test(p.email))
+    .map(p => `<option value="${esc(p.email)}">${esc(p.label)} — ${esc(p.email)}</option>`).join('');
   return HEAD(`Leaderboard — ${esc(sport)}`, 'has-tabs' + (theme ? ' ' + theme : ''))
     + header(`<b>LEADERBOARD</b>${esc(email)}`, '', null) + `
     ${backToRuns}

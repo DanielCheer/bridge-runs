@@ -4304,8 +4304,12 @@ app.post('/admin/rundate', requireLogin, (req, res) => {
       // the Planning Center roster and both sides stranded on the old date, so the board rendered
       // blank until someone re-synced, and any games logged that night dropped off the leaderboard
       // while Undo silently no-opped on a date that no longer had them.
-      db.prepare('UPDATE run_roster SET run_date = ? WHERE run_date = ? AND program_id = 1').run(newRunDate, oldRunDate);
-      db.prepare('UPDATE team_assignments SET run_date = ? WHERE run_date = ? AND program_id = 1').run(newRunDate, oldRunDate);
+      // OR REPLACE, not a plain UPDATE: both PKs are (program_id, run_date, email), so a row
+      // already sitting on the TARGET date collides. That is not hypothetical — moves made before
+      // this carry existed stranded rows on exactly those dates, so the first move after the fix
+      // is the most likely one to hit it. Colliding target rows lose; the moving night wins.
+      db.prepare('UPDATE OR REPLACE run_roster SET run_date = ? WHERE run_date = ? AND program_id = 1').run(newRunDate, oldRunDate);
+      db.prepare('UPDATE OR REPLACE team_assignments SET run_date = ? WHERE run_date = ? AND program_id = 1').run(newRunDate, oldRunDate);
       migrateGamesNight(1, oldRunDate, newRunDate);
       db.exec('COMMIT');
     } catch (e) { db.exec('ROLLBACK'); console.error(`[rundate] migration FAILED: ${e.message}`); throw e; }
@@ -6101,7 +6105,7 @@ function runTeamsBoard(programId, req, res) {
     // The fingerprint is what the sides looked like when this page rendered. The POST recomputes
     // it and refuses on a mismatch, so a stale tab cannot solidify a game whose rosters have moved.
     ...(gamesOn(programId)
-      ? { games: true, tonight: gamesTonight(programId, d.rd), fp: gameFingerprint(d.rd, gameSidesNow(programId, d.rd)) }
+      ? { games: true, gameMinSide: GAME_MIN_SIDE, tonight: gamesTonight(programId, d.rd), fp: gameFingerprint(d.rd, gameSidesNow(programId, d.rd)) }
       : {}),
     msg: String(req.query.msg || ''), err: String(req.query.err || ''),
     dmUnread: unreadCount(req.userEmail), groupUnread: cc.group, groupMention: cc.gm,
@@ -6180,6 +6184,8 @@ function runTeamAssign(programId, req, res) {
 const GAME_MIN_SIDE = 3;     // below this the board is half-cleared, not a game
 const GAME_SCORE_MAX = 99;
 const gamesOn = (programId) => { const t = teamsFeature(programId); return !!(t && t.games && t.count === 2); };
+// Seats left behind by a hard-deleted person: kept so side counts stay right, never shown.
+const isTombstone = (email) => /^former-[0-9a-f]+@/.test(String(email || '').toLowerCase());
 
 // The sides as they stand, READ ONLY. Deliberately not runTeamsFor(): its floor self-heal drops
 // anyone who is not on this app's floor, which is every Planning Center registrant — it would
@@ -6209,12 +6215,16 @@ function gamesTonight(programId, rd) {
   const rows = db.prepare('SELECT * FROM run_games WHERE program_id = ? AND run_date = ? ORDER BY id DESC').all(programId, rd);
   if (!rows.length) return [];
   const seats = db.prepare('SELECT p.game_id, p.email, p.side FROM run_game_players p JOIN run_games g ON g.id = p.game_id WHERE g.program_id = ? AND g.run_date = ?').all(programId, rd);
-  const names = ladderNames(programId, seats.map(s => s.email));
+  const names = ladderNames(programId, seats.filter(s => !isTombstone(s.email)).map(s => s.email));
   const byGame = new Map();
   for (const s of seats) {
     if (!byGame.has(s.game_id)) byGame.set(s.game_id, [[], []]);
     const side = byGame.get(s.game_id)[s.side - 1];
-    if (side) side.push(names.get(lc(s.email)) || s.email);
+    // A tombstoned seat is kept so the side counts stay honest, but it must never render as an
+    // address. ladderNames cannot resolve it (there is no person left to resolve), so the raw
+    // former-<hex>@adv.local would otherwise show up in the games list — the one place the
+    // standings filter does not reach.
+    if (side) side.push(isTombstone(s.email) ? 'Former player' : (names.get(lc(s.email)) || s.email));
   }
   return rows.map(r => {
     const sides = byGame.get(r.id) || [[], []];
@@ -6245,6 +6255,10 @@ function runGamesStandings(programId, from) {
     }
     nights.add(r.run_date);
   }
+  // A hard-deleted person's seats were rekeyed to former-<hex>@adv.local so the games they played
+  // still show the right number a side. They must not appear ON the board though: the whole point
+  // of the delete was that they are gone, and an unresolvable address would rank as a raw slug.
+  for (const em of [...players.keys()]) if (isTombstone(em)) players.delete(em);
   const names = ladderNames(programId, [...players.keys()]);
   const fin = (p) => ({ ...p, label: names.get(p.email) || p.email, pd: p.pf - p.pa, played: p.w + p.l });
   // Wins, then point differential, then win ratio, then name — the same chain as the pickleball
@@ -6320,6 +6334,13 @@ function runGameUndo(programId, req, res) {
   const rd = runNightFor(programId);
   const last = db.prepare('SELECT * FROM run_games WHERE program_id = ? AND run_date = ? ORDER BY id DESC LIMIT 1').get(programId, rd);
   if (!last) return res.redirect(`${back}?err=${encodeURIComponent('Nothing logged tonight.')}`);
+  // Anchored to the game the operator could SEE, exactly like the log path's fingerprint. A POST
+  // retried on a stalled socket, or a second tap through the confirm because nothing appeared to
+  // happen, would otherwise delete the NEXT game down as well — destroying a correct result, which
+  // is worse than any wrong one this feature can record.
+  const want = String(req.body.id || '');
+  if (want && want !== String(last.id))
+    return res.redirect(`${back}?err=${encodeURIComponent('That game was already removed — nothing else was touched.')}`);
   transact(() => {
     db.prepare('DELETE FROM run_game_players WHERE game_id = ?').run(last.id);
     db.prepare('DELETE FROM run_games WHERE id = ?').run(last.id);
@@ -6332,6 +6353,9 @@ function runLeaderboard(programId, req, res) {
   if (!gamesOn(programId)) return res.status(404).send('Not found');
   const g = programGate(programId, req, res); if (!g) return;
   const p = P(programId);
+  // Same bar as the pickleball ladder page: this run's members and its operators, nobody else.
+  // It carries every player's name and record, and any address a name failed to resolve to.
+  if (!memberOf(programId, req.userEmail) && !g.canOperate) return res.redirect(p.paths.run);
   const from = ladderFrom(programId);
   const st = runGamesStandings(programId, from);
   const rd = runNightFor(programId);
