@@ -5055,7 +5055,7 @@ function programAdminRows() {
       // generic shape carries whole hours, basketball carries 'HH:MM' strings — both render.
       timeLabel: !cfg ? ''
         : Number.isFinite(cfg.startHour) && Number.isFinite(cfg.endHour)
-          ? fmtClockRange(`${String(cfg.startHour).padStart(2, '0')}:00`, `${String(cfg.endHour).padStart(2, '0')}:00`)
+          ? fmtClockRange(`${String(cfg.startHour).padStart(2, '0')}:${String(Number(cfg.startMin) || 0).padStart(2, '0')}`, `${String(cfg.endHour).padStart(2, '0')}:${String(Number(cfg.endMin) || 0).padStart(2, '0')}`)
           : (cfg.start && cfg.end ? fmtClockRange(cfg.start, cfg.end) : ''),
       startHour: cfg ? hour(cfg.startHour) : null, endHour: cfg ? hour(cfg.endHour) : null,
       theme: cfg ? cfg.theme : '', spec,
@@ -5836,14 +5836,13 @@ function pkProgramActive() { return programActive(2); }
 // basketball run (RUN_DOW) never drags pickleball's date along. Weekly auto-schedule:
 // check-in reopens right after the run ends (PK_END_H), the roster locks at start
 // (PK_START_H), and the floor gets a confirm ping the night before (PK_PING_H, day before).
-const PK_DOW = 2, PK_START_H = 18, PK_END_H = 20, PK_PING_H = 9, PK_PING_DOW_OFFSET = 0, PK_LOCK = '17:30';   // confirm ping RUN-DAY 9 AM (owner rule)
+const PK_DOW = 2, PK_START_H = 18, PK_START_M = 15, PK_END_H = 20, PK_END_M = 15,
+      PK_PING_H = 9, PK_PING_DOW_OFFSET = 0, PK_LOCK = '17:30';   // Tue 6:15-8:15 PM; confirm ping RUN-DAY 9 AM (owner rule)
 // Season opener (YYYY-MM-DD) or null — program-generic; the key comes from config.keys.seasonStart.
 function programSeasonStart(programId) { const s = getSetting(P(programId).config.keys.seasonStart); return (s && /^\d{4}-\d{2}-\d{2}$/.test(s)) ? s : null; }
 function pkSeasonStart() { return programSeasonStart(2); }
 // "6–8 PM" / "6 PM" — derived from the schedule constants, never written as a literal, so the
 // masthead, the runs hub and the banner caption can't drift from the real hours.
-const pkTimeRange = () => fmtClockRange(`${PK_START_H}:00`, `${PK_END_H}:00`);
-const pkStartLabel = () => fmtClockLabel(`${PK_START_H}:00`);
 // The standing weekday (dow) NEAREST a chosen date — the Tuesday a moved run replaces.
 function pkNearestDow(dateStr, dow) {
   const r = new Date(dateStr + 'T12:00:00');
@@ -5859,7 +5858,11 @@ function programDefaultDate(programId) {
   const cfg = P(programId).config, dow = cfg.dow;
   const now = new Date();
   let add = (dow - now.getDay() + 7) % 7;
-  if (add === 0 && now.getHours() >= cfg.endHour) add = 7;   // run's over tonight → next week
+  // Minutes, not whole hours: a run that ends at :15 would otherwise roll to next week at :00,
+  // while it was still being played. endMin is absent on every admin-created program, and 0
+  // there reproduces the old whole-hour behaviour exactly.
+  const endMins = (cfg.endHour * 60) + (Number(cfg.endMin) || 0);
+  if (add === 0 && (now.getHours() * 60 + now.getMinutes()) >= endMins) add = 7;   // run's over tonight → next week
   const r = new Date(now); r.setDate(r.getDate() + add);
   let d = ymdLocal(r);
   // Skip a standing day whose run was MOVED to another day this week (runBase key) — else once the
@@ -8234,7 +8237,7 @@ const PROGRAM_DEFS = {
     // theme, opt-in access, team-only tier (no core). Matches today's PK_* constants exactly.
     config: {
       cap: PK_CAP, waitlist: PK_WAIT, prereg: 0,
-      dow: PK_DOW, startHour: PK_START_H, endHour: PK_END_H,         // Tue 6–8 PM
+      dow: PK_DOW, startHour: PK_START_H, startMin: PK_START_M, endHour: PK_END_H, endMin: PK_END_M,   // Tue 6:15–8:15 PM
       pingHour: PK_PING_H, pingDowOffset: PK_PING_DOW_OFFSET, lockTime: PK_LOCK,
       confirmCutoff: '16:30',   // unconfirmed floor released at 4:30 PM run day (absolute, owner-set)
       keys: { runDate: 'pk_run_date', runBase: 'pk_run_base', seasonStart: 'pk_season_start',
