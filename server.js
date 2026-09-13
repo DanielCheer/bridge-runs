@@ -5055,7 +5055,7 @@ function programAdminRows() {
       // generic shape carries whole hours, basketball carries 'HH:MM' strings — both render.
       timeLabel: !cfg ? ''
         : Number.isFinite(cfg.startHour) && Number.isFinite(cfg.endHour)
-          ? fmtClockRange(`${String(cfg.startHour).padStart(2, '0')}:${String(Number(cfg.startMin) || 0).padStart(2, '0')}`, `${String(cfg.endHour).padStart(2, '0')}:${String(Number(cfg.endMin) || 0).padStart(2, '0')}`)
+          ? fmtClockRange(startHHMM(cfg), endHHMM(cfg))
           : (cfg.start && cfg.end ? fmtClockRange(cfg.start, cfg.end) : ''),
       startHour: cfg ? hour(cfg.startHour) : null, endHour: cfg ? hour(cfg.endHour) : null,
       theme: cfg ? cfg.theme : '', spec,
@@ -5850,6 +5850,20 @@ function pkNearestDow(dateStr, dow) {
   r.setDate(r.getDate() + (fwd <= 3 ? fwd : fwd - 7));
   return ymdLocal(r);
 }
+// ---------- A PROGRAM'S CLOCK — ONE derivation, which everything else reads ----------
+// startMin/endMin arrived with pickleball's move to 6:15–8:15. They are absent on every
+// admin-created program, and `Number(x) || 0` reproduces the old whole-hour behaviour exactly
+// there. These helpers exist because the first pass at :15 walked only programDefaultDate, and
+// EIGHT other consumers kept deriving the clock from startHour/endHour alone — so the app rolled
+// the night at 8:15 while archiving the run, reopening check-in, stamping the .ics and printing
+// the time as though it ended at 8:00. One accessor, or the next time-change splits them again.
+const startMinOf = (cfg) => Number(cfg.startMin) || 0;
+const endMinOf = (cfg) => Number(cfg.endMin) || 0;
+const clockHHMM = (h, m) => String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+const startHHMM = (cfg) => clockHHMM(cfg.startHour, startMinOf(cfg));
+const endHHMM = (cfg) => clockHHMM(cfg.endHour, endMinOf(cfg));
+const endMinutesOf = (cfg) => (cfg.endHour * 60) + endMinOf(cfg);
+const minutesOfDay = (d) => (d.getHours() * 60) + d.getMinutes();
 // The next standing run day (config.dow), local. Rolls to next week once the current run has ENDED
 // (>= config.endHour on run day) so check-in reopens the same night. Season-gated: pre-season it
 // resolves to the first standing day on/after the opener (no phantom off-season runs). Program-
@@ -5858,11 +5872,9 @@ function programDefaultDate(programId) {
   const cfg = P(programId).config, dow = cfg.dow;
   const now = new Date();
   let add = (dow - now.getDay() + 7) % 7;
-  // Minutes, not whole hours: a run that ends at :15 would otherwise roll to next week at :00,
-  // while it was still being played. endMin is absent on every admin-created program, and 0
-  // there reproduces the old whole-hour behaviour exactly.
-  const endMins = (cfg.endHour * 60) + (Number(cfg.endMin) || 0);
-  if (add === 0 && (now.getHours() * 60 + now.getMinutes()) >= endMins) add = 7;   // run's over tonight → next week
+  // Minutes, not whole hours: a run that ends at :15 would otherwise roll to next week at :00
+  // while it was still being played.
+  if (add === 0 && minutesOfDay(now) >= endMinutesOf(cfg)) add = 7;   // run's over tonight → next week
   const r = new Date(now); r.setDate(r.getDate() + add);
   let d = ymdLocal(r);
   // Skip a standing day whose run was MOVED to another day this week (runBase key) — else once the
@@ -6464,9 +6476,9 @@ function runTeamFill(programId, req, res) {
 }
 // Pickleball run start epoch — the run date at 6 PM local. Drives the countdown banner
 // AND the auto-lock time (check-in closes at start).
-function startEpochFor(programId, rd) { return rd ? new Date(rd + `T${String(P(programId).config.startHour).padStart(2, '0')}:00:00`).getTime() : 0; }
-function timeRangeFor(programId) { const cfg = P(programId).config; return fmtClockRange(`${cfg.startHour}:00`, `${cfg.endHour}:00`); }
-function startLabelFor(programId) { return fmtClockLabel(`${P(programId).config.startHour}:00`); }
+function startEpochFor(programId, rd) { return rd ? new Date(rd + 'T' + startHHMM(P(programId).config) + ':00').getTime() : 0; }
+function timeRangeFor(programId) { const cfg = P(programId).config; return fmtClockRange(startHHMM(cfg), endHHMM(cfg)); }
+function startLabelFor(programId) { return fmtClockLabel(startHHMM(P(programId).config)); }
 function pkStartEpoch(rd) { return startEpochFor(2, rd); }
 // Latest LIVE pickleball announcement (program 2 rows in the shared announcements table; retracted ones archived).
 function latestAnnouncementFor(programId) { return stmtLatestAnnouncementById.get(programId) || null; }
@@ -6712,7 +6724,7 @@ function autoRunStateFor(programId) {
   if (opener && rd < opener) return;   // never fire before the season opener (run date is gated, this is belt-and-suspenders)
   const now = schedNow();
   const hh = hhLocal;
-  const openAt = new Date(shiftYmd(rd, cfg.openOffsetDays) + hh(cfg.endHour)).getTime();       // prior run's end → reopen
+  const openAt = new Date(shiftYmd(rd, cfg.openOffsetDays) + 'T' + endHHMM(cfg) + ':00').getTime();   // prior run's end → reopen
   const pingAt = new Date(shiftYmd(rd, -cfg.pingDowOffset) + hh(cfg.pingHour)).getTime();       // run-day 9 AM (offset 0 / hour 9 in config)
   const lockAt = new Date(rd + 'T' + cfg.lockTime + ':00').getTime();                           // roster locks before start
   const runUrl = P(programId).paths.run;
@@ -6816,9 +6828,9 @@ function ensureWeekFor(programId) {
   if (cfg.static) return;
   const today = ymdLocal();
   const now = new Date();
-  // A run counts as OVER once its end time (config.endHour) passes on run day — so today's run is
+  // A run counts as OVER once its end time passes on run day — so today's run is
   // archived that same night and the cycle rolls forward, letting check-in reopen that evening.
-  const endedToday = now.getHours() >= cfg.endHour ? today : null;
+  const endedToday = minutesOfDay(now) >= endMinutesOf(cfg) ? today : null;
   // Gate the archive/purge/sweep work like basketball's ensureWeek (P3-5): re-run only when the run
   // advances OR a run has just ended today — NOT on every /poll tick + /runs render (this is called
   // from runPollFingerprint, genericHubCard, runGetPage, runJoin and the 60s tick).
@@ -7131,7 +7143,7 @@ function runIcs(programId, req, res) {
   const ics = [
     'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//The Bridge Adv Runs//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
     'BEGIN:VEVENT', `UID:bridge-${cfg.logTag}-${rd}@bridge`, `DTSTAMP:${ymdLocal().replace(/-/g, '')}T000000`,
-    `DTSTART:${dt(String(cfg.startHour).padStart(2, '0') + '00')}`, `DTEND:${dt(String(cfg.endHour).padStart(2, '0') + '00')}`,
+    `DTSTART:${dt(startHHMM(cfg).replace(':', ''))}`, `DTEND:${dt(endHHMM(cfg).replace(':', ''))}`,
     `SUMMARY:The Bridge — ${P(programId).displayName}`, 'LOCATION:The Bridge · Markham',
     runCancelledFor(programId, rd) ? 'STATUS:CANCELLED' : 'STATUS:CONFIRMED',
     'END:VEVENT', 'END:VCALENDAR',
@@ -7812,7 +7824,7 @@ function runDate(programId, req, res) {
   }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || isNaN(new Date(d + 'T12:00:00'))) return res.redirect(base + '?pkerr=datebad');
   const today = ymdLocal();
-  if (d < today || (d === today && new Date().getHours() >= cfg.endHour)) return res.redirect(base + '?pkerr=datepast'); // no past / already-ended today
+  if (d < today || (d === today && minutesOfDay(new Date()) >= endMinutesOf(cfg))) return res.redirect(base + '?pkerr=datepast'); // no past / already-ended today
   const maxD = new Date(); maxD.setDate(maxD.getDate() + 60);
   if (d > ymdLocal(maxD)) return res.redirect(base + '?pkerr=daterange');
   if (d !== oldRd) {
@@ -8167,7 +8179,7 @@ function genericHubCard(programId) {
     const rd = programRunDate(programId), part = partitionFor(programId, rd);
     const floor = cfg.offerWindow ? part.floorReal : part.floor;
     return {
-      runDate: rd, dateLabel: runLabelFor(rd), timeLabel: fmtClockRange(`${cfg.startHour}:00`, `${cfg.endHour}:00`),
+      runDate: rd, dateLabel: runLabelFor(rd), timeLabel: fmtClockRange(startHHMM(cfg), endHHMM(cfg)),
       going: floor.length + (cfg.offerWindow ? part.offered.length : 0), cap: cfg.cap, // count held offers so the hub card matches the run page (no 8→7 dip mid-offer)
       status: runCancelledFor(programId, rd) ? 'cancelled' : (runOpenFor(programId, rd) ? 'open' : 'closed'),
       hidden: !programActive(programId),
