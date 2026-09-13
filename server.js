@@ -6364,13 +6364,21 @@ function runGameUndo(programId, req, res) {
   res.redirect(`${back}?msg=${encodeURIComponent('Last game removed.')}`);
 }
 // The leaderboard. Members can read it; only operators see the merge tool.
+// "Member" here is programJoinedBy, NOT memberOf. memberOf is a program_membership lookup, and a
+// DROP-IN program never writes those rows — the live database carries zero for program 1 while
+// programs 2/3/4 have them — so memberOf(1, …) was true for admins and nobody else, and this gate
+// silently bounced every ordinary player off their own standings. programJoinedBy is the resolver
+// that already knows the difference: membership for an opt-in run, "on the org team / has ever
+// checked in or attended" for a drop-in one. (Open question for the owner: a Planning-Center
+// registrant who has never checked in lives in run_roster and is still bounced. Counting
+// run_roster would fix that, but the same predicate gates CHAT — widening it is a product call.)
 function runLeaderboard(programId, req, res) {
   if (!gamesOn(programId)) return res.status(404).send('Not found');
   const g = programGate(programId, req, res); if (!g) return;
   const p = P(programId);
   // Same bar as the pickleball ladder page: this run's members and its operators, nobody else.
   // It carries every player's name and record, and any address a name failed to resolve to.
-  if (!memberOf(programId, req.userEmail) && !g.canOperate) return res.redirect(p.paths.run);
+  if (!programJoinedBy(programId, req.userEmail) && !g.canOperate) return res.redirect(p.paths.run);
   const from = ladderFrom(programId);
   const st = runGamesStandings(programId, from);
   const rd = runNightFor(programId);
@@ -7482,7 +7490,7 @@ function runLadderGet(programId, req, res) {
   const cfg = ladderCfg(programId); if (!cfg) return res.status(404).send('Not found');
   const g = programGate(programId, req, res); if (!g) return;
   const p = P(programId), me = req.userEmail;
-  if (!memberOf(programId, me) && !g.canOperate) return res.redirect(p.paths.run);
+  if (!programJoinedBy(programId, me) && !g.canOperate) return res.redirect(p.paths.run);
   const rd = ladderRunDate(programId);
   const roster = ladderRoster(programId, rd);
   const from = ladderFrom(programId);
@@ -7761,7 +7769,7 @@ function runLadderNominate(programId, req, res) {
   const cfg = ladderCfg(programId); if (!cfg) return res.status(404).send('Not found');
   const g = programGate(programId, req, res); if (!g) return;
   const p = P(programId), back = `${p.paths.run}/ladder`, me = lc(req.userEmail);
-  if (!memberOf(programId, me) && !g.canOperate) return res.redirect(p.paths.run);
+  if (!programJoinedBy(programId, me) && !g.canOperate) return res.redirect(p.paths.run);
   // Voting is a season-END event, not a running tally: the form is hidden while voting is closed,
   // and the handler refuses too — a hidden form is a UI state, not a permission.
   if (!ladderNomsOpen(programId, cfg)) return res.redirect(`${back}?err=${encodeURIComponent('Award voting opens at the end of the season.')}`);
