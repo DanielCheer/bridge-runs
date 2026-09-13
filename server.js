@@ -5935,13 +5935,19 @@ async function syncRunRosterFromPco(programId, rd, byEmail) {
   const cfg = P(programId).config;
   if (!cfg.pcoSignupPrefix) throw new Error('This run has no Planning Center signup configured.');
   const { signup, people } = await pcoSignupRosterForDate(cfg.pcoSignupPrefix, rd);
-  if (!signup) return { signup: null, added: 0, removed: 0, kept: 0, skipped: 0 };
+  if (!signup) return { signup: null, added: 0, removed: 0, kept: 0, skipped: 0, unresolved: 0 };
   // Only people actually holding a spot. A cancelled or waitlisted registration is not on the
   // roster, and showing them would have the operator building sides around someone who isn't there.
   const active = people.filter(x => x.active && !x.waitlisted);
+  // Asked Planning Center and it did not answer. Excluded from the roster, never defaulted into
+  // one: an error is not a fact about this person, and the operator is told the count so a re-sync
+  // picks them up. Failing the whole sync instead would be worse courtside — the other fifteen
+  // players would lose their teams because one lookup 500'd.
+  const unresolved = active.filter(x => x.emailError && !x.email).length;
   const seen = new Set();
   const rows = [];
   for (const person of active) {
+    if (person.emailError && !person.email) continue;
     // No address in PCO = no identity here. A synthetic one keyed on the PCO person id is STABLE
     // across syncs; a random one would mint a fresh phantom player every time the button is tapped.
     const email = lc(person.email || (person.pcoId ? `pco-${person.pcoId}@adv.local` : ''));
@@ -5967,7 +5973,7 @@ async function syncRunRosterFromPco(programId, rd, byEmail) {
   });
   audit(byEmail, 'admin', `${cfg.logTag || 'run'}:roster-sync`,
     `${rd} from "${signup.name}" — ${added} new, ${kept} unchanged, ${removed} no longer registered`);
-  return { signup, added, removed, kept, skipped: people.length - active.length };
+  return { signup, added, removed, kept, skipped: people.length - active.length, unresolved };
 }
 function runRosterSync(programId, req, res) {
   const cfg = P(programId).config;
@@ -5981,6 +5987,7 @@ function runRosterSync(programId, req, res) {
     if (r.added) bits.push(`${r.added} new`);
     if (r.removed) bits.push(`${r.removed} cancelled, removed`);
     if (r.skipped) bits.push(`${r.skipped} cancelled or waitlisted in PCO`);
+    if (r.unresolved) bits.push(`${r.unresolved} Planning Center would not answer for — sync again to add them`);
     res.redirect(`${back}?msg=${encodeURIComponent(`${r.signup.name} — ${bits.join(' · ')}.`)}`);
   }).catch((e) => {
     audit(req.userEmail, 'admin', `${cfg.logTag || 'run'}:roster-sync-failed`, String(e.message).slice(0, 120));

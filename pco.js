@@ -1135,6 +1135,7 @@ export async function pcoSignupRosterForDate(namePrefix, ymd) {
         email: '',
         active: !!a.active && !a.canceled,
         waitlisted: !!a.waitlisted,
+        emailError: false,   // set below if we ASKED Planning Center for the address and it failed
       });
     }
     const next = json.links?.next;
@@ -1148,7 +1149,16 @@ export async function pcoSignupRosterForDate(namePrefix, ymd) {
       const r = await pcoFetch(`/people/v2/people/${p.pcoId}?include=emails`);
       const first = (r.included || []).find(i => i.type === 'Email');
       if (first) p.email = String(first.attributes?.address || '').toLowerCase();
-    } catch { /* leave blank; the caller mints a synthetic address */ }
+    } catch {
+      // "Planning Center says this person has no address" and "we could not ask Planning Center"
+      // are DIFFERENT FACTS, and blank conflated them. The caller mints a stable synthetic address
+      // for the first, which is right — a real registrant with no email still needs an identity.
+      // Doing it for the second invents a phantom for someone who DOES have an account here: they
+      // land on the teams board as pco-<id>@adv.local, never match themselves, and any game logged
+      // credits the phantom. The next good sync reconciles the row away but leaves their team
+      // assignment and game rows pointing at an identity that no longer exists.
+      p.emailError = true;
+    }
   }
   return { signup, people };
 }
