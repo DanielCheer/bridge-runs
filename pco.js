@@ -1115,7 +1115,7 @@ export async function pcoSignupRosterForDate(namePrefix, ymd) {
   // Ambiguity is reported, never guessed. Two live signups for one night means a duplicate was
   // created; silently syncing whichever the API listed first would look like it worked.
   if (matches.length > 1) throw new Error(`${matches.length} Planning Center signups match that date (${matches.map(m => m.name).join('; ')}). Archive the duplicate first.`);
-  signup = matches[0] || null;
+  const signup = matches[0] || null;
   if (!signup) return { signup: null, people: [] };
   // 3. Its attendees. Cancelled and waitlisted rows are returned too so the caller can decide;
   //    only `active` people belong on a floor.
