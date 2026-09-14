@@ -2350,14 +2350,30 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
   // Kiosk link parity with the generic run pages (owner ask 2026-08-05: "no kiosk screen for
   // basketball?") — same controls, basketball's own mint route. Never static, so canOperate is
   // the whole gate.
+  // Basketball is program 1, so it reads its own paths out of the SAME server registry the
+  // generic run page uses rather than hardcoding them here — the registry already knows which
+  // programs have teams and which log games. Until 2026-09-14 nothing read either path, so the
+  // teams board (the courtside surface the games feature was built for) could only be reached by
+  // typing /checkin/teams. The teams board is operator-only, so its link lives in this
+  // operator-gated row; standings are readable by any member, so they get their own row below.
+  const teamsPath = progMeta(1).teams;
+  const boardPath = progMeta(1).leaderboard;
   const kioskRow = canOperate
     ? `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        ${teamsPath ? `<a class="btn ghost sm" style="margin:0" href="${esc(teamsPath)}">🏀 Teams board</a>` : ''}
         ${kioskUrl ? `<a class="btn ghost sm" style="margin:0" target="_blank" rel="noopener" href="${esc(kioskUrl)}">📺 Kiosk screen</a>` : ''}
         <form method="POST" action="/checkin/kiosk-rotate" class="swapform" style="margin:0"${kioskUrl ? ` onsubmit="return confirm('Refresh this run&#39;s kiosk link? Screens on the old link stop working.')"` : ''}><button class="btn ghost sm" type="submit">${kioskUrl ? '↻ Refresh kiosk link' : '📺 Create kiosk link'}</button></form>
       </div>`
     : '';
-  const heroFooter = (annCompose || autoRenewPill || kioskRow)
-    ? `<div class="hann"><div class="hann-l">${annCompose}${kioskRow}</div>${autoRenewPill ? `<div class="hann-r">${autoRenewPill}</div>` : ''}</div>`
+  // Standings are a MEMBER surface (runLeaderboard admits anyone who has joined the run), so this
+  // row sits deliberately OUTSIDE the canOperate gate above.
+  const boardRow = boardPath
+    ? `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        <a class="btn ghost sm" style="margin:0" href="${esc(boardPath)}">🏆 Standings</a>
+      </div>`
+    : '';
+  const heroFooter = (annCompose || autoRenewPill || kioskRow || boardRow)
+    ? `<div class="hann"><div class="hann-l">${annCompose}${kioskRow}${boardRow}</div>${autoRenewPill ? `<div class="hann-r">${autoRenewPill}</div>` : ''}</div>`
     : '';
   // ----- operator "Add a guest" — sits on the RIGHT of the hbar (Checked in /
   //       Waitlist) row; expands the last-minute guest-add form (POST /checkin/guest,
@@ -3324,8 +3340,20 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
   // The ladder sits in the same operator row as the kiosk link: on run night the scorer is already
   // on this page, and typing a URL at the net is not a workflow.
   const ladderPath = progMeta(programId).ladder;
-  const kioskRow = (kioskable || ladderPath)
+  // The teams board and the leaderboard sit in this same operator row, for the reason stated
+  // above: on run night the operator is already on this page, and typing a URL at the net is not
+  // a workflow. Both paths were published by the server registry and read by NOBODY until
+  // 2026-09-14 — the teams board, the courtside surface the whole games feature was built for,
+  // was reachable only by typing /checkin/teams.
+  // Gating differs because the routes differ: the teams board is operator-only (runTeamsBoard
+  // redirects everyone else), so offering it to a member would be a link that bounces them. The
+  // leaderboard is readable by anyone who has joined the run, so it shows for everyone.
+  const teamsPath = progMeta(programId).teams;
+  const boardPath = progMeta(programId).leaderboard;
+  const kioskRow = (kioskable || ladderPath || boardPath || (canOperate && teamsPath))
     ? `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        ${canOperate && teamsPath ? `<a class="btn ghost sm" style="margin:0" href="${esc(teamsPath)}">🏀 Teams board</a>` : ''}
+        ${boardPath ? `<a class="btn ghost sm" style="margin:0" href="${esc(boardPath)}">🏆 Standings</a>` : ''}
         ${ladderPath ? `<a class="btn ghost sm" style="margin:0" href="${esc(ladderPath)}">📋 Ladder &amp; scores</a>` : ''}
         ${kioskUrl ? `<a class="btn ghost sm" style="margin:0" target="_blank" rel="noopener" href="${esc(kioskUrl)}">📺 Kiosk screen</a>` : ''}
         ${kioskable ? `<form method="POST" action="${runBase}/kiosk-rotate" class="swapform" style="margin:0"${kioskUrl ? ` onsubmit="return confirm('Refresh this run&#39;s kiosk link? Screens on the old link stop working.')"` : ''}><button class="btn ghost sm" type="submit">${kioskUrl ? '↻ Refresh kiosk link' : '📺 Create kiosk link'}</button></form>` : ''}

@@ -8905,7 +8905,11 @@ function buildPrograms() {
   // link without knowing anything about the feature flag.
   for (const [id, p] of PROGRAMS) meta[id] = { chat: p.paths.chat, season: p.paths.season, seasonLabel: p.seasonLabel,
     ladder: ((p.config.features || {}).ladder ? `${p.paths.run}/ladder` : ''),
-    teams: ((p.config.features || {}).teams ? `${p.paths.run}/teams` : '') };
+    teams: ((p.config.features || {}).teams ? `${p.paths.run}/teams` : ''),
+    // The leaderboard exists only where games are logged, which is a narrower flag than teams
+    // (two sides, games on). Derived here for the same reason as ladder/teams: the view asks the
+    // registry for a path and never learns the feature rules.
+    leaderboard: (gamesOn(id) ? `${p.paths.run}/leaderboard` : '') };
   setProgramMeta(meta);
   // Same idea for the PCO sync: it labels the "sports played" custom field from the registry, so
   // adding a program needs no edit in pco.js. Built from the program KEY (the canonical sport
