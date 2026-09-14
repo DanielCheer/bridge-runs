@@ -6307,6 +6307,11 @@ function runGameLog(programId, req, res) {
   const fail = (m) => res.redirect(`${back}?err=${encodeURIComponent(m)}`);
 
   const rd = runNightFor(programId);                 // recomputed here, never trusted from the form
+  // A cancelled night did not happen, so nothing can be recorded against it. Every other write on
+  // a run guards this (runOpen, runJoin, runGuest); the games path shipped without it, which would
+  // let a stale teams board still open in a tab log a result onto a night the gym was closed — and
+  // that result would then rank on the standings for a game nobody played.
+  if (runCancelledFor(programId, rd)) return fail('This run is cancelled — no games can be logged for it.');
   const sides = gameSidesNow(programId, rd);
   if (sides.some(s => s.length < GAME_MIN_SIDE))
     return fail(`Both sides need at least ${GAME_MIN_SIDE} players before a game can be logged.`);
