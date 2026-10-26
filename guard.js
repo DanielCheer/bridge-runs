@@ -25,7 +25,7 @@ const PROD_PCO_HOST = 'planningcenteronline.com';
 const die = (lines) => {
   console.error('\n[guard] REFUSING TO START — test isolation is not safe:\n');
   for (const l of lines) console.error('  • ' + l);
-  console.error('\n[guard] Fix the environment (see gm-harness/harness-env.sh) and re-run.\n');
+  console.error('\n[guard] Fix the environment (see docs/TESTING.md) and re-run.\n');
   process.exit(90);
 };
 
@@ -85,7 +85,7 @@ if (HARNESS) {
 
 // Fixture invariants, checked AFTER the database is open (db.js calls this immediately). The env
 // checks above can't see what a copied DB carries: real push subscriptions, real PCO tokens. A copy
-// that skipped gm-harness/harness-sanitize.mjs dies here instead of reaching someone's phone.
+// that skipped scripts/sanitize-db.mjs dies here instead of reaching someone's phone.
 export function assertFixtureSanitized(db) {
   if (!HARNESS) return;
   const problems = [];
@@ -96,7 +96,7 @@ export function assertFixtureSanitized(db) {
   if (pco) problems.push(`${pco} Planning Center credential/setting row(s) in the test database — a tick could write to the church's real directory.`);
   const outbox = count('SELECT COUNT(*) n FROM pco_outbox WHERE done_at IS NULL');
   if (outbox) problems.push(`${outbox} queued Planning Center write(s) copied from live — they would be replayed for real.`);
-  if (problems.length) die([...problems, 'Run: node gm-harness/harness-sanitize.mjs <db>']);
+  if (problems.length) die([...problems, 'Run: node scripts/sanitize-db.mjs <db>']);
 }
 
 export { HARNESS };
