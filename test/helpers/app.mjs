@@ -106,7 +106,16 @@ export async function startApp({ env = {}, today, seed, keep = false } = {}) {
 
   // The cookie for `email` at its CURRENT session version (applicants row, else the settings
   // fallback the app uses for admins without a row), so it survives a "sign out everywhere".
-  const db = () => openDb(dbPath);
+  // Connections a test opens with app.db() are tracked so stop() can close any still open: on
+  // Windows an open SQLite handle locks the file and the temp directory can't be removed.
+  const openConns = new Set();
+  const db = () => {
+    const d = openDb(dbPath);
+    const close = d.close.bind(d);
+    d.close = () => { openConns.delete(d); close(); };
+    openConns.add(d);
+    return d;
+  };
   const versionOf = (email) => {
     const d = db();
     try {
@@ -144,6 +153,7 @@ export async function startApp({ env = {}, today, seed, keep = false } = {}) {
       return r;
     },
     stop: async () => {
+      for (const d of [...openConns]) d.close();
       if (child.exitCode === null) { child.kill(); await exited; }
       if (!keep) fs.rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     },
