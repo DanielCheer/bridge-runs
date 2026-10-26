@@ -17,3 +17,6 @@ docs/
 # stray db from a DB_PATH-unset node invocation
 undefined
 undefined-*
+
+# per-machine editor/agent settings
+.claude/
