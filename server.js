@@ -1,4 +1,13 @@
-// server.js — The Bridge Adv Runs
+// server.js — The Bridge Adv Runs: the entry point.
+//
+// Builds the Express app, mounts every route module, wires the injection seams, and runs the boot
+// sequence. Nothing else lives here: config.js reads the environment, lib/ holds shared helpers,
+// engine/ the domain logic, routes/ the HTTP surface and views.js the pages. See
+// docs/ARCHITECTURE.md for the module map and the layering rule.
+//
+// ORDER MATTERS below. Express tries layers in registration order, so each mount call sits where
+// its routes have always been registered (test/routes.test.mjs pins the resulting route table),
+// and the terminal error handler is registered after every route.
 import express from 'express';
 
 import db from './db.js';
@@ -7,22 +16,21 @@ import { startBackups } from './backup.js';
 import { emailConfigured } from './mailer.js';
 import { pcoDaily, pcoSetNotifier, pcoSetRosterProvider } from './pco.js';
 import { ADMINS, setSessionVersionLookup } from './auth.js';
-import { pickleballPage, pkJoinPage } from './views.js';
+
 import { getSetting } from './lib/settings.js';
 import { pruneAuditLog } from './lib/audit.js';
 import { sendPush, initPush } from './lib/push.js';
 import { mountHttpBasics } from './lib/http.js';
 import { refreshAvatarMap, pruneOldMedia } from './lib/media.js';
+import { demoWorld } from './lib/demo-world.js';
+
 import { P, PROGRAMS } from './engine/programs.js';
 import { reloadRunSettings, nextRunDate, CAP } from './engine/basketball-calendar.js';
 import { partitionFor, partitionRun } from './engine/seating.js';
 import { ensureWeek } from './engine/basketball.js';
 import { buildPrograms } from './engine/program-loader.js';
 import { startScheduler } from './engine/scheduler.js';
-import { registerTerminalError } from './routes/errors.js';
-import { mountChat, mountPlayerSearch } from './routes/chat.js';
-import { mountPendingPrograms, mountInlineRunRoutes } from './routes/run-routes.js';
-import { demoWorld } from './lib/demo-world.js';
+
 import { mountAssets, mountIntake, mountLegal, mountInvite } from './routes/public.js';
 import { mountAuth, mountStatus } from './routes/auth.js';
 import { mountDemoMode, mountDemoRunControls } from './routes/demo.js';
@@ -36,6 +44,7 @@ import {
 import { mountPoll } from './routes/poll.js';
 import { mountProfile, mountProfileSettings } from './routes/profile.js';
 import { mountMessages } from './routes/messages.js';
+import { mountChat, mountPlayerSearch } from './routes/chat.js';
 import { mountFriends, mountFriendParties } from './routes/friends.js';
 import { mountAdmin, mountAdminReports, mountNavLocalizer, mountPeopleRecords } from './routes/admin.js';
 import { mountKiosk } from './routes/kiosk.js';
@@ -43,6 +52,8 @@ import { mountHealth } from './routes/health.js';
 import { mountProgramsAdmin } from './routes/programs-admin.js';
 import { mountPco } from './routes/pco.js';
 import { mountTestSeams } from './routes/test-seams.js';
+import { mountInlineRunRoutes, mountPendingPrograms } from './routes/run-routes.js';
+import { registerTerminalError } from './routes/errors.js';
 
 // Demo mode (DEMO_MODE=1, docs/DEMO.md) seeds itself: a fresh, wiped database gets the synthetic
 // world (fixtures/world.mjs) before any code below reads state. guard.js has already refused a
@@ -54,63 +65,37 @@ if (demoWorld && db.prepare('SELECT COUNT(*) n FROM applicants').get().n === 0) 
 }
 
 const app = express();
-reloadRunSettings();
+reloadRunSettings();   // host-saved run capacities over the env defaults
+initPush();            // load or generate the VAPID keypair
 
-initPush();
-
-mountHttpBasics(app);
-
-mountAssets(app);
-refreshAvatarMap(); // prime at boot so already-set photos render on the first request
-
+// ---------- ROUTES, in registration order ----------
+mountHttpBasics(app);  // headers, compression, body/cookie parsing, the iOS redirect shim
+mountAssets(app);      // /avatars and /chat-media before the public static; sliding session
+refreshAvatarMap();    // prime at boot so already-set photos render on the first request
 mountIntake(app);
-
 mountAuth(app);
-
 mountDemoMode(app);
-
-// ---------- DEMO MODE (DEMO_MODE=1, docs/DEMO.md) ----------
 mountLegal(app);
-
 mountInvite(app);
-
 mountAnnouncements(app);
-
 mountPush(app);
-
-// ---------- INVITE LINK (self-serve pre-approval) ----------
 mountStatus(app);
-
 mountWaivers(app);
-
-// ---------- CHECK-IN ----------
 mountRunsHub(app);
-
 mountCheckin(app);
-
 mountPoll(app);
-
 mountRosterRedirect(app);
-
 mountProfile(app);
-
 mountMessages(app);
-
-// ---------- MESSAGES (in-app, host <-> players) ----------
 mountPlayerSearch(app);
-
 mountFriends(app);
-
-// ---------- SOCIAL GRAPH (Phase 6: friends + block) ----------
 mountChat(app);
-
 mountCheckinActions(app);
-
 mountAdmin(app);
 
-// ---------- SESSIONS (S1) ----------
-// Version lookup for auth.js: applicants row for members; an app_settings fallback covers admins
-// with no applicant row (admin identity is the ADMINS env set, a row is optional).
+// Session version lookup for auth.js ("sign out everywhere"): the applicants row for members; an
+// app_settings fallback covers admins with no applicant row (admin identity is the ADMINS env set,
+// a row is optional).
 const stmtSessVer = db.prepare('SELECT session_ver v FROM applicants WHERE email = ?');
 setSessionVersionLookup((email) => {
   const row = stmtSessVer.get(String(email).toLowerCase());
@@ -119,38 +104,19 @@ setSessionVersionLookup((email) => {
 });
 
 mountProfileSettings(app);
-
 mountAdminReports(app);
-
 mountKiosk(app);
-
 mountHealth(app);
-
-// ---------- HEALTH (S4) ----------
 mountNavLocalizer(app);
-
 mountProgramsAdmin(app);
-
 mountPco(app);
-
-// ---------- Planning Center sync (Phase 1) — admin console + webhook ----------
 mountPeopleRecords(app);
-
-startScheduler();
-
-mountTestSeams(app);
-
+startScheduler();      // the 60 s tick + the precise-fire announcement timer
+mountTestSeams(app);   // only with ENABLE_TEST_TICK=1
 mountSeasonAndCalendar(app);
-
 mountInlineRunRoutes(app);
-
 mountDemoRunControls(app);
 
-// ---------- DEMO run controls (admin-only showcase) ----------
-// NB: the terminal 4-arg error handler is registered LAST — after mountRunProgram (see just before
-// app.listen) — so a throw in ANY route (incl. the config-mounted volleyball routes) lands there
-// with a friendly 500 instead of falling through to Express's default handler (which would leak a
-// stack trace in dev mode). Express matches middleware in registration order, hence the placement.
 // Last resort: a stray unhandled promise rejection must NOT exit the process (Node's default),
 // which would drop check-in for everyone mid-run. Log it and keep serving.
 process.on('unhandledRejection', (reason) => {
@@ -163,7 +129,8 @@ process.on('uncaughtException', (err) => {
 });
 
 mountFriendParties(app);
-// ---------- QUEUE-WITH-FRIENDS (Phase 6b: a party seats atomically) ----------
+
+// ---------- PROGRAMS ----------
 buildPrograms();
 // Config guard (fail loud at boot, not silently at 2 PM): BASKETBALL's inline confirm sweep runs
 // inside the post-lock branch (autoRunState), so a confirmCutoff EARLIER than its 14:00 lock would
@@ -174,9 +141,13 @@ buildPrograms();
   if (c.confirmCutoff && c.lockTime && c.confirmCutoff < c.lockTime)
     throw new Error(`[config] basketball: confirmCutoff (${c.confirmCutoff}) must be >= lockTime (${c.lockTime}) — the inline sweep runs post-lock`);
 }
+// Routes for every program beyond basketball and pickleball (which keep their inline routes),
+// after buildPrograms() so P(id) is hydrated.
 mountPendingPrograms(app);
-
+// The terminal 4-arg error handler is registered LAST, so a throw in ANY route (including the
+// program-mounted ones) gets a friendly 500 instead of Express's stack-trace default.
 registerTerminalError(app);
+
 // Boot-time weekly rollover (archive/purge/auto-seat) — MUST run after buildPrograms() so the
 // unified engine's P(id).config is hydrated (ensureWeek → autoJoinTeam → seatRenewers reads it).
 ensureWeek(nextRunDate());
