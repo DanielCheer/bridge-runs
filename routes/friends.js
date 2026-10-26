@@ -2,7 +2,7 @@
 // games, and persistent parties (create, invite, accept, decline, remove, leave).
 import db from '../db.js';
 import { requireLogin } from '../auth.js';
-import { friendsPage, friendsSearchFragment } from '../views.js';
+import { friendsPage, friendsSearchFragment } from '../views/index.js';
 import { lc } from '../lib/email.js';
 import { rateLimited } from '../lib/rate-limit.js';
 import { safeNextPath } from '../lib/http.js';

@@ -7,7 +7,7 @@ import path from 'path';
 import db from '../db.js';
 import { AVATARS_DIR, CHAT_MEDIA_DIR, APP_ROOT, LEGAL_ENV, LEGAL, WAIVER_URL } from '../config.js';
 import { setSession, currentUser } from '../auth.js';
-import { APP_JS, intakePage, mdToHtml, legalPage, invitePage } from '../views.js';
+import { APP_JS, intakePage, mdToHtml, legalPage, invitePage } from '../views/index.js';
 import { metric, audit } from '../lib/audit.js';
 import { rateLimited } from '../lib/rate-limit.js';
 import { ymdLocal } from '../lib/dates.js';
@@ -58,9 +58,9 @@ export function mountAssets(app) {
     res.type('application/javascript');
     res.sendFile(path.join(APP_ROOT, 'public', 'sw.js'));
   });
-  // The client engine (router/poll/swap/push/badges/logout — see APP_JS in views.js),
+  // The client engine (router/poll/swap/push/badges/logout — see APP_JS in views/client-app.js),
   // extracted from an inline HEAD script so it caches once instead of re-shipping ~15KB per
-  // page. The URL carries ?v=BUILD_VER (tracks views.js/styles.css mtime), so any code change
+  // page. The URL carries ?v=BUILD_VER (tracks the views modules' and styles.css mtimes), so any code change
   // mints a fresh URL; the body is byte-identical for a given build → cache a year, immutable.
   app.get('/app.js', (req, res) => {
     res.set('Cache-Control', 'public, max-age=31536000, immutable');

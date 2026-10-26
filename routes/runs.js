@@ -2,7 +2,7 @@
 // the past-run rosters (/runs/past/:pid/:date).
 import db from '../db.js';
 import { isAdmin, requireLogin } from '../auth.js';
-import { runsPage, pastRunPage } from '../views.js';
+import { runsPage, pastRunPage } from '../views/index.js';
 import { applicantByEmail, isMinor } from '../engine/applicants.js';
 import { P, PROGRAMS } from '../engine/programs.js';
 import { annPanel } from '../engine/announcements.js';

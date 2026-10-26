@@ -10,7 +10,7 @@ import {
   pcoDaily, pcoHandleWebhook, pcoReconcile, pcoVerifyPasses, pcoBarcodeRows,
 } from '../pco.js';
 import { requireAdmin } from '../auth.js';
-import { pcoAdminPage } from '../views.js';
+import { pcoAdminPage } from '../views/index.js';
 import { setSetting, delSetting } from '../lib/settings.js';
 import { audit } from '../lib/audit.js';
 import { csvCell } from '../lib/csv.js';

@@ -4,7 +4,7 @@
 import db from '../db.js';
 import { OFFER_WINDOW_HOURS } from '../config.js';
 import { isAdmin, requireLogin } from '../auth.js';
-import { intakePage, checkinPage, claimResultPage, confirmActionPage, seasonPage } from '../views.js';
+import { intakePage, checkinPage, claimResultPage, confirmActionPage, seasonPage } from '../views/index.js';
 import { getSetting, setSetting } from '../lib/settings.js';
 import { fmtClockLabel, runLabelFor, runWeekday, ymdLocal } from '../lib/dates.js';
 import { bannerVersion } from '../lib/media.js';

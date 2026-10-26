@@ -2,7 +2,7 @@
 // handlers (runChat*) every other room delegates to, and the @-mention player search.
 import db from '../db.js';
 import { requireLogin } from '../auth.js';
-import { chatLockedPage, chatPage, chatOlderFragment, runChatPage, avatarUrlFor } from '../views.js';
+import { chatLockedPage, chatPage, chatOlderFragment, runChatPage, avatarUrlFor } from '../views/index.js';
 import { rateLimited } from '../lib/rate-limit.js';
 import {
   sniffImage, uploadChatImage, processChatImage, writeChatImage, stickerPath, safeUnlinkChatImage,

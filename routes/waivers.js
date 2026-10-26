@@ -2,7 +2,7 @@
 // the attestation, with guardian consent for minors.
 import db from '../db.js';
 import { requireLogin } from '../auth.js';
-import { waiverPage } from '../views.js';
+import { waiverPage } from '../views/index.js';
 import { audit } from '../lib/audit.js';
 import { isValidEmail } from '../lib/email.js';
 import { safeNextPath } from '../lib/http.js';

@@ -2,7 +2,7 @@
 // 10 s) to decide whether to re-fetch and patch a region. It never writes.
 import db from '../db.js';
 import { isAdmin, requireLogin } from '../auth.js';
-import { BUILD_VER } from '../views.js';
+import { BUILD_VER } from '../views/index.js';
 import { getSetting } from '../lib/settings.js';
 import { applicantIdOf } from '../engine/applicants.js';
 import {

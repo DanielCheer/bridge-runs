@@ -4,7 +4,7 @@
 import { DEMO_MODE } from '../guard.js';
 import { DEMO_RESET_HOURS, DEMO_RESET_COOLDOWN_MS } from '../config.js';
 import { isAdmin, requireAdmin } from '../auth.js';
-import { loginPage, setDemoMode, demoResetPage, demoProfileCard } from '../views.js';
+import { loginPage, setDemoMode, demoResetPage, demoProfileCard } from '../views/index.js';
 import { signIn } from '../lib/sign-in.js';
 import { demoWorld } from '../lib/demo-world.js';
 import db from '../db.js';

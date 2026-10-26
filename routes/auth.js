@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import db from '../db.js';
 import { sendMagicLink, emailConfigured } from '../mailer.js';
 import { currentUser, clearSession, isAdmin, requireLogin } from '../auth.js';
-import { loginPage, confirmActionPage, logoutPage, statusPage } from '../views.js';
+import { loginPage, confirmActionPage, logoutPage, statusPage } from '../views/index.js';
 import { isValidEmail } from '../lib/email.js';
 import { rateLimited } from '../lib/rate-limit.js';
 import { safeNextPath, clientIp } from '../lib/http.js';

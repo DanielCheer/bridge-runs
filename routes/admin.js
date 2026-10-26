@@ -14,7 +14,7 @@ import { isAdmin, requireAdmin, requireLogin, ADMINS } from '../auth.js';
 import {
   adminPage, bannerPage, sharePage, peoplePage, exportPage, analyticsPage, auditViewerPage,
   runHistoryPage, BUILD_VER,
-} from '../views.js';
+} from '../views/index.js';
 import { setSetting, getSetting } from '../lib/settings.js';
 import { audit } from '../lib/audit.js';
 import { isValidEmail } from '../lib/email.js';

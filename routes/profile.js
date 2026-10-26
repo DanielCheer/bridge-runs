@@ -9,7 +9,7 @@ import db, { rekeyEmailTx, transact } from '../db.js';
 import { AVATARS_DIR } from '../config.js';
 import { pcoQueuePatch } from '../pco.js';
 import { requireLogin, setSession, isAdmin, ADMINS, clearSession } from '../auth.js';
-import { profileCard, profilePage, profileTabPage } from '../views.js';
+import { profileCard, profilePage, profileTabPage } from '../views/index.js';
 import { getSetting, setSetting } from '../lib/settings.js';
 import { audit } from '../lib/audit.js';
 import { isValidEmail } from '../lib/email.js';

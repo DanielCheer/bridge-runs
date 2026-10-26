@@ -2,7 +2,7 @@
 //
 // Builds the Express app, mounts every route module, wires the injection seams, and runs the boot
 // sequence. Nothing else lives here: config.js reads the environment, lib/ holds shared helpers,
-// engine/ the domain logic, routes/ the HTTP surface and views.js the pages. See
+// engine/ the domain logic, routes/ the HTTP surface and views/ the pages. See
 // docs/ARCHITECTURE.md for the module map and the layering rule.
 //
 // ORDER MATTERS below. Express tries layers in registration order, so each mount call sits where

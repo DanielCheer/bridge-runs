@@ -7,7 +7,7 @@ import fs from 'fs';
 import db from '../db.js';
 import { APP_ROOT } from '../config.js';
 import { pcoSetProgramLabels } from '../pco.js';
-import { setProgramMeta } from '../views.js';
+import { setProgramMeta } from '../views/index.js';
 import { runLabelFor, runWeekday } from '../lib/dates.js';
 import { bannerFile } from '../lib/media.js';
 import { PROGRAMS, stmtProgActiveById } from './programs.js';

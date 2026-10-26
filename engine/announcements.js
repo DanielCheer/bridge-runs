@@ -103,7 +103,7 @@ function parseScheduleAt(v) {
   const t = new Date(s + ':00').getTime();
   return Number.isFinite(t) && t > schedNow() ? s : null;
 }
-// "Thu, Oct 29, 6:30 PM" for parseScheduleAt's LOCAL "YYYY-MM-DDTHH:MM". Same shape as views.js's
+// "Thu, Oct 29, 6:30 PM" for parseScheduleAt's LOCAL "YYYY-MM-DDTHH:MM". Same shape as views/util.js's
 // fmtWhen, which can't be reused here: it reads its input as a UTC SQLite timestamp, and this value
 // is already local, so it would be shifted by the UTC offset.
 function fmtScheduleAt(s) {

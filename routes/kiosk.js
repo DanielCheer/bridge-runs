@@ -3,7 +3,7 @@
 import crypto from 'crypto';
 import { pcoKioskArrivals } from '../pco.js';
 import { currentUser, isAdmin, requireAdmin } from '../auth.js';
-import { ladderBoardPage, kioskPage } from '../views.js';
+import { ladderBoardPage, kioskPage } from '../views/index.js';
 import { getSetting, setSetting, delSetting } from '../lib/settings.js';
 import { audit } from '../lib/audit.js';
 import { lc } from '../lib/email.js';

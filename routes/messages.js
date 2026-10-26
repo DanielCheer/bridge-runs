@@ -2,7 +2,7 @@
 // sticker, react). Bodies are encrypted at rest through lib/dm-crypto.js.
 import db from '../db.js';
 import { requireLogin } from '../auth.js';
-import { threadPage } from '../views.js';
+import { threadPage } from '../views/index.js';
 import { rateLimited } from '../lib/rate-limit.js';
 import { dmDec, dmEnc } from '../lib/dm-crypto.js';
 import { sniffImage, uploadChatImage, processChatImage, writeChatImage, stickerPath } from '../lib/media.js';

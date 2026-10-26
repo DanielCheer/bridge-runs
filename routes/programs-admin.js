@@ -3,7 +3,7 @@
 // A created program's routes go live at once through mountPendingPrograms.
 import db, { transact } from '../db.js';
 import { requireAdmin } from '../auth.js';
-import { programsAdminPage } from '../views.js';
+import { programsAdminPage } from '../views/index.js';
 import { getSetting, setSetting, delSetting } from '../lib/settings.js';
 import { audit } from '../lib/audit.js';
 import { isValidEmail } from '../lib/email.js';

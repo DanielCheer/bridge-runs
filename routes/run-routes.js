@@ -12,7 +12,7 @@ import { requireLogin, requireAdmin } from '../auth.js';
 import {
   bannerPage, teamsBoardPage, leaderboardPage, claimResultPage, confirmActionPage, seasonPage,
   ladderPage, runPage, runJoinPage,
-} from '../views.js';
+} from '../views/index.js';
 import { setSetting, getSetting } from '../lib/settings.js';
 import { audit, metric } from '../lib/audit.js';
 import { lc } from '../lib/email.js';

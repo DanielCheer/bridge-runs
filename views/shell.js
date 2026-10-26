@@ -15,12 +15,12 @@ let CSS_VER = '1';
 const STYLES_PATH = path.join(APP_ROOT, 'public', 'styles.css');
 try { CSS_VER = String(Math.floor(fs.statSync(STYLES_PATH).mtimeMs)); } catch {}
 
-// Build version = newest mtime of the client-facing sources: every module under views/ (plus
-// views.js while it still holds pages) and styles.css. /poll returns it; an open (live-polling)
+// Build version = newest mtime of the client-facing sources: every module under views/ and
+// styles.css. /poll returns it; an open (live-polling)
 // session auto-reloads to fresh code on deploy — so shipped fixes reach already-open apps within
 // ~10s instead of never.
 function viewSources() {
-  const out = [path.join(APP_ROOT, 'views.js')];
+  const out = [];
   const walk = (dir) => {
     let entries;
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
@@ -90,7 +90,7 @@ const SPLASH_BODY = `<div id="splash" aria-hidden="true">
 // Tiny inline HEAD bootstrap: sets the build version (the ONLY server-interpolated value)
 // and the pre-paint no-animation flag BEFORE the engine loads, then pulls the cached engine
 // as a BLOCKING script (NOT defer) so its window.* globals exist before any <body> inline
-// script runs. ?v=BUILD_VER busts the cache whenever views.js/styles.css change.
+// script runs. ?v=BUILD_VER busts the cache whenever a views module or styles.css changes.
 const ANIM_HEAD = `<script>window.__ver=${JSON.stringify(BUILD_VER)};(function(){try{if(sessionStorage.getItem('noanim')){sessionStorage.removeItem('noanim');document.documentElement.className+=' noanim';}}catch(e){}})();</script><script src="/app.js?v=${BUILD_VER}"></script>`;
 // ---- Mandatory "Add to Home Screen" wall (mobile browsers only) ----
 // Picture-by-picture install guide. People kept getting stuck in three spots, all
