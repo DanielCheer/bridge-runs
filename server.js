@@ -44,6 +44,10 @@ import { rateLimited } from './lib/rate-limit.js';
 import { sendPush, VAPID_PUBLIC, initPush } from './lib/push.js';
 import { clientIp, safeNextPath, mountHttpBasics } from './lib/http.js';
 import { createLoginLink, signIn } from './lib/sign-in.js';
+import {
+  ymdLocal, shiftYmd, fmtClockRange, fmtClockLabel, schedNow, runLabelFor, runWeekday, hhLocal,
+  DAY_NAMES,
+} from './lib/dates.js';
 
 // Demo mode (DEMO_MODE=1, docs/DEMO.md) seeds itself: a fresh, wiped database gets the synthetic
 // world (fixtures/world.mjs) before any code below reads state. guard.js has already refused a
@@ -343,12 +347,6 @@ const RUN_DOW = 3;
 // truth: runStateSchedule fires off these AND the player-facing "registration opens…" copy is
 // derived from them, so the two can never drift the way a hardcoded weekday does.
 const OPEN_DAYS_BEFORE = 2, OPEN_H = 17;
-// "T17:00:00" — the local-time suffix for an hour. Shared by both programs' schedules.
-const hhLocal = h => `T${String(h).padStart(2, '0')}:00:00`;
-// Test seam: TEST_NOW (config.js) overrides "now" for the auto-scheduler so its clock phases (auto
-// open/ping/lock) are drivable in tests. Unset in prod → real Date.now(). Precedent: FORCE_HELD_RELEASED.
-function schedNow() { return TEST_NOW != null ? TEST_NOW : Date.now(); }
-const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];  // dow → standing-day label
 // The date check-in opens for run `rd`.
 const openDateFor = (rd) => shiftYmd(rd, -OPEN_DAYS_BEFORE);
 function nextRunDefault(d = new Date()) {
@@ -364,10 +362,6 @@ function nextRunDefault(d = new Date()) {
   // happen at LOCAL midnight, so derive Y-M-D from the local date parts.
   const ymd = x => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
   return ymd(r); // YYYY-MM-DD (local)
-}
-function runLabelFor(dateStr) {
-  const d = new Date(dateStr + 'T12:00:00');
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 // --- Host-configurable run day ---------------------------------------------
@@ -416,33 +410,11 @@ function runTimesFor(runDate) {
   const row = runOverrideRow(nearestRunDefault(new Date(runDate + 'T12:00:00')));
   return { start: (row && row.run_time) || DEFAULT_START, end: (row && row.run_end) || DEFAULT_END };
 }
-// "7 PM" / "7:30 PM" from HH:MM.
-function fmtClockLabel(hhmm) {
-  const [h, m] = String(hhmm).split(':').map(Number);
-  const ap = h < 12 ? 'AM' : 'PM', h12 = ((h + 11) % 12) + 1;
-  return m ? `${h12}:${String(m).padStart(2, '0')} ${ap}` : `${h12} ${ap}`;
-}
-// "7–10 PM" (drops the shared AM/PM on the start when it matches the end); the tip-off
-// time alone as "7 PM". Used in the masthead + move announcement.
-// "6–8 PM" from two HH:MM strings. Shared by both programs — basketball resolves its window
-// from per-week overrides, pickleball derives it from PK_START_H/PK_END_H.
-function fmtClockRange(start, end) {
-  const s = fmtClockLabel(start), e = fmtClockLabel(end);
-  const sap = s.slice(-2), eap = e.slice(-2);
-  return sap === eap ? `${s.slice(0, -3)}–${e}` : `${s}–${e}`;
-}
 function runTimeRange(runDate) {
   const { start, end } = runTimesFor(runDate);
   return fmtClockRange(start, end);
 }
 function runStartLabel(runDate) { return fmtClockLabel(runTimesFor(runDate).start); }
-// Shift a local YYYY-MM-DD by whole days (DST-safe: anchored at local noon so a ±1h
-// DST shift never crosses a calendar day). Returns local YYYY-MM-DD.
-function shiftYmd(ymdStr, days) {
-  const r = new Date(ymdStr + 'T12:00:00');
-  r.setDate(r.getDate() + days);
-  return ymdLocal(r);
-}
 // The default run day (RUN_DOW) NEAREST a chosen date (ties → the earlier one). Every
 // date is ≤3 days from the run day, so this is unambiguous. This is the override KEY:
 // moving the run to D replaces the default run day closest to D.
@@ -474,15 +446,6 @@ function nextRunDate(d = new Date()) {
   // in which case F+7 (never overridable into the past) still qualifies. Guarded with a
   // fallback to F regardless. YYYY-MM-DD compares lexicographically = chronologically.
   return cands.length ? cands.reduce((a, b) => (a < b ? a : b)) : F;
-}
-// Dynamic day labels — the whole app's "Friday" wording follows the actual run day.
-const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-const WEEKDAYS_SHORT = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
-function runWeekday(dateStr) { return WEEKDAYS[new Date(dateStr + 'T12:00:00').getDay()]; }
-function runWeekdayShort(dateStr) { return WEEKDAYS_SHORT[new Date(dateStr + 'T12:00:00').getDay()]; }
-// Local YYYY-MM-DD (matches nextRunDefault's local-parts formatting).
-function ymdLocal(d = new Date()) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 // Runs on essentially every authenticated request (requirePlayer + several POSTs),
 // so the statement is hoisted to module scope (node:sqlite has no stmt cache).
