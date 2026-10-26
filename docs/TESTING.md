@@ -10,6 +10,7 @@ throwaway database and directories. Isolation comes entirely from environment va
 |---|---|
 | `DB_PATH` | the live `bridge.db` |
 | `BACKUP_DIR` | the live `backups/` (whose prune deletes real snapshots) |
+| `BACKUP_KEY_FILE` | the production `backup.key` (test snapshots would be readable with the real key) |
 | `CHAT_MEDIA_DIR` / `AVATARS_DIR` | live uploads / profile photos |
 | `BANNER_DIR` | live `public/` (the images the real site serves) |
 | `PORT` | 3000, the published port |
@@ -32,7 +33,7 @@ runs before the database file is opened and no entry point can skip it.
 
 **With `HARNESS=1` the app refuses to start unless:**
 
-- `DB_PATH`, `BACKUP_DIR`, `CHAT_MEDIA_DIR`, `AVATARS_DIR`, `BANNER_DIR` are all set **and resolve
+- `DB_PATH`, `BACKUP_DIR`, `BACKUP_KEY_FILE`, `CHAT_MEDIA_DIR`, `AVATARS_DIR`, `BANNER_DIR` are all set **and resolve
   outside the app directory**;
 - `PORT` is set and is **not 3000**;
 - `PCO_API_BASE` is set and is **not** `*.planningcenteronline.com`;
@@ -83,7 +84,7 @@ Each `test/*.test.mjs` file is one suite. It boots its own instance of the app w
    importing `db.js`, then the synthetic world from `fixtures/world.mjs`);
 3. optionally runs the suite's own `seed(db)` for the rows that suite is about;
 4. picks a free port and spawns `node server.js` with the isolation environment above (plus
-   `BACKUP_KEY_FILE` in the temp directory and `ENABLE_TEST_TICK=1`);
+   `ENABLE_TEST_TICK=1`);
 5. waits for `/healthz`, and returns `{ baseURL, get, post, tick, cookieFor, db, stop }`.
 
 Because every suite has its own directory and port, `node --test` runs the files in parallel.

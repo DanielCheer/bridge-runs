@@ -37,7 +37,7 @@ test('the full isolation environment passes', () => {
   assert.equal(r.status, 0, r.stderr);
 });
 
-for (const key of ['PORT', 'DB_PATH', 'BACKUP_DIR', 'CHAT_MEDIA_DIR', 'AVATARS_DIR', 'BANNER_DIR', 'PCO_API_BASE']) {
+for (const key of ['PORT', 'DB_PATH', 'BACKUP_DIR', 'BACKUP_KEY_FILE', 'CHAT_MEDIA_DIR', 'AVATARS_DIR', 'BANNER_DIR', 'PCO_API_BASE']) {
   test(`HARNESS=1 without ${key} refuses to start and names it`, () => {
     const r = importGuard(without(key));
     assert.equal(r.status, 90);
@@ -56,6 +56,12 @@ test('a writable path inside the app directory is refused', () => {
   const r = importGuard({ ...isolationEnv(work, 39999), BACKUP_DIR: path.join(REPO, 'backups') });
   assert.equal(r.status, 90);
   assert.match(r.stderr, /BACKUP_DIR=.*inside the live app directory/);
+});
+
+test("the production backup key is refused (a test's snapshots must not be readable with it)", () => {
+  const r = importGuard({ ...isolationEnv(work, 39999), BACKUP_KEY_FILE: path.join(REPO, 'backup.key') });
+  assert.equal(r.status, 90);
+  assert.match(r.stderr, /BACKUP_KEY_FILE=.*inside the live app directory/);
 });
 
 test('the production Planning Center API is refused', () => {

@@ -46,6 +46,7 @@ if (HARNESS) {
   for (const [key, why] of [
     ['DB_PATH', 'the live database'],
     ['BACKUP_DIR', 'the live backup folder (its prune would delete real snapshots)'],
+    ['BACKUP_KEY_FILE', 'the production backup key (test snapshots would be encrypted with, and readable by, the real key)'],
     ['CHAT_MEDIA_DIR', 'live chat uploads'],
     ['AVATARS_DIR', 'live profile photos'],
     ['BANNER_DIR', 'live run banner images'],
