@@ -37,6 +37,7 @@ const fmtMonthYear = (s) => {
   return isNaN(d) ? '' : d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
 };
 
+// ---------- MESSAGES: day / clock helpers (SQL UTC → server-local) ----------
 const _mDate = (sqlUtc) => new Date(String(sqlUtc).replace(' ', 'T') + 'Z');
 const dayKey = (sqlUtc) => { const d = _mDate(sqlUtc); return isNaN(d) ? '' : `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
 const fmtClock = (sqlUtc) => { const d = _mDate(sqlUtc); return isNaN(d) ? '' : d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }); };
