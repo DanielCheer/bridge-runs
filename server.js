@@ -35,7 +35,7 @@ import { getSetting, setSetting, delSetting } from './lib/settings.js';
 import { audit, metric, pruneAuditLog } from './lib/audit.js';
 import { isValidEmail, lc } from './lib/email.js';
 import { rateLimited } from './lib/rate-limit.js';
-import { sendPush, VAPID_PUBLIC, initPush } from './lib/push.js';
+import { sendPush, initPush } from './lib/push.js';
 import { safeNextPath, mountHttpBasics } from './lib/http.js';
 import { signIn } from './lib/sign-in.js';
 import { ymdLocal, fmtClockRange, fmtClockLabel, schedNow, runLabelFor, runWeekday } from './lib/dates.js';
@@ -109,6 +109,7 @@ import { mountAssets, mountIntake, mountLegal, mountInvite } from './routes/publ
 import { mountAuth, mountStatus } from './routes/auth.js';
 import { mountDemoMode, mountDemoRunControls } from './routes/demo.js';
 import { mountAnnouncements } from './routes/announcements.js';
+import { mountPush } from './routes/push.js';
 
 // Demo mode (DEMO_MODE=1, docs/DEMO.md) seeds itself: a fresh, wiped database gets the synthetic
 // world (fixtures/world.mjs) before any code below reads state. guard.js has already refused a
@@ -168,30 +169,9 @@ mountInvite(app);
 
 mountAnnouncements(app);
 
-// ---------- INVITE LINK (self-serve pre-approval) ----------
-// ---- Web Push subscription endpoints. Subscription objects are nested JSON, so parse
-// JSON per-route (the app otherwise only mounts urlencoded). The subscription row IS the
-// opt-in state — subscribing = on, unsubscribing = off — so there's no separate flag. ----
-app.get('/push/key', requireLogin, (req, res) => res.json({ key: VAPID_PUBLIC }));
-app.post('/push/subscribe', requireLogin, express.json(), (req, res) => {
-  if (rateLimited('push-sub', req.userEmail, 15, 60 * 1000)) return res.status(429).end();
-  const s = req.body || {};
-  const endpoint = String(s.endpoint || '');
-  const p256dh = s.keys && String(s.keys.p256dh || '');
-  const auth = s.keys && String(s.keys.auth || '');
-  if (!endpoint.startsWith('https://') || !p256dh || !auth) return res.status(400).end();
-  db.prepare(`INSERT INTO push_subscriptions (email, endpoint, p256dh, auth) VALUES (?,?,?,?)
-              ON CONFLICT(endpoint) DO UPDATE SET email = excluded.email, p256dh = excluded.p256dh, auth = excluded.auth`)
-    .run(req.userEmail.toLowerCase(), endpoint, p256dh, auth);
-  res.status(204).end();
-});
-app.post('/push/unsubscribe', requireLogin, express.json(), (req, res) => {
-  const endpoint = String((req.body && req.body.endpoint) || '');
-  if (endpoint) db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ? AND email = ?')
-    .run(endpoint, req.userEmail.toLowerCase());
-  res.status(204).end();
-});
+mountPush(app);
 
+// ---------- INVITE LINK (self-serve pre-approval) ----------
 mountStatus(app);
 
 // One-time waiver gate — the join routes send a member here when their waiver is unset. They
