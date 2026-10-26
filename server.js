@@ -52,6 +52,7 @@ import { mountMessages } from './routes/messages.js';
 import { mountFriends, mountFriendParties } from './routes/friends.js';
 import { mountAdmin, mountAdminReports, mountNavLocalizer, mountPeopleRecords } from './routes/admin.js';
 import { mountKiosk } from './routes/kiosk.js';
+import { mountHealth } from './routes/health.js';
 
 // Demo mode (DEMO_MODE=1, docs/DEMO.md) seeds itself: a fresh, wiped database gets the synthetic
 // world (fixtures/world.mjs) before any code below reads state. guard.js has already refused a
@@ -133,19 +134,9 @@ mountAdminReports(app);
 
 mountKiosk(app);
 
-// ---------- HEALTH (S4) ----------
-// For the uptime monitor: cheap, unauthenticated, and it actually exercises the DB — a hung
-// SQLite handle should page the owner, not just a dead port. Returns no data beyond up/degraded.
-app.get('/healthz', (req, res) => {
-  try {
-    db.prepare('SELECT 1').get();
-    res.type('text/plain').send('ok');
-  } catch (e) {
-    console.error(`[healthz] DB check failed: ${e.message}`);
-    res.status(503).type('text/plain').send('degraded');
-  }
-});
+mountHealth(app);
 
+// ---------- HEALTH (S4) ----------
 mountNavLocalizer(app);
 
 // ---------- PROGRAMS (admin) — create a new run/program from the app, no deploy ----------
