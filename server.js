@@ -12,10 +12,10 @@ import sharp from 'sharp';
 import db, { rekeyEmailTx, transact } from './db.js';
 import { DEMO_MODE } from './guard.js';
 import {
-  APP_ROOT, PORT, PUBLIC_URL, CAP_ENV, WAITLIST_CAP_ENV, PREREG_CAP_ENV, VOTE_THRESHOLD, OFFER_WINDOW_HOURS,
-  PK_CAP, PK_WAIT, AVATARS_DIR, CHAT_MEDIA_DIR, CHAT_VIDEO_MAX_MB, BANNER_DIR, BANNER_PATH_ENV, PK_BANNER_PATH_ENV,
-  EXPORT_TMP_DIR, DM_KEY_SECRET, PUSH_CONTACT_EMAIL, ADMIN_EMAILS_ENV, LEGAL_ENV, LEGAL, DEMO_RESET_HOURS,
-  DEMO_RESET_COOLDOWN_MS, TEST_NOW, ENABLE_TEST_TICK, FORCE_HELD_RELEASED,
+  APP_ROOT, PORT, PUBLIC_URL, CAP_ENV, WAITLIST_CAP_ENV, PREREG_CAP_ENV, VOTE_THRESHOLD,
+  OFFER_WINDOW_HOURS, PK_CAP, PK_WAIT, AVATARS_DIR, CHAT_MEDIA_DIR, CHAT_VIDEO_MAX_MB, BANNER_DIR,
+  BANNER_PATH_ENV, PK_BANNER_PATH_ENV, EXPORT_TMP_DIR, DM_KEY_SECRET, ADMIN_EMAILS_ENV, LEGAL_ENV,
+  LEGAL, DEMO_RESET_HOURS, DEMO_RESET_COOLDOWN_MS, TEST_NOW, ENABLE_TEST_TICK, FORCE_HELD_RELEASED,
 } from './config.js';
 import { startBackups } from './backup.js';
 import { sendMagicLink, sendAnnouncement, sendSpotOffer, emailConfigured } from './mailer.js';
@@ -28,7 +28,6 @@ import {
   pcoPushFields, pcoSetAttendanceFields, pcoSetWaiverFields, pcoSetProgramLabels,
   pcoGroupRoster, pcoConnected, pcoSignupRosterForDate,
 } from './pco.js';
-import webpush from 'web-push';
 import {
   setSession, clearSession, currentUser, isAdmin,
   requireLogin, requireAdmin, makeRequireApprover, makeRequireCouncil, ADMINS, setSessionVersionLookup,
@@ -44,6 +43,7 @@ import { getSetting, setSetting, delSetting } from './lib/settings.js';
 import { audit, metric, pruneAuditLog } from './lib/audit.js';
 import { isValidEmail } from './lib/email.js';
 import { rateLimited } from './lib/rate-limit.js';
+import { sendPush, VAPID_PUBLIC, initPush } from './lib/push.js';
 
 // Demo mode (DEMO_MODE=1, docs/DEMO.md) seeds itself: a fresh, wiped database gets the synthetic
 // world (fixtures/world.mjs) before any code below reads state. guard.js has already refused a
@@ -148,36 +148,8 @@ function reloadRunSettings() {
   TOTAL_CAP = CAP + WAITLIST_CAP;
 }
 reloadRunSettings();
-// ---- Web Push: load-or-generate the VAPID keypair (persisted in app_settings so it
-// survives restarts + rides the db backup — never in .env) and a fire-and-forget send
-// helper that prunes dead subscriptions on 404/410. ----
-let VAPID_PUBLIC = getSetting('vapid_public'), VAPID_PRIVATE = getSetting('vapid_private');
-if (!VAPID_PUBLIC || !VAPID_PRIVATE) {
-  const kp = webpush.generateVAPIDKeys();
-  db.prepare('INSERT OR REPLACE INTO app_settings (key,value) VALUES (?,?)').run('vapid_public', kp.publicKey);
-  db.prepare('INSERT OR REPLACE INTO app_settings (key,value) VALUES (?,?)').run('vapid_private', kp.privateKey);
-  VAPID_PUBLIC = kp.publicKey; VAPID_PRIVATE = kp.privateKey;
-  console.log('[push] generated + persisted VAPID keypair');
-}
-webpush.setVapidDetails('mailto:' + PUSH_CONTACT_EMAIL, VAPID_PUBLIC, VAPID_PRIVATE);
-function sendPush(emails, { title, body, url, tag, badge }) {
-  try {
-  const list = [...new Set((emails || []).map(e => String(e || '').toLowerCase()))].filter(Boolean);
-  if (!list.length) return;
-  const ph = list.map(() => '?').join(',');
-  const subs = db.prepare(`SELECT * FROM push_subscriptions WHERE email IN (${ph})`).all(...list);
-  if (subs.length) metric('push_send', { n: subs.length, meta: tag || '' });   // devices targeted, by tag — no identities
-  const payload = JSON.stringify({ title, body, url, tag, badge });
-  for (const s of subs) {
-    webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload)
-      .catch((err) => {
-        if (err.statusCode === 404 || err.statusCode === 410)
-          db.prepare('DELETE FROM push_subscriptions WHERE id = ?').run(s.id);
-        else console.error(`[push] send failed (${err.statusCode || err.message})`);
-      });
-  }
-  } catch (e) { console.error(`[push] sendPush failed: ${e.message}`); } // runs in setImmediate — must never throw uncaught
-}
+
+initPush();
 
 // ---- Masthead notification bell: announcements panel + unread tracking ----
 // The bell lists recent announcements (live + archived history) newest-first and
