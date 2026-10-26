@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { REPO, startApp, isolationEnv } from './helpers/app.mjs';
 import { DEMO_PERSONAS, PERSONAS } from '../fixtures/world.mjs';
+import { withoutAppEnv } from '../scripts/app-env.mjs';
 
 // A demo instance, not a harness one: HARNESS off, DEMO_MODE on, the same isolated paths.
 const DEMO = { HARNESS: '', DEMO_MODE: '1' };
@@ -28,8 +29,7 @@ after(async () => {
 
 // ---------- the guard ----------
 const importGuard = (env) => {
-  const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(HARNESS|DEMO_|PORT|DB_PATH|BACKUP_|CHAT_|AVATARS_|BANNER_|PCO_|SMTP_|SESSION_|COOKIE_|ADMIN_|PUBLIC_URL|ENABLE_TEST_TICK|TEST_NOW|FORCE_HELD_RELEASED)/.test(k)));
-  return spawnSync(process.execPath, ['--input-type=module', '-e', "await import('./guard.js')"], { cwd: REPO, env: { ...clean, ...env }, encoding: 'utf8', timeout: 30_000 });
+  return spawnSync(process.execPath, ['--input-type=module', '-e', "await import('./guard.js')"], { cwd: REPO, env: { ...withoutAppEnv(process.env), ...env }, encoding: 'utf8', timeout: 30_000 });
 };
 const demoEnv = (extra = {}) => ({ ...isolationEnv(work, 39990), ...DEMO, ...extra });
 
@@ -195,7 +195,7 @@ test('run-demo.mjs: a reset wipes what visitors posted and reseeds a clean world
   const { freePort } = await import('./helpers/app.mjs');
   const port = await freePort();
   const dir = path.join(work, 'supervised');
-  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(DEMO_|PORT)/.test(k)));
+  const env = withoutAppEnv(process.env);
   const sup = (await import('node:child_process')).spawn(process.execPath, ['scripts/run-demo.mjs', '--data', dir, '--port', String(port)],
     { cwd: REPO, env: { ...env, DEMO_RESET_COOLDOWN_S: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';

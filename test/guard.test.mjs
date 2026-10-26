@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { REPO, isolationEnv, seedFixture, openDb } from './helpers/app.mjs';
+import { withoutAppEnv } from '../scripts/app-env.mjs';
 
 let work;
 before(() => { work = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-guard-')); });
@@ -20,8 +21,7 @@ after(() => { fs.rmSync(work, { recursive: true, force: true, maxRetries: 5, ret
 
 // Parent env minus anything app-related, then the given env.
 const run = (args, env) => {
-  const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(HARNESS|DEMO_|PORT|DB_PATH|BACKUP_|CHAT_|AVATARS_|BANNER_|PCO_|SMTP_|SESSION_|COOKIE_|ADMIN_|PUBLIC_URL|ENABLE_TEST_TICK|TEST_NOW|FORCE_HELD_RELEASED)/.test(k)));
-  return spawnSync(process.execPath, args, { cwd: REPO, env: { ...clean, ...env }, encoding: 'utf8', timeout: 30_000 });
+  return spawnSync(process.execPath, args, { cwd: REPO, env: { ...withoutAppEnv(process.env), ...env }, encoding: 'utf8', timeout: 30_000 });
 };
 const importGuard = (env) => run(['--input-type=module', '-e', "await import('./guard.js')"], env);
 const without = (key, extra = {}) => { const e = { ...isolationEnv(work, 39999), ...extra }; delete e[key]; return e; };

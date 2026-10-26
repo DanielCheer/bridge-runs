@@ -22,6 +22,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { PERSONAS } from '../fixtures/world.mjs';
+import { withoutAppEnv } from './app-env.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { values } = parseArgs({ options: { port: { type: 'string' }, data: { type: 'string' } } });
@@ -50,9 +51,8 @@ function wipe() {
 
 // The parent's environment minus anything the app reads (so a developer's exported SMTP or PCO
 // settings can never reach the demo), plus the demo's own. DEMO_RESET_* pass through as tuning.
-const APP_KEYS = /^(HARNESS|DEMO_|PORT|DB_PATH|BACKUP_|CHAT_|AVATAR|BANNER|PK_|PCO_|SMTP_|SESSION_|COOKIE_|ADMIN_|PUBLIC_URL|ENABLE_TEST_TICK|TEST_NOW|FORCE_HELD_RELEASED|ALLOW_INSECURE_SESSION|RUN_CAP|WAITLIST_CAP|PREREG_CAP|REGULAR_CAP|VOTE_THRESHOLD|OFFER_WINDOW_HOURS|WAIVER_URL|LEGAL_)/;
 function demoEnv() {
-  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !APP_KEYS.test(k)));
+  const env = withoutAppEnv(process.env);
   for (const k of ['DEMO_RESET_HOURS', 'DEMO_RESET_COOLDOWN_S']) if (process.env[k]) env[k] = process.env[k];
   return {
     ...env,

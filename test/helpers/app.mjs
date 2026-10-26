@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { withoutAppEnv } from '../../scripts/app-env.mjs';
 
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const SESSION_SECRET = 'test';
@@ -58,8 +59,7 @@ export function isolationEnv(work, port) {
 // The parent environment minus anything app-related, so a developer's exported SMTP/PCO/etc.
 // variables can never leak into a test instance. Only the variables named above (plus `env`) reach it.
 function baseEnv() {
-  const APP_KEYS = /^(HARNESS|DEMO_|PORT|DB_PATH|BACKUP_|CHAT_|AVATAR|BANNER|PK_|PCO_|SMTP_|SESSION_|COOKIE_|ADMIN_|PUBLIC_URL|ENABLE_TEST_TICK|TEST_NOW|FORCE_HELD_RELEASED|ALLOW_INSECURE_SESSION|RUN_CAP|WAITLIST_CAP|PREREG_CAP|REGULAR_CAP|VOTE_THRESHOLD|OFFER_WINDOW_HOURS|WAIVER_URL|LEGAL_)/;
-  return Object.fromEntries(Object.entries(process.env).filter(([k]) => !APP_KEYS.test(k)));
+  return withoutAppEnv(process.env);
 }
 
 // Build a fresh world database at <work>/app.db through scripts/seed-fixture.mjs (a child, because
