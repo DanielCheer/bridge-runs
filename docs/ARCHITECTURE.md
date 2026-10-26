@@ -17,15 +17,16 @@ template engine.
 | `views.js` | Every page as a template-literal function (`esc()` for escaping), plus `APP_JS`, the client engine served at `/app.js` (router, poll-and-patch, push, badges). Exports `BUILD_VER`, the newest mtime of `views.js`/`styles.css`. |
 | `db.js` | Opens the database, creates the schema (`CREATE TABLE IF NOT EXISTS` plus guarded `ALTER`s), runs migrations, boot-time pruning, and exports `db`, `transact`, `rekeyEmailTx`. |
 | `db-migrate.js` | Versioned, all-or-nothing schema migrations keyed on `PRAGMA user_version`. |
-| `guard.js` | The startup contract between a test instance and production. Imported first by `db.js`, so no entry point can skip it. See [TESTING.md](TESTING.md). |
+| `guard.js` | The startup contract between an isolated instance (a test, or the demo) and production: one `checkIsolation()` for `HARNESS=1` and `DEMO_MODE=1`. Imported first by `db.js`, so no entry point can skip it. See [TESTING.md](TESTING.md) and [DEMO.md](DEMO.md). |
 | `auth.js` | Signed session cookies (HMAC, versioned for "sign out everywhere"), `requireLogin` / `requireAdmin` / approver and council guards. |
 | `mailer.js` | Magic links, announcements and spot offers over SMTP; with no SMTP configured, links print to the console (dev mode). |
 | `pco.js` | Planning Center sync: identity link, outbox, webhook, delta poll, custom fields, Check-Ins reconciliation. See [PCO-SYNC-PHASE1-SPEC.md](PCO-SYNC-PHASE1-SPEC.md). |
 | `backup.js` | Encrypted (AES-256-GCM) `VACUUM INTO` snapshots at boot and daily, keeping the newest `BACKUP_KEEP`. |
 | `public/` | Static assets: `styles.css`, `sw.js` (conservative service worker), icons, fonts, stickers, banners, demo media. |
 | `legal/` | Markdown for `/privacy`, `/terms`, `/conduct`, rendered with the operator's contact details from env. |
-| `scripts/` | Operator and test tools: `restore-backup.mjs` (decrypt and integrity-check a snapshot), `release.sh` (tag a verified deploy and log it in `RELEASES.md`), `seed-fixture.mjs` (build a fresh database holding the synthetic world), `sanitize-db.mjs` (strip outward-reaching credentials from a test database). |
-| `fixtures/world.mjs` | The synthetic world every test starts from: fictional personas, three programs with history, chat, parties. |
+| `scripts/` | Operator and test tools: `restore-backup.mjs` (decrypt and integrity-check a snapshot), `release.sh` (tag a verified deploy and log it in `RELEASES.md`), `seed-fixture.mjs` (build a fresh database holding the synthetic world), `sanitize-db.mjs` (strip outward-reaching credentials from a test database), `run-demo.mjs` (the demo supervisor: wipe, start a `DEMO_MODE=1` server, restart on exit; `npm run demo`). |
+| `fixtures/world.mjs` | The synthetic world every test and the demo start from: fictional personas (and the demo's persona picker list), three programs with history, chat, parties. |
+| `Dockerfile` | Runs the demo (`scripts/run-demo.mjs`) on port 3100; see [DEMO.md](DEMO.md). |
 | `test/` | `node:test` suites, one per area, each booting the real app on its own temp directory and port (`test/helpers/app.mjs`); a local Planning Center mock (`test/helpers/pco-mock.mjs`). See [TESTING.md](TESTING.md). |
 | `.github/workflows/ci.yml` | Lint, circular-import check, tests and a production-dependency audit on Node 22 and 24. |
 | `ops/windows/` | Self-hosting on a Windows PC: `start-bridge.cmd` (supervised launcher that restarts node on exit), `install-autostart.ps1` (logon task), `watchdog.ps1` + `watchdog-hidden.vbs` (restarts a missing launcher when `/healthz` is dead). Paths are derived from each script's own location. |

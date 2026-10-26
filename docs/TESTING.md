@@ -31,7 +31,8 @@ subscriptions carried in a copied database. So isolation is not "each runner rem
 startup contract, enforced by `guard.js`, which `db.js` imports as its **first statement** so it
 runs before the database file is opened and no entry point can skip it.
 
-**With `HARNESS=1` the app refuses to start unless:**
+**With `HARNESS=1` the app refuses to start unless** (the public demo, `DEMO_MODE=1`, goes through the
+same check; see [DEMO.md](DEMO.md)):
 
 - `DB_PATH`, `BACKUP_DIR`, `BACKUP_KEY_FILE`, `CHAT_MEDIA_DIR`, `AVATARS_DIR`, `BANNER_DIR` are all set **and resolve
   outside the app directory**;
@@ -129,6 +130,8 @@ current night of every program is left empty; a suite sets up the night it is te
 | `games`, `ladder` | basketball game results and the leaderboard; the pickleball doubles ladder |
 | `pco` | the Planning Center sync against a local mock of its API |
 | `backup` | encrypted snapshots and the restore path, including tamper and wrong-key refusal |
+| `waiver-qr` | the waiver QR/link section exists only when `WAIVER_URL` is set |
+| `demo-mode` | the demo: guard refusals, self-seeding, persona sign-in per role, the strip, organizer-only reset, and the supervisor wiping a post on reset |
 
 The private golden master (byte-comparing 224 page snapshots across a change, on a copy of real
 data) and the browser-driven suites stay outside the repository, because they need real data.

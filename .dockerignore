@@ -1,0 +1,21 @@
+# Never in the image: live data, secrets, backups, uploads, logs, private material.
+bridge.db
+bridge.db-*
+backups/
+backup.key
+.env
+.env.*
+!.env.example
+*.log
+private-docs/
+public/chat-media/
+public/avatars/
+undefined
+undefined-*
+# Not needed to run the demo.
+node_modules/
+.git/
+.github/
+.claude/
+test/
+ops/

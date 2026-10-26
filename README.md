@@ -109,6 +109,18 @@ You manually control when people can join. On the check-in page (as admin) there
 
 - **Node.js 22 or newer** (uses the built-in SQLite — nothing to compile, no build tools). Check with `node --version`. If you're below 22, install the latest LTS from nodejs.org.
 
+## Try the demo
+
+```bash
+git clone https://github.com/DanielCheer/bridge-runs && cd bridge-runs
+npm ci
+npm run demo
+```
+
+Open http://localhost:3100 and pick a persona (organizer, team, council, core player, regular
+player, pending applicant). Everything is fictional and resets every 6 hours. Details:
+[docs/DEMO.md](docs/DEMO.md). There's also a `Dockerfile` that runs the same thing.
+
 ## Run it locally (test first)
 
 ```bash
