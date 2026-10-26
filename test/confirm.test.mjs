@@ -6,39 +6,15 @@
 //   • moving a run date re-arms both the ping and the sweep for the new day.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, ADMIN } from './helpers/app.mjs';
-import { PLAYERS, runDateFor, shiftDays, ymd } from '../fixtures/world.mjs';
+import { ADMIN } from './helpers/app.mjs';
+import { runDayApp, CONFIRMED as CONF, UNCONFIRMED as UNCONF, WAITER, GUEST } from './helpers/run-day.mjs';
+import { shiftDays } from '../fixtures/world.mjs';
 
-const [CONF, UNCONF, WAITER] = PLAYERS;
-const GUEST = 'someone@guest.local';
-
-// One phase = a fresh app with the clock pinned at `at` on the program's run date, a roster of a
-// confirmed + an unconfirmed floor player and a waitlister (+ a guest on basketball), check-in open,
-// nobody auto-seating. Basketball's floor is shrunk to 3 so the waitlister really waits.
-async function phase(t, { pid, time }) {
-  const rd = runDateFor(pid, ymd(new Date()));
-  const app = await startApp({
-    env: { TEST_NOW: `${rd}T${time}` },
-    seed: (db) => {
-      db.prepare('UPDATE applicants SET is_team = 0, auto_renew = 0').run();
-      db.prepare('UPDATE program_membership SET auto_renew = 0').run();
-      const ins = db.prepare('INSERT INTO checkins (run_date, email, name, program_id, sort_order, confirmed_at) VALUES (?,?,?,?,?,?)');
-      ins.run(rd, CONF, 'Conf Yes', pid, 0, `${rd} 08:00:00`);
-      ins.run(rd, UNCONF, 'Conf No', pid, 1, null);
-      if (pid === 1) ins.run(rd, GUEST, 'Guesty (guest)', pid, 2, null);
-      ins.run(rd, WAITER, 'Conf Wait', pid, 99, null);
-      db.prepare('INSERT OR REPLACE INTO run_state (run_date, program_id, is_open, cancelled) VALUES (?,?,1,0)').run(rd, pid);
-      if (pid === 2) db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('pk_run_date', ?)").run(rd);
-    },
-  });
-  t.after(() => app.stop());
-  if (pid === 1) await app.post('/admin/settings', { run_cap: '3', waitlist_cap: '5', prereg_cap: '0' }, { as: ADMIN });
-  const db = app.db();   // closed by app.stop()
-  const tick = await app.tick();
-  assert.equal(tick.status, 200);
-  const row = (em) => db.prepare('SELECT email, confirmed_at, offered_at FROM checkins WHERE program_id = ? AND run_date = ? AND email = ?').get(pid, rd, em);
-  const one = (sql, ...a) => db.prepare(sql).get(...a);
-  return { app, db, rd, row, one };
+// One phase = a fresh run-day app at `time`, then one scheduler tick.
+async function phase(t, opts) {
+  const night = await runDayApp(t, opts);
+  assert.equal((await night.app.tick()).status, 200);
+  return night;
 }
 
 test('9 AM on run day: the confirm ping goes out and nobody is removed', async (t) => {
@@ -59,14 +35,13 @@ test('basketball cutoff: unconfirmed removed, the spot offered, confirmed and gu
 });
 
 test('pickleball cutoff: both unconfirmed swept, no offer holds; a date move re-arms ping and sweep', async (t) => {
-  const { app, rd, row, one } = await phase(t, { pid: 2, time: '16:35:00' });
+  const { app, rd, row, one, setting } = await phase(t, { pid: 2, time: '16:35:00' });
   assert.equal(row(UNCONF), undefined);
   assert.equal(row(WAITER), undefined, "pickleball's big floor put the third player on it too, so they are swept");
   assert.ok(row(CONF));
   assert.equal(one("SELECT target FROM audit_log WHERE action = 'pk:confirmsweep'")?.target, '2', 'sweep audited with its count');
   assert.equal(one('SELECT COUNT(*) n FROM checkins WHERE program_id = 2 AND offered_at IS NOT NULL').n, 0, 'simple model: no offers');
 
-  const setting = (k) => one('SELECT value v FROM app_settings WHERE key = ?', k)?.v;
   assert.equal(setting('pk_confirmsweep_done'), rd, 'precondition: the sweep marker is set for the old date');
   const moved = shiftDays(rd, 2);   // Tuesday -> Thursday (rain-out)
   await app.post('/pickleball/date', { date: moved }, { as: ADMIN });
