@@ -1,14 +1,21 @@
 {
   "name": "bridge-adv-runs",
   "version": "1.0.0",
+  "private": true,
   "description": "The Bridge Adv Runs - intake form + weekly run check-in (basketball + pickleball)",
+  "license": "MIT",
+  "repository": "github:DanielCheer/bridge-runs",
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node --env-file-if-exists=.env server.js"
+    "start": "node --env-file-if-exists=.env server.js",
+    "dev": "node --watch --env-file-if-exists=.env server.js",
+    "test": "node --test test/",
+    "lint": "eslint .",
+    "audit": "npm audit --omit=dev --audit-level=high"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "dependencies": {
     "compression": "^1.8.1",
@@ -19,5 +26,11 @@
     "qrcode": "^1.5.4",
     "sharp": "^0.35.3",
     "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.13.0",
+    "globals": "^17.13.0",
+    "madge": "^8.0.0"
   }
 }
