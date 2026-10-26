@@ -103,3 +103,10 @@ signup (by name prefix and event date) and the weekly roster sync seeds `run_ros
 - Writing attendance into Check-Ins or Groups: PCO's API doesn't allow it for any integration.
 - Mass-creating Bridge accounts from the whole directory: membership stays invite-driven.
 
+
+## Testing
+
+`test/pco.test.mjs` boots the app against `test/helpers/pco-mock.mjs`, a local fake of the PCO API
+(People, OAuth token endpoint with refresh rotation and PKCE, custom fields, form submissions,
+Check-Ins passes and taps, Registrations signups) with failure injection for 429, 5xx, 4xx, 401
+and 403. It covers every flow above, in order, in one run. See [TESTING.md](TESTING.md).
