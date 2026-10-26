@@ -9,6 +9,7 @@ import sharp from 'sharp';
 import db, { rekeyEmailTx, transact } from '../db.js';
 import { PUBLIC_URL, EXPORT_TMP_DIR } from '../config.js';
 import { sendAnnouncement } from '../mailer.js';
+import { writeEncryptedSnapshot } from '../backup.js';
 import { pcoQueuePatch } from '../pco.js';
 import { isAdmin, requireAdmin, requireLogin, ADMINS } from '../auth.js';
 import {
@@ -549,19 +550,21 @@ export function mountAdmin(app) {
   // scheduled backupNow() (whose second-precision filenames would clash) and has none of its side
   // effects. Deleted after the response. Contains ALL data (chat, DMs, contacts) \u2192 requireAdmin +
   // audited; the page warns to store it securely.
+  // The full-database download is the same encrypted container as the scheduled snapshots (under
+  // the backup key), so a copy left in a Downloads folder or a mail attachment is ciphertext.
+  // Restore it with scripts/restore-backup.mjs and the server's backup.key.
   app.get('/admin/export/db', requireAdmin, (req, res, next) => {
     let tmp;
     try {
       fs.mkdirSync(EXPORT_TMP_DIR, { recursive: true });
-      tmp = path.join(EXPORT_TMP_DIR, `export-${process.pid}-${Date.now()}.db`);
-      db.exec(`VACUUM INTO '${tmp.replace(/'/g, "''")}'`); // consistent copy regardless of WAL state
+      tmp = writeEncryptedSnapshot(path.join(EXPORT_TMP_DIR, `export-${process.pid}-${Date.now()}.db.enc`));
     } catch (e) {
       console.error(`[export:db] snapshot FAILED for ${req.userEmail}: ${e.message}`);
       return res.status(500).send('Export failed \u2014 check the server log.');
     }
     audit(req.userEmail, 'admin', 'db:export', '');
     const stamp = new Date().toISOString().slice(0, 10);
-    res.download(tmp, `bridge-backup-${stamp}.db`, (err) => {
+    res.download(tmp, `bridge-backup-${stamp}.db.enc`, (err) => {
       fs.unlink(tmp, () => {}); // best-effort cleanup of the transient snapshot
       if (err && !res.headersSent) next(err);
     });

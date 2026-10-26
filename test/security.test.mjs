@@ -3,8 +3,11 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import webpush from 'web-push';
-import { startApp, ADMIN, openSealedSetting } from './helpers/app.mjs';
+import { startApp, ADMIN, REPO, openDb, openSealedSetting } from './helpers/app.mjs';
 import { PERSONAS } from '../fixtures/world.mjs';
 
 let app, db;
@@ -110,4 +113,23 @@ test('a legacy plaintext VAPID keypair is kept (not regenerated) and sealed at b
       assert.equal(openSealedSetting(get('vapid_private')), kp.privateKey);
     } finally { d.close(); }
   } finally { await legacy.stop(); }
+});
+
+// ---------- /admin/export/db is encrypted ----------
+test('the database download is the encrypted backup container, and it restores', async () => {
+  const r = await app.get('/admin/export/db', { as: ADMIN });
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('content-disposition') || '', /filename="bridge-backup-\d{4}-\d{2}-\d{2}\.db\.enc"/);
+  const body = Buffer.from(await r.arrayBuffer());
+  assert.equal(body.subarray(0, 6).toString(), 'BRENC1', 'starts with the backup magic header');
+  assert.ok(!body.includes(Buffer.from('SQLite format 3')), 'no plaintext SQLite inside');
+  const enc = path.join(app.work, 'export.db.enc'), out = path.join(app.work, 'export-restored.db');
+  fs.writeFileSync(enc, body);
+  const res = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'restore-backup.mjs'), enc, out, path.join(app.work, 'backup.key')], { encoding: 'utf8' });
+  assert.equal(res.status, 0, res.stderr);
+  const restored = openDb(out);
+  try {
+    assert.equal(restored.prepare('SELECT COUNT(*) n FROM applicants').get().n, one('SELECT COUNT(*) n FROM applicants').n);
+  } finally { restored.close(); }
+  assert.deepEqual(fs.readdirSync(path.join(app.work, 'backups')).filter((f) => f.startsWith('export-')), [], 'no temp file left behind');
 });

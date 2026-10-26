@@ -202,8 +202,8 @@ export function exportPage({ programs = [], dmUnread = 0, groupUnread = 0, group
     <a class="btn ghost" href="/admin/people/export.csv" style="margin:0" download>⬇︎ Export people (CSV)</a>
 
     <div class="subhead" style="margin-top:20px">Full backup</div>
-    <a class="btn" href="/admin/export/db" style="margin:0" download>⬇︎ Download database (.db)</a>
-    <div class="exwarn">⚠️ The database contains <b>everything</b> — contact details, chat and direct messages. Only download it to a device you control, and store it securely. Every download is logged.</div>
+    <a class="btn" href="/admin/export/db" style="margin:0" download>⬇︎ Download encrypted backup (.db.enc)</a>
+    <div class="exwarn">⚠️ The database contains <b>everything</b> — contact details, chat and direct messages. The download is encrypted with the server's backup key; to open it, run <code>node scripts/restore-backup.mjs &lt;file&gt; &lt;out.db&gt; backup.key</code> with the <code>backup.key</code> from the server. Keep the key and the file apart. Every download is logged.</div>
 
     <div class="foot" style="margin-top:24px"><a href="/admin/people">← Manage people</a> · <a href="/logout">Sign out</a></div>
   ` + footWithTabs(tabNav('', { dm: dmUnread, group: groupUnread, groupMention }));

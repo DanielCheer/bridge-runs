@@ -55,22 +55,33 @@ function stamp(d = new Date()) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
+// A consistent, encrypted copy of the whole database at `dest` (the BRENC1 container above, under
+// the backup key). The scheduled snapshots and the admin download (/admin/export/db) both go
+// through here, so neither ever hands out or leaves behind a plaintext database. Throws on failure,
+// after removing the plaintext temp file.
+export function writeEncryptedSnapshot(dest) {
+  const key = backupKey();   // resolve the key FIRST — no point vacuuming if we can't encrypt
+  const tmp = dest + '.tmp-vacuum';
+  try {
+    // VACUUM INTO takes a string literal — escape single quotes in the path. The plaintext
+    // vacuum goes to a temp file that is encrypted and then removed in the same call, so no
+    // completed snapshot ever sits on disk unencrypted.
+    db.exec(`VACUUM INTO '${tmp.replace(/'/g, "''")}'`);
+    encryptFile(tmp, dest, key);
+  } finally {
+    try { fs.unlinkSync(tmp); } catch { /* never created */ }
+  }
+  return dest;
+}
+
 export function backupNow() {
-  let tmp = null;
   try {
     fs.mkdirSync(BACKUP_DIR, { recursive: true });
-    const key = backupKey();   // resolve the key FIRST — no point vacuuming if we can't encrypt
     const dest = path.join(BACKUP_DIR, `bridge-${stamp()}.db.enc`);
-    tmp = dest + '.tmp-vacuum';
     // Prune dead magic-link tokens before the snapshot so the copy stays lean. A
     // token is dead once used OR expired; unused-and-valid links are preserved.
     db.prepare('DELETE FROM login_tokens WHERE used = 1 OR expires_at < ?').run(Date.now());
-    // VACUUM INTO takes a string literal — escape single quotes in the path. The plaintext
-    // vacuum goes to a temp file that is encrypted and then removed in the same call, so no
-    // completed backup ever sits on disk unencrypted.
-    db.exec(`VACUUM INTO '${tmp.replace(/'/g, "''")}'`);
-    encryptFile(tmp, dest, key);
-    fs.unlinkSync(tmp); tmp = null;
+    writeEncryptedSnapshot(dest);
     // Collapse the WAL back into the main DB. Without this the -wal file grows
     // unbounded across a long-running process (the 4MB-WAL problem). TRUNCATE
     // resets it to zero bytes. Safe here — single connection, no other writers.
@@ -80,9 +91,8 @@ export function backupNow() {
     console.log(`[backup] wrote ${path.basename(dest)} (encrypted)`);
     return dest;
   } catch (e) {
-    // Fail loud but never crash the server over a backup problem. Never leave a plaintext
-    // vacuum behind on a failed run.
-    if (tmp) { try { fs.unlinkSync(tmp); } catch { /* already gone */ } }
+    // Fail loud but never crash the server over a backup problem (writeEncryptedSnapshot has
+    // already removed any plaintext vacuum).
     console.error(`[backup] FAILED: ${e.message}`);
     return null;
   }
