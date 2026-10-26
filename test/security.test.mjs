@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import webpush from 'web-push';
+import sharp from 'sharp';
 import { startApp, ADMIN, REPO, openDb, openSealedSetting } from './helpers/app.mjs';
 import { PERSONAS } from '../fixtures/world.mjs';
 
@@ -132,4 +133,33 @@ test('the database download is the encrypted backup container, and it restores',
     assert.equal(restored.prepare('SELECT COUNT(*) n FROM applicants').get().n, one('SELECT COUNT(*) n FROM applicants').n);
   } finally { restored.close(); }
   assert.deepEqual(fs.readdirSync(path.join(app.work, 'backups')).filter((f) => f.startsWith('export-')), [], 'no temp file left behind');
+});
+
+// ---------- /chat-media needs a signed-in user; upload names carry 128 random bits ----------
+test('/chat-media answers 403 signed out and serves the file signed in', async () => {
+  fs.writeFileSync(path.join(app.work, 'media', '1-probe.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+  assert.equal((await app.get('/chat-media/1-probe.jpg')).status, 403);
+  const r = await app.get('/chat-media/1-probe.jpg', { as: 'player01@test.local' });
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('cache-control') || '', /^private\b/);
+});
+
+test('/avatars stays public (the kiosk renders avatars without a cookie)', async () => {
+  fs.writeFileSync(path.join(app.work, 'avatars', '1-probe.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+  assert.equal((await app.get('/avatars/1-probe.jpg')).status, 200);
+});
+
+const tinyJpeg = () => sharp({ create: { width: 8, height: 8, channels: 3, background: '#E4611F' } }).jpeg().toBuffer();
+const upload = async (p, field, as) => {
+  const form = new FormData();
+  form.set(field, new Blob([await tinyJpeg()], { type: 'image/jpeg' }), 'x.jpg');
+  return fetch(app.baseURL + p, { method: 'POST', redirect: 'manual', body: form, headers: { Cookie: app.cookieFor(as), 'X-Requested-With': 'fetch' } });
+};
+test('new chat photos and avatars are named <id>-<32 hex>', async () => {
+  const who = 'player02@test.local';
+  await upload('/profile/photo', 'photo', who);
+  assert.match(one('SELECT avatar FROM applicants WHERE email = ?', who).avatar, /^\d+-[0-9a-f]{32}\.jpg$/);
+  await upload('/pickleball/chat', 'image', who);
+  const img = one("SELECT image FROM group_messages WHERE from_email = ? AND image LIKE '/chat-media/%' ORDER BY id DESC", who)?.image;
+  assert.match(img || '', /^\/chat-media\/\d+-[0-9a-f]{32}\.jpg$/);
 });

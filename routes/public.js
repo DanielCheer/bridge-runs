@@ -45,12 +45,14 @@ export function mountAssets(app) {
   // through to the public mount (keeps the hand-placed daniel.jpg seed working even
   // when AVATARS_DIR is a temp dir). Created on boot so the first upload never ENOENTs.
   app.use('/avatars', express.static(AVATARS_DIR, { maxAge: '365d', immutable: true })); // content-addressed name + ?v= bust → safe to pin
-  // Chat photo storage. Same override pattern as avatars: CHAT_MEDIA_DIR points it
-  // elsewhere in test/other envs and is mounted at /chat-media BEFORE the public static
-  // so an override wins, yet a missing file falls through. Created on boot so the first
-  // upload never ENOENTs. Stickers live in public/stickers and are served by the general
-  // public mount below (no per-file DB — validated by name against STICKERS on send).
-  app.use('/chat-media', express.static(CHAT_MEDIA_DIR, { maxAge: '365d', immutable: true })); // <msgid>-<hex> names never rewritten → safe to pin
+  // Chat photo / voice / video storage (CHAT_MEDIA_DIR). Only signed-in people can fetch it:
+  // every surface that shows chat media (rooms, DMs) is behind a sign-in, so a leaked link alone
+  // opens nothing. Names are never rewritten, so a year's immutable cache is safe, but it is
+  // `private` so no shared cache keeps a copy. Stickers live in public/stickers and are served by
+  // the general public mount below (no per-file DB — validated by name against STICKERS on send).
+  app.use('/chat-media', (req, res, next) => (currentUser(req) ? next() : res.status(403).type('text').send('Sign in to view this.')),
+    express.static(CHAT_MEDIA_DIR, { maxAge: '365d', immutable: true,
+      setHeaders: (res) => res.set('Cache-Control', 'private, max-age=31536000, immutable') }));
   // The service worker must never be pinned by HTTP cache (it controls the whole app),
   // so serve it no-cache from the same public dir, ahead of the 7-day static mount.
   app.get('/sw.js', (req, res) => {

@@ -1,6 +1,5 @@
 // routes/profile.js — profiles: another player's profile and card (/u/:id), your own profile tab
 // with edits and photo, and its settings (chat push opt-in, sign out everywhere).
-import crypto from 'crypto';
 import QRCode from 'qrcode';
 import path from 'path';
 import fs from 'fs';
@@ -14,7 +13,7 @@ import { getSetting, setSetting } from '../lib/settings.js';
 import { audit } from '../lib/audit.js';
 import { isValidEmail } from '../lib/email.js';
 import { rateLimited } from '../lib/rate-limit.js';
-import { refreshAvatarMap, uploadAvatar, sniffImage, safeUnlinkAvatar } from '../lib/media.js';
+import { refreshAvatarMap, uploadAvatar, sniffImage, safeUnlinkAvatar, serverFileName } from '../lib/media.js';
 import { isMinor, stmtApplicantById, applicantByEmail, ageFromDob } from '../engine/applicants.js';
 import { P, runCookie, PROGRAMS } from '../engine/programs.js';
 import { nextRunDate, runTimeRange } from '../engine/basketball-calendar.js';
@@ -172,7 +171,7 @@ export function mountProfile(app) {
           .resize(512, 512, { fit: 'cover', position: 'centre' })
           .jpeg({ quality: 80, mozjpeg: true })            // …then re-encode (metadata stripped by default)
           .toBuffer();
-        const fname = `${a.id}-${crypto.randomBytes(6).toString('hex')}.jpg`;
+        const fname = serverFileName(a.id, 'jpg');
         await fs.promises.writeFile(path.join(AVATARS_DIR, fname), out); // async write off the event loop
         // Re-read the CURRENT avatar right before the swap (post-await): `a` was fetched before the
         // sharp/writeFile awaits, so two concurrent uploads would both see the original and both

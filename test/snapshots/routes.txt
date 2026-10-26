@@ -6,6 +6,7 @@ USE / urlencodedParser
 USE / cookieParser
 USE / <anonymous>
 USE ^\/avatars\/?(?=\/|$) serveStatic
+USE ^\/chat-media\/?(?=\/|$) <anonymous>
 USE ^\/chat-media\/?(?=\/|$) serveStatic
 GET /sw.js  [<anonymous>]
 GET /app.js  [<anonymous>]
