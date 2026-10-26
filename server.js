@@ -9,9 +9,8 @@ import sharp from 'sharp';
 import db, { rekeyEmailTx, transact } from './db.js';
 import { DEMO_MODE } from './guard.js';
 import {
-  APP_ROOT, PORT, PUBLIC_URL, VOTE_THRESHOLD, OFFER_WINDOW_HOURS, AVATARS_DIR, CHAT_MEDIA_DIR,
-  EXPORT_TMP_DIR, ADMIN_EMAILS_ENV, LEGAL_ENV, LEGAL, DEMO_RESET_HOURS, DEMO_RESET_COOLDOWN_MS,
-  ENABLE_TEST_TICK,
+  APP_ROOT, PORT, PUBLIC_URL, OFFER_WINDOW_HOURS, AVATARS_DIR, CHAT_MEDIA_DIR, EXPORT_TMP_DIR,
+  ADMIN_EMAILS_ENV, LEGAL_ENV, LEGAL, DEMO_RESET_HOURS, DEMO_RESET_COOLDOWN_MS, ENABLE_TEST_TICK,
 } from './config.js';
 import { startBackups } from './backup.js';
 import { sendMagicLink, sendAnnouncement, emailConfigured } from './mailer.js';
@@ -121,6 +120,7 @@ import {
 } from './engine/run-engine.js';
 import { autoJoinTeam, loadRun, ensureWeek } from './engine/basketball.js';
 import { PROGRAM_THEMES, slugIsReserved, buildPrograms } from './engine/program-loader.js';
+import { recomputeStatus } from './engine/council.js';
 
 // Demo mode (DEMO_MODE=1, docs/DEMO.md) seeds itself: a fresh, wiped database gets the synthetic
 // world (fixtures/world.mjs) before any code below reads state. guard.js has already refused a
@@ -139,35 +139,6 @@ const stmtAnnouncementExists = db.prepare('SELECT 1 FROM announcements WHERE id 
 reloadRunSettings();
 
 initPush();
-
-// Symmetric threshold: VOTE_THRESHOLD approvals → approved,
-// VOTE_THRESHOLD rejects → rejected, otherwise pending.
-// Team members are auto-approved and never voted on.
-function recomputeStatus(id) {
-  const app = db.prepare('SELECT id,email,is_team,status FROM applicants WHERE id = ?').get(id);
-  if (!app || app.is_team) return app?.status;
-  const pool = approverEmails();
-  const votes = db.prepare('SELECT voter_email,vote FROM votes WHERE applicant_id = ?').all(id)
-    .filter(v => pool.has(v.voter_email.toLowerCase()));   // ignore votes from ex-approvers
-  const approves = votes.filter(v => v.vote === 'approve').length;
-  const rejects = votes.filter(v => v.vote === 'reject').length;
-  let status = 'pending';
-  if (rejects >= VOTE_THRESHOLD) status = 'rejected';
-  else if (approves >= VOTE_THRESHOLD) status = 'approved';
-  if (status !== app.status) {
-    db.prepare('UPDATE applicants SET status = ? WHERE id = ?').run(status, id);
-    if (status === 'rejected') {
-      // Dropping a rejected player off the floor frees a slot — offer it onward (capture
-      // the offeree BEFORE the delete) instead of silently auto-promoting the waitlist.
-      const runDate = nextRunDate();
-      const offeree = offereeForFloorLeave(runDate, app.email);
-      db.prepare('DELETE FROM checkins WHERE email = ? AND program_id = 1').run(app.email); // basketball floor only; the cascade below handles every other program
-      if (offeree) createOffer(runDate, offeree, null);
-      dropFromPickleball(app.email);   // a rejected player leaves EVERY opt-in program's floor (P2-2)
-    }
-  }
-  return status;
-}
 
 mountHttpBasics(app);
 // Profile-photo storage. Defaults to public/avatars (served by the general static
