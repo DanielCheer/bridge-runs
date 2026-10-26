@@ -58,7 +58,7 @@ export function isolationEnv(work, port) {
 // The parent environment minus anything app-related, so a developer's exported SMTP/PCO/etc.
 // variables can never leak into a test instance. Only the variables named above (plus `env`) reach it.
 function baseEnv() {
-  const APP_KEYS = /^(HARNESS|PORT|DB_PATH|BACKUP_|CHAT_|AVATAR|BANNER|PK_|PCO_|SMTP_|SESSION_|COOKIE_|ADMIN_|PUBLIC_URL|ENABLE_TEST_TICK|TEST_NOW|FORCE_HELD_RELEASED|ALLOW_INSECURE_SESSION|RUN_CAP|WAITLIST_CAP|PREREG_CAP|REGULAR_CAP|VOTE_THRESHOLD|OFFER_WINDOW_HOURS|WAIVER_URL|LEGAL_)/;
+  const APP_KEYS = /^(HARNESS|DEMO_|PORT|DB_PATH|BACKUP_|CHAT_|AVATAR|BANNER|PK_|PCO_|SMTP_|SESSION_|COOKIE_|ADMIN_|PUBLIC_URL|ENABLE_TEST_TICK|TEST_NOW|FORCE_HELD_RELEASED|ALLOW_INSECURE_SESSION|RUN_CAP|WAITLIST_CAP|PREREG_CAP|REGULAR_CAP|VOTE_THRESHOLD|OFFER_WINDOW_HOURS|WAIVER_URL|LEGAL_)/;
   return Object.fromEntries(Object.entries(process.env).filter(([k]) => !APP_KEYS.test(k)));
 }
 
@@ -82,10 +82,12 @@ export function signCookie(email, version = 0, secret = SESSION_SECRET) {
   return `bridge_session=${v}.${crypto.createHmac('sha256', secret).update(v).digest('base64url')}`;
 }
 
-export async function startApp({ env = {}, today, seed, keep = false } = {}) {
+// `fixture: false` boots on an empty location instead of the seeded world (the app creates the
+// database itself), for suites about what the app does on a first boot.
+export async function startApp({ env = {}, today, seed, fixture = true, keep = false } = {}) {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-test-'));
   const port = await freePort();
-  const dbPath = seedFixture(work, { today });
+  const dbPath = fixture ? seedFixture(work, { today }) : path.join(work, 'app.db');
   if (seed) { const db = openDb(dbPath); try { await seed(db); } finally { db.close(); } }
 
   const childEnv = { ...baseEnv(), ...isolationEnv(work, port), ...env };
@@ -143,6 +145,7 @@ export async function startApp({ env = {}, today, seed, keep = false } = {}) {
 
   return {
     baseURL, port, work, dbPath,
+    exited,   // resolves with the exit code when the server process ends
     get log() { return log; },
     cookieFor,
     db,

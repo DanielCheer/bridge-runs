@@ -717,6 +717,24 @@ const WALL_BODY = `<div id="installwall" role="dialog" aria-modal="true" aria-la
   if(btn) btn.addEventListener('click',function(){ if(window.__bip){ window.__bip.prompt(); window.__bip.userChoice.finally(function(){window.__bip=null;btn.style.display='none';}); } });
 })();</script>`;
 
+// Demo mode (DEMO_MODE=1, docs/DEMO.md), set once at boot by server.js through setDemoMode().
+// Off by default, so production, the tests and the golden master render byte-identically.
+// When on: a slim strip on every page, and a persona picker on /login.
+let DEMO = null;   // { personas: [{ key, label, who }], resetHours }
+export function setDemoMode(on, { personas = [], resetHours = 6 } = {}) {
+  DEMO = on ? { personas: personas.map(({ key, label, who }) => ({ key, label, who })), resetHours } : null;
+}
+const REPO_URL = 'https://github.com/DanielCheer/bridge-runs';
+const demoStrip = () => DEMO ? `<div class="demo-strip" role="note" style="background:#183B38;color:#F8F5EF;font:600 12px/1.4 system-ui,sans-serif;text-align:center;padding:6px 12px;position:relative;z-index:50">Demo — fictional data, resets every ${esc(String(DEMO.resetHours))} hours · <a href="/demo/reset" style="color:#F8F5EF;text-decoration:underline">Reset (organizer)</a> · <a href="${REPO_URL}" target="_blank" rel="noopener" style="color:#F8F5EF;text-decoration:underline">GitHub ↗</a></div>` : '';
+const demoPersonaPicker = () => DEMO ? `
+    <span class="eyebrow">Live demo</span>
+    <h1>Pick who to be</h1>
+    <p class="lead">Every account here is fictional. Pick a role to sign in as that person, no email needed.</p>
+    <form method="POST" action="/demo/login" class="card rail demo-personas">
+      ${DEMO.personas.map(p => `<button class="btn ghost" type="submit" name="persona" value="${esc(p.key)}" style="display:block;width:100%;text-align:left;margin:0 0 8px"><b>${esc(p.label)}</b><br><span class="tally-note" style="margin:0">${esc(p.who)}</span></button>`).join('')}
+    </form>
+    <p class="tally-note" style="margin:18px 0 8px">Or use the normal sign-in below. No email is sent in the demo: the code shows on the next screen.</p>` : '';
+
 const HEAD = (title, bodyClass = '', { wall = true } = {}) => `<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#F8F5EF">
@@ -743,7 +761,7 @@ ${wall ? WALL_HEAD : ''}
 <link rel="preload" href="/fonts/archivo.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/inter.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/styles.css?v=${CSS_VER}">
-</head><body class="${bodyClass}">${SPLASH_BODY}${wall ? WALL_BODY : ''}<div class="wrap">`;
+</head><body class="${bodyClass}">${SPLASH_BODY}${demoStrip()}${wall ? WALL_BODY : ''}<div class="wrap">`;
 
 const FOOTER_LINKS = `<div class="foot legalfoot"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/conduct">Conduct</a></div>`;
 const FOOT = `${FOOTER_LINKS}</div></body></html>`;
@@ -1968,7 +1986,7 @@ export function loginPage({ sent = false, email = '', next = '', devLink = '', d
     ` + FOOT;
   }
   return HEAD('Sign in — The Bridge', '', { wall: false }) + header() + `
-    <div class="rule"></div>
+    <div class="rule"></div>${demoPersonaPicker()}
     <span class="eyebrow">Approved players</span>
     <h1>Sign in to check in</h1>
     <p class="lead">Enter the email you applied with — we'll email you a 6-digit code (no password). You do this <b>once</b> on this device, then you're signed in for good — no more codes.</p>
@@ -5128,6 +5146,29 @@ export function chatLockedPage({ email, dmUnread = 0 }) {
 // CSRF / link-prefetch hole a GET-that-logs-you-out opens, and keeps a working
 // no-JS path (the button below posts). With JS, the delegated handler in HEAD
 // intercepts the "Sign out" link and posts directly, so this page is rarely seen.
+// Demo reset (DEMO_MODE only, organizer only). The confirm never auto-submits: a reset wipes
+// everyone's changes. After the POST the server exits and its supervisor reseeds, so the
+// "resetting" page waits for /healthz to drop and answer again before going back to the picker.
+export function demoResetPage({ resetting = false } = {}) {
+  if (resetting) {
+    return HEAD('Resetting the demo — The Bridge', '', { wall: false }) + header('<b>DEMO</b>') + `
+    <div class="rule"></div>
+    <h1>Resetting the demo</h1>
+    <p class="lead">Wiping every change and reseeding the fictional world. This takes a few seconds; you'll be sent back to pick someone.</p>
+    <script>(function(){var gone=false,t0=Date.now();function poll(){fetch('/healthz',{cache:'no-store'}).then(function(r){if(r.ok&&(gone||Date.now()-t0>20000))location.href='/login';else setTimeout(poll,500);}).catch(function(){gone=true;setTimeout(poll,500);});}setTimeout(poll,300);})();</script>
+  ` + FOOT;
+  }
+  return HEAD('Reset the demo — The Bridge', '', { wall: false }) + header('<b>DEMO</b>') + `
+    <div class="rule"></div>
+    <span class="eyebrow">Organizer</span>
+    <h1>Reset the demo?</h1>
+    <p class="lead">Every visitor's posts, uploads, sign-ups and changes are wiped, and the fictional world is reseeded. Everyone is signed out.</p>
+    <form method="POST" action="/demo/reset"><button class="btn" type="submit">Reset now</button></form>
+    <div style="height:8px"></div>
+    <a class="btn ghost" href="/runs">Cancel</a>
+  ` + FOOT;
+}
+
 export function logoutPage() {
   return HEAD('Sign out — The Bridge', '', { wall: false }) + header('<b>SIGN OUT</b>') + `
     <div class="rule"></div>

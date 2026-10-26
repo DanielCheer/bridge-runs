@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env server.js",
     "dev": "node --watch --env-file-if-exists=.env server.js",
+    "demo": "node scripts/run-demo.mjs",
     "test": "node --test \"test/*.test.mjs\"",
     "lint": "eslint .",
     "audit": "npm audit --omit=dev --audit-level=high"

@@ -11,6 +11,7 @@ import sharp from 'sharp';
 import { fileURLToPath } from 'url';
 
 import db, { rekeyEmailTx, transact } from './db.js';
+import { DEMO_MODE } from './guard.js';
 import { startBackups } from './backup.js';
 import { sendMagicLink, sendAnnouncement, sendSpotOffer, emailConfigured } from './mailer.js';
 import {
@@ -32,8 +33,18 @@ import {
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap, setProgramMeta,
   STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, demoProfileCard, pickleballPage, runPage, runsPage, pkJoinPage, runJoinPage, pastRunPage, waiverPage,
   friendsPage, friendsSearchFragment, chatLockedPage, runChatPage, pcoAdminPage, programsAdminPage, kioskPage, analyticsPage, auditViewerPage, runHistoryPage,
-  ladderPage, ladderBoardPage, teamsBoardPage, leaderboardPage, WAIVER_URL,
+  ladderPage, ladderBoardPage, teamsBoardPage, leaderboardPage, WAIVER_URL, setDemoMode, demoResetPage,
 } from './views.js';
+
+// Demo mode (DEMO_MODE=1, docs/DEMO.md) seeds itself: a fresh, wiped database gets the synthetic
+// world (fixtures/world.mjs) before any code below reads state. guard.js has already refused a
+// database holding anyone outside the fixture domain, so this never writes into real data. The
+// fixture module is loaded only in demo mode; production never imports it.
+const demoWorld = DEMO_MODE ? await import('./fixtures/world.mjs') : null;
+if (demoWorld && db.prepare('SELECT COUNT(*) n FROM applicants').get().n === 0) {
+  const { today } = demoWorld.seedWorld(db);
+  console.log(`[demo] seeded the synthetic world for ${today}`);
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -1457,6 +1468,50 @@ app.post('/login/code', (req, res) => {
 // HEAD intercepts "Sign out" links and posts directly for a seamless one-tap flow.
 app.get('/logout', (req, res) => { res.send(logoutPage()); });
 app.post('/logout', (req, res) => { clearSession(res); res.redirect('/'); });
+
+// ---------- DEMO MODE (DEMO_MODE=1, docs/DEMO.md) ----------
+// The public demo: a persona picker on /login, a strip on every page, and a clean world on a
+// timer. Resetting is a process exit: scripts/run-demo.mjs wipes the database and upload folders
+// and starts a fresh server, so "reset" can never leave a half-cleared world behind.
+if (DEMO_MODE) {
+  const PERSONAS = demoWorld.DEMO_PERSONAS;
+  const personaEmail = new Map(PERSONAS.map(p => [p.key, p.email]));
+  const organizer = PERSONAS.find(p => p.key === 'organizer');
+  if (!isAdmin(organizer.email))
+    throw new Error(`[demo] ADMIN_EMAILS must include the organizer persona (${organizer.email}) — scripts/run-demo.mjs sets it`);
+  const RESET_HOURS = Number(process.env.DEMO_RESET_HOURS || 6);
+  // One reset per minute: each reset restarts the process, so a minimum uptime IS the rate limit
+  // (an in-memory limiter would be wiped by the very reset it limits).
+  const RESET_COOLDOWN_MS = Number(process.env.DEMO_RESET_COOLDOWN_S ?? 60) * 1000;
+  if (!(RESET_HOURS > 0) || !(RESET_COOLDOWN_MS >= 0))
+    throw new Error('[demo] DEMO_RESET_HOURS must be > 0 and DEMO_RESET_COOLDOWN_S >= 0');
+  setDemoMode(true, { personas: PERSONAS, resetHours: RESET_HOURS });
+
+  const exitForReset = (why) => {
+    console.log(`[demo] ${why} — exiting so the supervisor restarts on a clean world`);
+    process.exit(0);
+  };
+  setTimeout(() => exitForReset(`scheduled reset after ${RESET_HOURS} h`), RESET_HOURS * 3600_000);
+
+  // Sign in as a fixture persona. Only the keys in DEMO_PERSONAS map to an account; /status then
+  // routes by account state (approved or admin → /runs, pending → its status page).
+  app.post('/demo/login', (req, res) => {
+    const email = personaEmail.get(String(req.body.persona || ''));
+    if (!email) return res.status(400).send(loginPage({ error: 'Pick one of the demo people.' }));
+    signIn(res, email, 'demo persona');
+    res.redirect('/status');
+  });
+
+  let resetting = false;
+  app.get('/demo/reset', requireAdmin, (req, res) => res.send(demoResetPage()));
+  app.post('/demo/reset', requireAdmin, (req, res) => {
+    if (resetting || process.uptime() * 1000 < RESET_COOLDOWN_MS)
+      return res.status(429).send('The demo was reset less than a minute ago. Try again shortly.');
+    resetting = true;
+    res.on('finish', () => setTimeout(() => exitForReset(`reset requested by ${req.userEmail}`), 100));
+    res.send(demoResetPage({ resetting: true }));
+  });
+}
 
 // ---------- LEGAL / POLICY PAGES (public) ----------
 // Renders the source drafts in legal/*.md through the app shell. The .md files stay

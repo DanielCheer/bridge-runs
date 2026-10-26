@@ -36,6 +36,17 @@ export const PERSONAS = {
 export const PLAYERS = Array.from({ length: 12 }, (_, i) => `player${String(i + 1).padStart(2, '0')}@test.local`);
 export const MINOR = PLAYERS[6];   // player07 carries MINOR_DOB
 
+// The public demo's persona picker (DEMO_MODE=1, docs/DEMO.md): one account per kind of viewer.
+// This list IS the allowlist POST /demo/login signs into; nothing else can be picked.
+export const DEMO_PERSONAS = [
+  { key: 'organizer', label: 'Organizer', who: 'Admin: reviews applicants, runs the night, sees analytics', email: PERSONAS.admin },
+  { key: 'team', label: 'Team member', who: 'Runs the teams board and approves people', email: PERSONAS.team },
+  { key: 'council', label: 'Council voter', who: 'Votes on who gets in', email: PERSONAS.council },
+  { key: 'core', label: 'Core player', who: 'A regular with early access', email: PERSONAS.core },
+  { key: 'player', label: 'Regular player', who: 'Joins runs, chats, has friends and a party', email: PLAYERS[0] },
+  { key: 'pending', label: 'Pending applicant', who: 'Applied, waiting on the council', email: PERSONAS.pending },
+];
+
 const PLAYER_NAMES = ['Jordan Avery', 'Casey Brooks', 'Riley Chen', 'Taylor Dunn', 'Morgan Ellis', 'Jamie Fox',
   'Quinn Garcia', 'Drew Hayes', 'Skyler Ito', 'Reese Jensen', 'Parker Kim', 'Rowan Lee'];
 
