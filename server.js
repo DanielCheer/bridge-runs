@@ -8249,7 +8249,7 @@ const PROGRAM_DEFS = {
       features: { teams: { count: 2, size: 10, opensAt: 'lock', selfServe: false, games: true }, groupQueue: false },
       // This run signs up in Planning Center, not here, so its floor is synced in. Prefix only
       // NARROWS the candidate signups; pcoSignupRosterForDate matches on the event date.
-      // Matches the weekly runs only. Andrew renamed these in Planning Center on 2026-09-10 to
+      // Matches the weekly runs only. The church's Planning Center admin renamed these on 2026-09-10 to
       // "YA Basketball - Advanced Run (Wed Sep 23)" so other staff can tell the events apart.
       // The "(Wed" is load-bearing: the crew signup is "YA Basketball - Advanced Run (Team)" and
       // without it that would match too, and resolve as a second signup on every run date.
