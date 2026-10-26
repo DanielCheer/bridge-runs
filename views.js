@@ -1,5 +1,7 @@
 // views.js — server-rendered pages. No template engine; plain template literals.
 import fs from 'fs';
+import path from 'path';
+import { APP_ROOT, CHAT_VIDEO_MAX_MB, WAIVER_URL, AVATAR_SEED_EMAIL } from './config.js';
 const esc = (s = '') => String(s).replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -17,13 +19,32 @@ const wdayShort = (dateStr) => dateStr ? _WDS[new Date(dateStr + 'T12:00:00').ge
 // design change. The query only changes when the file changes, so it still
 // caches well between edits.
 let CSS_VER = '1';
-try { CSS_VER = String(Math.floor(fs.statSync(new URL('./public/styles.css', import.meta.url)).mtimeMs)); } catch {}
+const STYLES_PATH = path.join(APP_ROOT, 'public', 'styles.css');
+try { CSS_VER = String(Math.floor(fs.statSync(STYLES_PATH).mtimeMs)); } catch {}
 
-// Build version = newest mtime of the client-facing sources (views.js + styles.css).
-// /poll returns it; an open (live-polling) session auto-reloads to fresh code on
-// deploy — so shipped fixes reach already-open apps within ~10s instead of never.
+// Build version = newest mtime of the client-facing sources: every module under views/ (plus
+// views.js while it still holds pages) and styles.css. /poll returns it; an open (live-polling)
+// session auto-reloads to fresh code on deploy — so shipped fixes reach already-open apps within
+// ~10s instead of never.
+function viewSources() {
+  const out = [path.join(APP_ROOT, 'views.js')];
+  const walk = (dir) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith('.js')) out.push(p);
+    }
+  };
+  walk(path.join(APP_ROOT, 'views'));
+  return out;
+}
 export let BUILD_VER = CSS_VER;
-try { BUILD_VER = String(Math.floor(Math.max(fs.statSync(new URL('./views.js', import.meta.url)).mtimeMs, fs.statSync(new URL('./public/styles.css', import.meta.url)).mtimeMs))); } catch {}
+try {
+  const mtimes = [...viewSources(), STYLES_PATH].map((p) => { try { return fs.statSync(p).mtimeMs; } catch { return 0; } });
+  BUILD_VER = String(Math.floor(Math.max(...mtimes)));
+} catch {}
 
 // SQLite datetime('now') stores UTC as 'YYYY-MM-DD HH:MM:SS'. Render it in the
 // server's local timezone (run the app on Eastern — see README ops notes).
@@ -799,7 +820,7 @@ const initials = (name = '') => name.trim().split(/\s+/).map(w => w[0]).slice(0,
 // PHASE 2: general per-player photo upload. For now a single seeded avatar
 // (Daniel, the host) maps by email → /avatars/daniel.jpg; everyone else falls
 // back to initials. AVATAR_SEED_EMAIL unset → no seeded avatar at all.
-const AVATAR_SEED = (process.env.AVATAR_SEED_EMAIL || '').toLowerCase();
+const AVATAR_SEED = AVATAR_SEED_EMAIL.toLowerCase();
 // Uploaded-photo registry: lowercased email -> { file, v }. server.js rebuilds this
 // (from applicants.avatar) at boot and after any avatar/email mutation, so avatarUrl
 // can resolve email -> photo with NO per-call db access and NO change to avatarInner's
@@ -1178,10 +1199,9 @@ function voicePlayerScript() {
 // iOS 26 shows it regardless — pure downside: no JS-off send, nbsp/paste/execCommand
 // edge cases — so it was reverted.) SCOPE: only the two message composers.
 const COMPOSER_MAXLEN = 1000;
-// Client-side video size cap — mirrors the server's CHAT_VIDEO_MAX_MB (same env, same
-// process) so an over-cap clip is rejected BEFORE it uploads over Daniel's home
+// Client-side video size cap — mirrors the server's CHAT_VIDEO_MAX_MB (config.js, the same
+// value) so an over-cap clip is rejected BEFORE it uploads over Daniel's home
 // connection through Funnel, rather than after a doomed full upload → 413.
-const CHAT_VIDEO_MAX_MB = Number(process.env.CHAT_VIDEO_MAX_MB || 40);
 // enctype=multipart/form-data so a JS-off Send still carries a picked photo (multer
 // parses it; text-only sends are handled fine too). The fetch paths override the body
 // so the enctype is inert for them. The attach (＋) button opens a small Photo/Sticker
@@ -1584,9 +1604,7 @@ const shareScript = () => `<script>
   })();
 </script>`;
 
-// The external waiver form, from config only. Unset → no QR/link section anywhere and
-// /waiver-qr.svg is a 404 (no organization's real form is a built-in default).
-export const WAIVER_URL = process.env.WAIVER_URL || '';
+// The external waiver form: WAIVER_URL (config.js). Unset → no QR/link section anywhere.
 
 const qrBlock = WAIVER_URL ? `<div class="qr">
   <img src="/waiver-qr.svg" alt="Waiver QR code">

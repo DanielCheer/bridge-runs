@@ -37,7 +37,7 @@ export const PK_CAP = Number(process.env.PK_CAP || 20), PK_WAIT = Number(process
 // Upload and media locations (each overridable so a test or the demo never touches live files).
 export const AVATARS_DIR = process.env.AVATARS_DIR || path.join(APP_ROOT, 'public', 'avatars');
 export const CHAT_MEDIA_DIR = process.env.CHAT_MEDIA_DIR || path.join(APP_ROOT, 'public', 'chat-media');
-export const CHAT_VIDEO_MAX_MB = Number(process.env.CHAT_VIDEO_MAX_MB || 40);
+export const CHAT_VIDEO_MAX_MB = Number(process.env.CHAT_VIDEO_MAX_MB || 40);   // server cap, mirrored by the client
 export const BANNER_DIR = process.env.BANNER_DIR || path.join(APP_ROOT, 'public');
 export const BANNER_PATH_ENV = process.env.BANNER_PATH;
 export const PK_BANNER_PATH_ENV = process.env.PK_BANNER_PATH;
@@ -51,6 +51,12 @@ export const DM_KEY_SECRET = process.env.SESSION_SECRET || 'CHANGE_ME_dev_secret
 export const PUSH_CONTACT_EMAIL = process.env.SMTP_FROM || process.env.SMTP_USER || 'admin@localhost';
 // Shown in the boot log only; auth.js parses the list itself.
 export const ADMIN_EMAILS_ENV = process.env.ADMIN_EMAILS;
+
+// The external waiver form. Unset → no QR/link section anywhere and /waiver-qr.svg is a 404 (no
+// organization's real form is a built-in default).
+export const WAIVER_URL = process.env.WAIVER_URL || '';
+// One seeded avatar (the host's) mapped by email to /avatars/daniel.jpg. Unset → none.
+export const AVATAR_SEED_EMAIL = process.env.AVATAR_SEED_EMAIL || '';
 
 // Who the policy pages name as the operator/contact. Unset → the [PLACEHOLDER] stays visible
 // on the page (honest about missing config) rather than a made-up value.
