@@ -5863,6 +5863,22 @@ if (process.env.ENABLE_TEST_TICK === '1') {
     if (req.body && req.body.pcodaily) await pcoDaily(); // opt-in: also run the nightly delta poll
     res.json({ ok: true, now: schedNow() });
   });
+  // Test-only: the live Express stack, one layer per line in registration order, so a refactor that
+  // moves routes between files can prove the mounted set, its order and each route's middleware
+  // chain are unchanged (test/routes.test.mjs compares it to test/snapshots/routes.txt).
+  app.get('/admin/test/routes', requireAdmin, (req, res) => {
+    const name = (fn) => (fn && fn.name) || '<anonymous>';
+    const lines = [];
+    for (const layer of app._router.stack) {
+      if (layer.route) {
+        const chain = layer.route.stack.map((l) => name(l.handle)).join(' ');
+        lines.push(`${Object.keys(layer.route.methods).join(',').toUpperCase()} ${layer.route.path}  [${chain}]`);
+      } else {
+        lines.push(`USE ${layer.regexp.fast_slash ? '/' : layer.regexp.source} ${name(layer.handle)}`);
+      }
+    }
+    res.type('text/plain').send(lines.join('\n') + '\n');
+  });
 }
 
 // This week's run as a calendar file (.ics). Floating local time; reflects the host's
