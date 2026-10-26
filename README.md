@@ -6,7 +6,7 @@ Two things in one small web app:
 2. **Friday check-in** (`/checkin`) — approved players sign in with their email and tap **I'm in**. Caps at 15, everyone after goes on a waitlist that auto-promotes when someone drops.
 3. **Council review** (`/admin`) — admins only. Approve / clear-for-tryout / reject applicants.
 
-The waiver QR shown on the form and the check-in page is generated from `WAIVER_URL` (served at `/waiver-qr.svg`).
+The waiver QR shown on the form and the check-in page is generated from `WAIVER_URL` (served at `/waiver-qr.svg`); with it unset, the waiver QR/link section is not shown.
 
 ---
 

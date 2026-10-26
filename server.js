@@ -421,9 +421,10 @@ app.get('/app.js', (req, res) => {
 // The waiver QR is generated from WAIVER_URL instead of being shipped as an image, so the code
 // people scan always encodes the same link printed beside it, and no organization's real form is
 // baked into the repo. WAIVER_URL is fixed for the life of the process, so the SVG is rendered
-// once, on first request, and reused.
+// once, on first request, and reused. No WAIVER_URL → no QR (views render no section) → 404.
 let waiverQrSvg = null;
 app.get('/waiver-qr.svg', async (req, res, next) => {
+  if (!WAIVER_URL) return next();
   try {
     waiverQrSvg ??= await QRCode.toString(WAIVER_URL, { type: 'svg', margin: 1, color: { dark: '#000000', light: '#ffffff' } });
     res.set('Cache-Control', 'public, max-age=604800').type('image/svg+xml').send(waiverQrSvg);

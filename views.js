@@ -1566,14 +1566,15 @@ const shareScript = () => `<script>
   })();
 </script>`;
 
-export const WAIVER_URL = process.env.WAIVER_URL
-  || 'https://thebridgemarkham.churchcenter.com/people/forms/1158040';
+// The external waiver form, from config only. Unset → no QR/link section anywhere and
+// /waiver-qr.svg is a 404 (no organization's real form is a built-in default).
+export const WAIVER_URL = process.env.WAIVER_URL || '';
 
-const qrBlock = `<div class="qr">
+const qrBlock = WAIVER_URL ? `<div class="qr">
   <img src="/waiver-qr.svg" alt="Waiver QR code">
   <div class="t"><b>Sign the waiver</b>
-  <p>Scan, or <a href="${WAIVER_URL}" target="_blank" rel="noopener">tap here to open it</a>. No waiver, no play.</p></div>
-</div>`;
+  <p>Scan, or <a href="${esc(WAIVER_URL)}" target="_blank" rel="noopener">tap here to open it</a>. No waiver, no play.</p></div>
+</div>` : '';
 
 const locationBlock = `<div class="loc">
   <span class="loc-h">Where</span>
