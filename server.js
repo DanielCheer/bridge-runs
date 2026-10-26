@@ -32,7 +32,7 @@ import {
   chatPage, chatOlderFragment, profilePage, profileTabPage, threadPage, claimResultPage, BUILD_VER, setAvatarMap, setProgramMeta,
   STICKERS, avatarUrlFor, mdToHtml, legalPage, bannerPage, confirmActionPage, seasonPage, profileCard, demoProfileCard, pickleballPage, runPage, runsPage, pkJoinPage, runJoinPage, pastRunPage, waiverPage,
   friendsPage, friendsSearchFragment, chatLockedPage, runChatPage, pcoAdminPage, programsAdminPage, kioskPage, analyticsPage, auditViewerPage, runHistoryPage,
-  ladderPage, ladderBoardPage, teamsBoardPage, leaderboardPage,
+  ladderPage, ladderBoardPage, teamsBoardPage, leaderboardPage, WAIVER_URL,
 } from './views.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -417,6 +417,17 @@ app.get('/sw.js', (req, res) => {
 app.get('/app.js', (req, res) => {
   res.set('Cache-Control', 'public, max-age=31536000, immutable');
   res.type('application/javascript').send(APP_JS);
+});
+// The waiver QR is generated from WAIVER_URL instead of being shipped as an image, so the code
+// people scan always encodes the same link printed beside it, and no organization's real form is
+// baked into the repo. WAIVER_URL is fixed for the life of the process, so the SVG is rendered
+// once, on first request, and reused.
+let waiverQrSvg = null;
+app.get('/waiver-qr.svg', async (req, res, next) => {
+  try {
+    waiverQrSvg ??= await QRCode.toString(WAIVER_URL, { type: 'svg', margin: 1, color: { dark: '#000000', light: '#ffffff' } });
+    res.set('Cache-Control', 'public, max-age=604800').type('image/svg+xml').send(waiverQrSvg);
+  } catch (e) { next(e); } // QR failure must not take the process down (Express 4 won't catch async throws)
 });
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: '7d', immutable: false }));
 

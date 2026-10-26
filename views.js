@@ -1566,11 +1566,11 @@ const shareScript = () => `<script>
   })();
 </script>`;
 
-const WAIVER_URL = process.env.WAIVER_URL
+export const WAIVER_URL = process.env.WAIVER_URL
   || 'https://thebridgemarkham.churchcenter.com/people/forms/1158040';
 
 const qrBlock = `<div class="qr">
-  <img src="/waiver-qr.png" alt="Waiver QR code">
+  <img src="/waiver-qr.svg" alt="Waiver QR code">
   <div class="t"><b>Sign the waiver</b>
   <p>Scan, or <a href="${WAIVER_URL}" target="_blank" rel="noopener">tap here to open it</a>. No waiver, no play.</p></div>
 </div>`;

@@ -6,7 +6,7 @@ Two things in one small web app:
 2. **Friday check-in** (`/checkin`) — approved players sign in with their email and tap **I'm in**. Caps at 15, everyone after goes on a waitlist that auto-promotes when someone drops.
 3. **Council review** (`/admin`) — admins only. Approve / clear-for-tryout / reject applicants.
 
-The waiver QR you uploaded is baked into the form and the check-in page.
+The waiver QR shown on the form and the check-in page is generated from `WAIVER_URL` (served at `/waiver-qr.svg`).
 
 ---
 
@@ -222,7 +222,6 @@ mailer.js     email sending (SMTP or dev-console)
 views.js      the HTML pages
 public/
   styles.css  the look
-  waiver-qr.png  your Church Center waiver QR
 ```
 
 ## Auto-open on Wednesday night (optional — not enabled)
