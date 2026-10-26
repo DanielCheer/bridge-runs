@@ -61,6 +61,8 @@ function seatRenewers(programId, rd) {
   if (rows.length > total) { const del = db.prepare('DELETE FROM checkins WHERE id = ?'); for (const r of rows.slice(total)) del.run(r.id); }
   return added;
 }
+
+// ---------- AUTO-RENEW PENALTY (Phase 5.5) ----------
 // A member with auto-renew ON is GUARANTEED a weekly seat (seatRenewers auto-seats them). If they
 // then GHOST it — auto-seated, still on the floor when the run ends, never confirmed and never sat
 // out — they burned a spot a waitlister could have had. config.autoRenewPenalty = { strikes, pauseWeeks }:
