@@ -67,3 +67,65 @@ no-op under `TEST_NOW`.
 Push, email, an outbound webhook, a third-party API: ask what happens when a test exercises its
 failure path. Sever that channel in the fixture first, and if it needs credentials, make sure the
 guard knows about the variable that redirects it.
+
+## Running the tests
+
+```bash
+npm test          # node --test "test/*.test.mjs"
+npm run lint      # eslint (no-undef is the safety net: there is no build step)
+```
+
+Each `test/*.test.mjs` file is one suite. It boots its own instance of the app with
+`startApp()` from `test/helpers/app.mjs`, which:
+
+1. makes a temp directory under the OS temp folder;
+2. builds a fresh database there with `scripts/seed-fixture.mjs` (the app's own schema, created by
+   importing `db.js`, then the synthetic world from `fixtures/world.mjs`);
+3. optionally runs the suite's own `seed(db)` for the rows that suite is about;
+4. picks a free port and spawns `node server.js` with the isolation environment above (plus
+   `BACKUP_KEY_FILE` in the temp directory and `ENABLE_TEST_TICK=1`);
+5. waits for `/healthz`, and returns `{ baseURL, get, post, tick, cookieFor, db, stop }`.
+
+Because every suite has its own directory and port, `node --test` runs the files in parallel.
+Requests are real HTTP against the real server; assertions read responses and, where the point is
+what got stored, the suite's database directly.
+
+### The synthetic world
+
+`fixtures/world.mjs` is fictional and deterministic for a given day. Everyone is `@test.local` with
+phone `000-000-0000`:
+
+| Persona | Who |
+|---|---|
+| `admin@test.local` | the organizer (`ADMIN_EMAILS`) |
+| `team@test.local` | the org team (auto-renews, runs the teams board) |
+| `core@test.local` | a core regular (early access) |
+| `council@test.local` | a council voter |
+| `player01..12@test.local` | approved players; `player07` is a minor (DOB 2010-03-15) |
+| `pending@` / `rejected@` / `suspended@test.local` | one of each account state |
+
+Programs 1 (basketball, Wednesdays), 2 (pickleball, Tuesdays) and 3 (volleyball, Fridays) are
+published, each with a season opener five weeks back and attendance, run summaries, game results,
+a ladder, chat (every message type), a DM thread, announcements, friendships and a party. The
+current night of every program is left empty; a suite sets up the night it is testing, using
+`runDateFor(programId, today)` for the date the app will render.
+
+### Writing a suite
+
+```js
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { startApp } from './helpers/app.mjs';
+
+let app;
+before(async () => { app = await startApp({ seed: (db) => { /* rows this suite needs */ } }); });
+after(async () => { await app?.stop(); });
+
+test('a member sees the runs hub', async () => {
+  const r = await app.get('/runs', { as: 'player01@test.local' });
+  assert.equal(r.status, 200);
+});
+```
+
+Tests inside one file run in order and share the instance, so a later test may build on an
+earlier one's writes; keep that explicit in the test names.
