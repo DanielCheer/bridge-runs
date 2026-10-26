@@ -48,6 +48,7 @@ import {
   ymdLocal, shiftYmd, fmtClockRange, fmtClockLabel, schedNow, runLabelFor, runWeekday, hhLocal,
   DAY_NAMES,
 } from './lib/dates.js';
+import { csvCell } from './lib/csv.js';
 
 // Demo mode (DEMO_MODE=1, docs/DEMO.md) seeds itself: a fresh, wiped database gets the synthetic
 // world (fixtures/world.mjs) before any code below reads state. guard.js has already refused a
@@ -4310,13 +4311,6 @@ app.get('/admin/people/export.csv', requireAdmin, (req, res) => {
   res.set('Content-Disposition', `attachment; filename="bridge-people-${stamp}.csv"`);
   res.type('text/csv').send('\uFEFF' + lines.join('\r\n')); // BOM = Excel reads UTF-8
 });
-
-// RFC-4180 CSV cell with spreadsheet-formula-injection neutralized (shared by the exports).
-function csvCell(v) {
-  let s = v == null ? '' : String(v);
-  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;                    // a name like =HYPERLINK(...) can't run as a formula
-  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-}
 // Export hub (admin-only): attendance CSV per run + a full DB backup. The CSV is the Google-
 // Sheets / Planning-Center import path (paste or File\u2192Import); the .db is an offline backup.
 app.get('/admin/export', requireAdmin, (req, res) => {
