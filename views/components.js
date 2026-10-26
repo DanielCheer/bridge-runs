@@ -2,7 +2,7 @@
 // map lib/media.js hands over via setAvatarMap), badges, the announcements bell, the tab bar and
 // nav buttons (program paths via setProgramMeta), share/copy buttons, the waiver QR, onboarding
 // cards (install steps, sign-in code, first-run tour, welcome modal) and follow buttons.
-import { AVATAR_SEED_EMAIL, WAIVER_URL } from '../config.js';
+import { WAIVER_URL } from '../config.js';
 import { esc, fmtWhen } from './util.js';
 
 // The picture-by-picture iOS install steps, shared by the install wall (views shell) and the
@@ -16,25 +16,20 @@ const IOS_STEPS = `<ol class="vsteps">
 // Two-letter initials for avatar fallbacks.
 const initials = (name = '') => name.trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase() || '?';
 
-// PHASE 2: general per-player photo upload. For now a single seeded avatar
-// (Daniel, the host) maps by email → /avatars/daniel.jpg; everyone else falls
-// back to initials. AVATAR_SEED_EMAIL unset → no seeded avatar at all.
-const AVATAR_SEED = AVATAR_SEED_EMAIL.toLowerCase();
 // Uploaded-photo registry: lowercased email -> { file, v }. lib/media.js rebuilds this
 // (from applicants.avatar) at boot and after any avatar/email mutation, so avatarUrl
 // can resolve email -> photo with NO per-call db access and NO change to avatarInner's
 // signature across the ~10 render sites (roster, host card, inbox, chat, /u/:id, …).
 // v = the file's mtime ms — a cache-buster so a REPLACED photo shows immediately
 // despite the 7-day static cache (the filename also changes per upload, so this is
-// belt-and-suspenders). A DB-backed photo takes precedence over the daniel.jpg seed.
+// belt-and-suspenders). No uploaded photo → initials.
 let AVATAR_MAP = new Map();
 export function setAvatarMap(m) { AVATAR_MAP = (m instanceof Map) ? m : new Map(); }
 const avatarUrl = (email = '') => {
   const rec = AVATAR_MAP.get(String(email).toLowerCase());
-  if (rec) return `/avatars/${encodeURIComponent(rec.file)}?v=${encodeURIComponent(rec.v)}`;
-  return AVATAR_SEED && String(email).toLowerCase() === AVATAR_SEED ? '/avatars/daniel.jpg' : '';
+  return rec ? `/avatars/${encodeURIComponent(rec.file)}?v=${encodeURIComponent(rec.v)}` : '';
 };
-// Render an avatar: uploaded/seeded photo if present, else initials on a teal disc.
+// Render an avatar: the uploaded photo if present, else initials on a teal disc.
 const avatarInner = (email, name) => {
   const url = avatarUrl(email);
   return url ? `<img src="${esc(url)}" alt="">` : esc(initials(name));

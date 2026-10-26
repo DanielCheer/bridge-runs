@@ -284,3 +284,14 @@ test('pages allow pinch-zoom and the stylesheet has a global focus-visible ring'
   assert.match(css, /(^|\n):focus-visible\{outline:3px solid var\(--orange-deep\);outline-offset:2px\}/);
   assert.match(css, /input,textarea,select\{font-size:16px\}/, 'the 16px field floor that prevents iOS focus zoom stays');
 });
+
+// ---------- no hand-seeded avatar ----------
+test('AVATAR_SEED_EMAIL is gone: a player without an uploaded photo shows initials', async () => {
+  const seeded = await startApp({ env: { AVATAR_SEED_EMAIL: 'player05@test.local' } });
+  try {
+    const d = seeded.db();
+    let id; try { id = d.prepare('SELECT id FROM applicants WHERE email = ?').get('player05@test.local').id; } finally { d.close(); }
+    const html = await (await seeded.get('/u/' + id, { as: 'player01@test.local' })).text();
+    assert.ok(!html.includes('daniel.jpg'), 'no special-cased photo');
+  } finally { await seeded.stop(); }
+});

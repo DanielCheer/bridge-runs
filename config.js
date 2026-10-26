@@ -63,8 +63,6 @@ export const ADMIN_EMAILS_ENV = process.env.ADMIN_EMAILS;
 // The external waiver form. Unset → no QR/link section anywhere and /waiver-qr.svg is a 404 (no
 // organization's real form is a built-in default).
 export const WAIVER_URL = process.env.WAIVER_URL || '';
-// One seeded avatar (the host's) mapped by email to /avatars/daniel.jpg. Unset → none.
-export const AVATAR_SEED_EMAIL = process.env.AVATAR_SEED_EMAIL || '';
 
 // Who the policy pages name as the operator/contact. Unset → the [PLACEHOLDER] stays visible
 // on the page (honest about missing config) rather than a made-up value.

@@ -40,9 +40,9 @@ const stmtTouchSeen = db.prepare("UPDATE applicants SET last_seen_at = datetime(
 export function mountAssets(app) {
   // Profile-photo storage. Defaults to public/avatars (served by the general static
   // mount below); AVATARS_DIR lets a test/other env point it elsewhere. Mounted at
-  // /avatars BEFORE the public static so an override wins, yet a missing file falls
-  // through to the public mount (keeps the hand-placed daniel.jpg seed working even
-  // when AVATARS_DIR is a temp dir). Created on boot so the first upload never ENOENTs.
+  // /avatars BEFORE the public static so an override wins. Public on purpose: the token-authed
+  // kiosk renders avatars without a cookie, so a name is a capability URL (128 random bits; see
+  // docs/SECURITY.md). lib/media.js creates the directory on boot.
   app.use('/avatars', express.static(AVATARS_DIR, { maxAge: '365d', immutable: true })); // content-addressed name + ?v= bust → safe to pin
   // Chat photo / voice / video storage (CHAT_MEDIA_DIR). Only signed-in people can fetch it:
   // every surface that shows chat media (rooms, DMs) is behind a sign-in, so a leaked link alone
