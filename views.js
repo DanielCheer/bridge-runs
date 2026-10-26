@@ -780,9 +780,8 @@ const initials = (name = '') => name.trim().split(/\s+/).map(w => w[0]).slice(0,
 
 // PHASE 2: general per-player photo upload. For now a single seeded avatar
 // (Daniel, the host) maps by email → /avatars/daniel.jpg; everyone else falls
-// back to initials. AVATAR_SEED is env-overridable so the seed isn't a hard
-// dependency on one address.
-const AVATAR_SEED = (process.env.AVATAR_SEED_EMAIL || 'danieljcheer@gmail.com').toLowerCase();
+// back to initials. AVATAR_SEED_EMAIL unset → no seeded avatar at all.
+const AVATAR_SEED = (process.env.AVATAR_SEED_EMAIL || '').toLowerCase();
 // Uploaded-photo registry: lowercased email -> { file, v }. server.js rebuilds this
 // (from applicants.avatar) at boot and after any avatar/email mutation, so avatarUrl
 // can resolve email -> photo with NO per-call db access and NO change to avatarInner's
@@ -795,7 +794,7 @@ export function setAvatarMap(m) { AVATAR_MAP = (m instanceof Map) ? m : new Map(
 const avatarUrl = (email = '') => {
   const rec = AVATAR_MAP.get(String(email).toLowerCase());
   if (rec) return `/avatars/${encodeURIComponent(rec.file)}?v=${encodeURIComponent(rec.v)}`;
-  return String(email).toLowerCase() === AVATAR_SEED ? '/avatars/daniel.jpg' : '';
+  return AVATAR_SEED && String(email).toLowerCase() === AVATAR_SEED ? '/avatars/daniel.jpg' : '';
 };
 // Render an avatar: uploaded/seeded photo if present, else initials on a teal disc.
 const avatarInner = (email, name) => {

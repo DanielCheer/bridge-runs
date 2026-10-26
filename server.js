@@ -1456,18 +1456,25 @@ const LEGAL_DOCS = {
   terms: { file: 'terms-of-use.md', title: 'Terms of Use' },
   conduct: { file: 'code-of-conduct.md', title: 'Code of Conduct' },
 };
+// Who the policies name as the operator/contact. Unset → the [PLACEHOLDER] stays visible
+// on the page (honest about missing config) rather than a made-up value.
+const LEGAL_ENV = { date: 'LEGAL_EFFECTIVE_DATE', name: 'LEGAL_CONTACT_NAME', email: 'LEGAL_CONTACT_EMAIL' };
+const LEGAL = Object.fromEntries(Object.entries(LEGAL_ENV).map(([k, env]) => [k, process.env[env]]));
+for (const env of Object.values(LEGAL_ENV)) {
+  if (!process.env[env]) console.warn(`[legal] ${env} unset — policy pages will show the placeholder`);
+}
 function renderLegal(key) {
   const d = LEGAL_DOCS[key];
   if (!d) return null;
   let md;
   try { md = fs.readFileSync(path.join(__dirname, 'legal', d.file), 'utf8'); } catch { return null; }
   md = md.replace(/^\s*\*\*[^\n]*DRAFT[^\n]*\*\*\s*\n/, '');                 // drop the operator-only draft note
-  md = md.replace(/\[DATE\]/g, 'July 9, 2026')
-         .replace(/\[HOST NAME\]/g, 'Daniel')
+  md = md.replace(/\[DATE\]/g, LEGAL.date || '$&')                          // '$&' = leave the token as-is
+         .replace(/\[HOST NAME\]/g, LEGAL.name || '$&')
          .replace(/\[NAME — e\.g\.,[^\]]*\]/g, 'Google (Gmail)')             // the email service sub-processor
-         .replace(/\[NAME\]/g, 'Daniel')
-         .replace(/\[EMAIL\/PHONE\]/g, 'danieljcheer@gmail.com')
-         .replace(/\[EMAIL\]/g, 'danieljcheer@gmail.com')
+         .replace(/\[NAME\]/g, LEGAL.name || '$&')
+         .replace(/\[EMAIL\/PHONE\]/g, LEGAL.email || '$&')
+         .replace(/\[EMAIL\]/g, LEGAL.email || '$&')
          .replace(/,?\s*\[PHONE — optional\]/g, '');                         // optional → omit (with any leading comma)
   return legalPage(d.title, mdToHtml(md));
 }
