@@ -233,3 +233,21 @@ test('a backup that starts failing mid-run pushes the admins once; the next succ
     await live.stop();
   }
 });
+
+// ---------- policy pages are rendered once, at boot ----------
+test('policy pages come from LEGAL_DIR, rendered at boot, not re-read per request', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-legal-'));
+  for (const f of fs.readdirSync(path.join(REPO, 'legal'))) {
+    fs.copyFileSync(path.join(REPO, 'legal', f), path.join(dir, f));
+  }
+  fs.appendFileSync(path.join(dir, 'privacy-policy.md'), '\n\nBoot marker 4f1c.\n');
+  const legal = await startApp({ env: { LEGAL_DIR: dir } });
+  try {
+    const first = await (await legal.get('/privacy')).text();
+    assert.match(first, /Boot marker 4f1c\./, 'served from LEGAL_DIR');
+    fs.writeFileSync(path.join(dir, 'privacy-policy.md'), 'Changed after boot.');
+    fs.rmSync(path.join(dir, 'terms-of-use.md'));
+    assert.equal(await (await legal.get('/privacy')).text(), first, 'an edit after boot is not picked up');
+    assert.equal((await legal.get('/terms')).status, 200, 'a file removed after boot still serves the cached page');
+  } finally { await legal.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});

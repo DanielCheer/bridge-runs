@@ -5,7 +5,7 @@ import express from 'express';
 import QRCode from 'qrcode';
 import path from 'path';
 import db from '../db.js';
-import { AVATARS_DIR, CHAT_MEDIA_DIR, APP_ROOT, LEGAL_ENV, LEGAL, WAIVER_URL } from '../config.js';
+import { AVATARS_DIR, CHAT_MEDIA_DIR, APP_ROOT, LEGAL_ENV, LEGAL, LEGAL_DIR, WAIVER_URL } from '../config.js';
 import { setSession, currentUser } from '../auth.js';
 import { APP_JS, intakePage, mdToHtml, legalPage, invitePage } from '../views/index.js';
 import { metric, audit } from '../lib/audit.js';
@@ -182,7 +182,9 @@ export function mountIntake(app) {
 }
 
 // ---------- LEGAL / POLICY PAGES (public) ----------
-// Renders the source drafts in legal/*.md through the app shell. The .md files stay
+// Renders the source drafts in LEGAL_DIR (legal/*.md) through the app shell, once, when the routes
+// are mounted: the files, the LEGAL config and the shell are all fixed for the life of the process,
+// so every request gets the same cached page with no disk read. The .md files stay
 // untouched as review copies (they carry an operator-only "DRAFT — have a lawyer review"
 // note + [PLACEHOLDERS]); we strip that note and fill the placeholders at RENDER time, so
 // the published page is clean while the file remains the reviewable source of truth.
@@ -195,7 +197,7 @@ function renderLegal(key) {
   const d = LEGAL_DOCS[key];
   if (!d) return null;
   let md;
-  try { md = fs.readFileSync(path.join(APP_ROOT, 'legal', d.file), 'utf8'); } catch { return null; }
+  try { md = fs.readFileSync(path.join(LEGAL_DIR, d.file), 'utf8'); } catch { return null; }
   md = md.replace(/^\s*\*\*[^\n]*DRAFT[^\n]*\*\*\s*\n/, '');                 // drop the operator-only draft note
   md = md.replace(/\[DATE\]/g, LEGAL.date || '$&')                          // '$&' = leave the token as-is
          .replace(/\[HOST NAME\]/g, LEGAL.name || '$&')
@@ -214,8 +216,9 @@ export function mountLegal(app) {
     if (!LEGAL[key]) console.warn(`[legal] ${env} unset — policy pages will show the placeholder`);
   }
   for (const key of Object.keys(LEGAL_DOCS)) {
+    const html = renderLegal(key);   // rendered at boot; a missing file is a 404 until restart
+    if (!html) console.warn(`[legal] ${LEGAL_DOCS[key].file} not found in ${LEGAL_DIR} — /${key} will 404`);
     app.get('/' + key, (req, res) => {
-      const html = renderLegal(key);
       if (html) res.send(html); else res.status(404).type('text').send('Not found');
     });
   }

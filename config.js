@@ -63,6 +63,9 @@ export const AVATAR_SEED_EMAIL = process.env.AVATAR_SEED_EMAIL || '';
 // on the page (honest about missing config) rather than a made-up value.
 export const LEGAL_ENV = { date: 'LEGAL_EFFECTIVE_DATE', name: 'LEGAL_CONTACT_NAME', email: 'LEGAL_CONTACT_EMAIL' };
 export const LEGAL = Object.fromEntries(Object.entries(LEGAL_ENV).map(([k, env]) => [k, process.env[env]]));
+// Where the policy Markdown lives (privacy-policy.md, terms-of-use.md, code-of-conduct.md). Read once
+// at boot, so an edit needs a restart.
+export const LEGAL_DIR = process.env.LEGAL_DIR || path.join(APP_ROOT, 'legal');
 
 // Demo mode tuning (DEMO_MODE itself is read by guard.js, which enforces its isolation).
 export const DEMO_RESET_HOURS = Number(process.env.DEMO_RESET_HOURS || 6);
