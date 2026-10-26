@@ -158,23 +158,18 @@ export function mountIntake(app) {
     }
     try {
       const existing = applicantByEmail(em);
-      // Anyone with a player's email could otherwise rename/rehome them via the
-      // public QR form. An already-cleared player (approved / team / host) is never
-      // overwritten by a public re-application — send them to sign in instead.
+      // The public form only ever creates a row. Anyone who knows a player's email could
+      // otherwise rename or rehome them (or rewrite a pending applicant's phone and DOB) through
+      // the public QR form. A cleared player (approved / team / host) is sent to sign in; anyone
+      // else on file gets the form back with a notice, and the organizer edits the record.
       if (existing && (existing.status === 'approved' || existing.is_team || existing.is_host)) {
         return res.send(intakePage({ alreadyApproved: true }));
       }
-      if (existing) {
-        db.prepare(`UPDATE applicants SET full_name=?, phone=?, experience=?, where_played=?, waiver_ok=?, dob=?
-                  WHERE email=?`)
-          .run(full_name.trim(), phone.trim(), experience, (where_played || '').trim(),
-               waiver_ok ? 1 : 0, dob, em);
-      } else {
-        db.prepare(`INSERT INTO applicants (full_name,email,phone,experience,where_played,waiver_ok,dob)
-                  VALUES (?,?,?,?,?,?,?)`)
-          .run(full_name.trim(), em, phone.trim(), experience, (where_played || '').trim(),
-               waiver_ok ? 1 : 0, dob);
-      }
+      if (existing) return res.send(intakePage({ alreadyApplied: true }));
+      db.prepare(`INSERT INTO applicants (full_name,email,phone,experience,where_played,waiver_ok,dob)
+                VALUES (?,?,?,?,?,?,?)`)
+        .run(full_name.trim(), em, phone.trim(), experience, (where_played || '').trim(),
+             waiver_ok ? 1 : 0, dob);
       if (waiver_ok) stampWaiver(em);   // permanent attestation date (the form's box is required)
       res.send(intakePage({ submitted: true }));
     } catch (e) {

@@ -4,7 +4,9 @@ import { qrBlock, locationBlock } from '../components.js';
 import { HEAD, FOOT, header } from '../shell.js';
 
 // ---------- INTAKE FORM (public application → council votes) ----------
-export function intakePage({ submitted = false, error = '', alreadyApproved = false } = {}) {
+// `alreadyApplied`: the email is on file but not yet cleared. The public form never rewrites an
+// existing row (anyone who knows the address could), so the form comes back with a notice instead.
+export function intakePage({ submitted = false, error = '', alreadyApproved = false, alreadyApplied = false } = {}) {
   if (alreadyApproved) {
     return HEAD('Already approved — The Bridge', '', { wall: false }) + header() + `
       <div class="rule"></div>
@@ -37,7 +39,7 @@ export function intakePage({ submitted = false, error = '', alreadyApproved = fa
       <a class="btn ghost sm" href="/login" style="width:auto">Sign in →</a>
     </div>
 
-    ${error ? `<div class="notice bad">${esc(error)}</div>` : ''}
+    ${error ? `<div class="notice bad">${esc(error)}</div>` : ''}${alreadyApplied ? `<div class="notice warn">That email has already applied, so nothing was changed. The organizer can update your details. Reach out to them if something needs fixing.</div>` : ''}
 
     <form method="POST" action="/apply" class="card rail">
       <label for="full_name">Full name</label>
