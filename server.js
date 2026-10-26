@@ -41,7 +41,7 @@ import {
 } from './views.js';
 import { getSetting, setSetting, delSetting } from './lib/settings.js';
 import { audit, metric, pruneAuditLog } from './lib/audit.js';
-import { isValidEmail } from './lib/email.js';
+import { isValidEmail, lc } from './lib/email.js';
 import { rateLimited } from './lib/rate-limit.js';
 import { sendPush, VAPID_PUBLIC, initPush } from './lib/push.js';
 import { clientIp, safeNextPath, mountHttpBasics } from './lib/http.js';
@@ -2618,7 +2618,6 @@ app.get('/players/search', requireLogin, (req, res) => {
 // to that person's email SERVER-SIDE (the client never sends an email), and mutates ONLY the
 // logged-in user's own edges — req.userEmail is the sole identity, so a forged body can never
 // act as, or on behalf of, another person.
-const lc = e => String(e || '').trim().toLowerCase();
 // Hoisted reads (relationshipTo runs on every profile view; the list reads on /friends).
 const stmtFriendEdge  = db.prepare(`SELECT from_email,to_email,status FROM social_edges WHERE kind='friend' AND ((from_email=? AND to_email=?) OR (from_email=? AND to_email=?)) LIMIT 1`);
 const stmtAreFriends  = db.prepare(`SELECT 1 FROM social_edges WHERE kind='friend' AND status='accepted' AND ((from_email=? AND to_email=?) OR (from_email=? AND to_email=?)) LIMIT 1`);
