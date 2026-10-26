@@ -18,6 +18,13 @@ import { fileURLToPath } from 'url';
 export const APP_ROOT = path.dirname(fileURLToPath(import.meta.url));
 
 export const PORT = process.env.PORT || 3000;
+// How many reverse-proxy hops in front of the app to trust for X-Forwarded-For (Express's
+// 'trust proxy'): req.ip, the per-IP rate-limit key, is the address the outermost trusted hop saw.
+// The default 1 is Tailscale Funnel; 0 for a directly exposed app. A non-numeric value is passed to
+// Express as an address/subnet list ("loopback, 10.0.0.0/8"). Never more hops than really exist:
+// each extra one lets a client choose its own rate-limit key by sending the header itself.
+const trustProxyEnv = process.env.TRUST_PROXY || '1';
+export const TRUST_PROXY = /^\d+$/.test(trustProxyEnv) ? Number(trustProxyEnv) : trustProxyEnv;
 // The public origin for links in messages (claim links, invite and sign-in QR codes, OAuth
 // redirect). Empty → each caller falls back to the request's own host.
 export const PUBLIC_URL = process.env.PUBLIC_URL || '';

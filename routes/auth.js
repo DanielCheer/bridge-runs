@@ -7,7 +7,7 @@ import { currentUser, clearSession, isAdmin, requireLogin } from '../auth.js';
 import { loginPage, confirmActionPage, logoutPage, statusPage } from '../views/index.js';
 import { isValidEmail } from '../lib/email.js';
 import { rateLimited } from '../lib/rate-limit.js';
-import { safeNextPath, clientIp } from '../lib/http.js';
+import { safeNextPath } from '../lib/http.js';
 import { createLoginLink, signIn } from '../lib/sign-in.js';
 import { applicantByEmail } from '../engine/applicants.js';
 
@@ -29,7 +29,7 @@ export function mountAuth(app) {
     // inbox) and 20 per IP / 10 min (stops cycling through many addresses). Both
     // protect our Gmail daily quota.
     if (rateLimited('login-email', em, 3, 5 * 60 * 1000) ||
-        rateLimited('login-ip', clientIp(req), 20, 10 * 60 * 1000)) {
+        rateLimited('login-ip', req.ip, 20, 10 * 60 * 1000)) {
       return res.send(loginPage({ next,
         error: 'You’ve requested a few links already — check your inbox (and spam), then wait a minute before trying again.' }));
     }
@@ -95,7 +95,7 @@ export function mountAuth(app) {
     const fail = (msg) => res.send(loginPage({ sent: true, email: em, next, codeError: msg }));
 
     if (rateLimited('login-code', em, 10, 10 * 60 * 1000) ||
-        rateLimited('login-code-ip', clientIp(req), 30, 10 * 60 * 1000))
+        rateLimited('login-code-ip', req.ip, 30, 10 * 60 * 1000))
       return fail('Too many tries — wait a few minutes, or request a fresh code.');
     if (codeIn.length !== 6) return fail('Enter the 6-digit code from your email.');
 

@@ -12,7 +12,6 @@ import { metric, audit } from '../lib/audit.js';
 import { rateLimited } from '../lib/rate-limit.js';
 import { ymdLocal } from '../lib/dates.js';
 import { isValidEmail } from '../lib/email.js';
-import { clientIp } from '../lib/http.js';
 import { applicantByEmail, ageFromDob } from '../engine/applicants.js';
 import { stampWaiver } from '../engine/waivers.js';
 import fs from 'fs';
@@ -132,7 +131,7 @@ export function mountIntake(app) {
 
   app.post('/apply', (req, res) => {
     // Cap application spam per IP so nobody can flood the pending list.
-    if (rateLimited('apply-ip', clientIp(req), 8, 10 * 60 * 1000)) {
+    if (rateLimited('apply-ip', req.ip, 8, 10 * 60 * 1000)) {
       return res.send(intakePage({ error: 'Too many submissions from here — give it a few minutes and try again.' }));
     }
     const { full_name, phone, email, where_played, waiver_ok } = req.body;

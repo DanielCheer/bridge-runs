@@ -251,3 +251,23 @@ test('policy pages come from LEGAL_DIR, rendered at boot, not re-read per reques
     assert.equal((await legal.get('/terms')).status, 200, 'a file removed after boot still serves the cached page');
   } finally { await legal.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ---------- req.ip under TRUST_PROXY keys the per-IP rate limits ----------
+// /apply allows 8 submissions per client address per 10 minutes, checked before anything else.
+const applyFrom = (a, xff) => a.post('/apply', {}, { headers: { 'X-Forwarded-For': xff } });
+const limited = async (r) => /Too many submissions/.test(await r.text());
+
+test('one trusted hop (default): the key is the last X-Forwarded-For entry, so a spoofed first entry does not rotate it', async () => {
+  for (let i = 0; i < 8; i++) assert.ok(!(await limited(await applyFrom(app, `10.0.0.${i}, 203.0.113.7`))), `request ${i + 1} allowed`);
+  assert.ok(await limited(await applyFrom(app, '10.9.9.9, 203.0.113.7')), 'the 9th from the same proxy-seen address is limited');
+  assert.ok(!(await limited(await applyFrom(app, '10.0.0.1, 203.0.113.8'))), 'a different client address has its own bucket');
+});
+
+test('TRUST_PROXY=2: the key is the entry the outer of two trusted hops saw', async () => {
+  const two = await startApp({ env: { TRUST_PROXY: '2' } });
+  try {
+    for (let i = 0; i < 8; i++) assert.ok(!(await limited(await applyFrom(two, `198.51.100.1, 203.0.113.${i}`))), `request ${i + 1} allowed`);
+    assert.ok(await limited(await applyFrom(two, '198.51.100.1, 203.0.113.99')), 'same client behind any edge: limited');
+    assert.ok(!(await limited(await applyFrom(two, '198.51.100.2, 203.0.113.0'))), 'another client through the same edge: its own bucket');
+  } finally { await two.stop(); }
+});
