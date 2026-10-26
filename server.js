@@ -23,8 +23,8 @@ import {
   pcoConnected,
 } from './pco.js';
 import {
-  setSession, clearSession, currentUser, isAdmin,
-  requireLogin, requireAdmin, makeRequireApprover, makeRequireCouncil, ADMINS, setSessionVersionLookup,
+  setSession, clearSession, currentUser, isAdmin, requireLogin, requireAdmin, ADMINS,
+  setSessionVersionLookup,
 } from './auth.js';
 import {
   intakePage, loginPage, checkinPage, adminPage, statusPage, peoplePage, invitePage, sharePage,
@@ -122,6 +122,7 @@ import { autoJoinTeam, loadRun, ensureWeek } from './engine/basketball.js';
 import { PROGRAM_THEMES, slugIsReserved, buildPrograms } from './engine/program-loader.js';
 import { recomputeStatus } from './engine/council.js';
 import { startScheduler } from './engine/scheduler.js';
+import { requireApprover, requirePlayer, mutedOut, requireCouncil } from './routes/guards.js';
 
 // Demo mode (DEMO_MODE=1, docs/DEMO.md) seeds itself: a fresh, wiped database gets the synthetic
 // world (fixtures/world.mjs) before any code below reads state. guard.js has already refused a
@@ -134,8 +135,6 @@ if (demoWorld && db.prepare('SELECT COUNT(*) n FROM applicants').get().n === 0) 
 }
 
 const app = express();
-const requireApprover = makeRequireApprover(db);
-const requireCouncil = makeRequireCouncil(db);   // /admin + /admin/vote only — the council's one surface
 const stmtAnnouncementExists = db.prepare('SELECT 1 FROM announcements WHERE id = ? AND program_id = 1');
 reloadRunSettings();
 
@@ -852,30 +851,6 @@ function runPollFingerprint(programId) {
   return `${rd}:${runOpenFor(programId, rd) ? 1 : 0}:${runCancelledFor(programId, rd) ? 1 : 0}:${held}${order}:${ann ? ann.id : 0}`;
 }
 const stmtPollDM = db.prepare('SELECT MAX(id) mx, COUNT(*) c FROM messages WHERE from_email = ? OR to_email = ?');
-
-// Shared gate for the player-facing pages (/checkin, /roster, /u/:id, /profile):
-// only approved players (and admins, who run the check-in) get in; everyone else
-// is bounced to their status page. Returns { a, viewerIsAdmin } or null (after
-// redirecting). Identical behavior to the old inlined /checkin gate.
-function requirePlayer(req, res) {
-  const email = req.userEmail;
-  const a = applicantByEmail(email);
-  const viewerIsAdmin = isAdmin(email);
-  const status = a?.status || 'none';
-  if (!viewerIsAdmin && status !== 'approved') { res.redirect('/status'); return null; }
-  return { a, viewerIsAdmin };
-}
-
-// A suspended player keeps their account + history but is muted: no check-in (blocked in
-// /checkin/join) and no posting to chat/DMs. Callers use `if (mutedOut(gate, res, ...)) return;`
-// AFTER the requirePlayer gate. JSON endpoints (voice/video) get a 403; form posts bounce
-// back with ?err=suspended so the existing error strip explains it.
-function mutedOut(gate, res, { json = false, back = '/chat' } = {}) {
-  if (!gate || !gate.a || !gate.a.suspended) return false;
-  if (json) res.status(403).json({ err: 'suspended' });
-  else res.redirect(back + (back.includes('?') ? '&' : '?') + 'err=suspended');
-  return true;
-}
 
 // Runs hub — the launcher that lists every run the viewer can join, then hands off to
 // that run's own check-in page. Basketball is always listed; Pickleball appears for
