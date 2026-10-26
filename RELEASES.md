@@ -1,13 +1,20 @@
 # Releases
 
-Every deploy to live gets a row here and an annotated git tag (`rel-YYYYMMDD-HHMM`), written by
-`scripts/release.sh "summary"` after the deploy is verified. **Reverting** = `git checkout <tag>` (the
-launcher boots the working tree, so checking out a tag and restarting IS the rollback), plus — if
-data must roll back too — `node scripts/restore-backup.mjs backups/<snapshot>.db.enc bridge.db` with the
-server stopped. Code tags and DB snapshots are deliberately independent: most rollbacks want old
-code with CURRENT data.
+Every production deploy got a row here and an annotated git tag (`rel-YYYYMMDD-HHMM`), written by
+[`scripts/release.sh "summary"`](scripts/release.sh) once the deploy was verified. **Reverting** =
+`git checkout <tag>` (the launcher boots the working tree, so checking out a tag and restarting IS
+the rollback), plus, if data must roll back too,
+[`node scripts/restore-backup.mjs backups/<snapshot>.db.enc bridge.db`](scripts/restore-backup.mjs)
+with the server stopped. Code tags and database snapshots are deliberately independent: most
+rollbacks want old code with current data.
 
-Backfilled below from git history for the releases that shipped before this file existed.
+The summaries cite the checks run at the time ("suites", "board", "CDP", "harness"). Those ran in a
+private test harness against copies of real data. The public equivalents are the suites in
+[`test/`](test/) (`npm test`, see [docs/TESTING.md](docs/TESTING.md)), which boot the real server
+on a fictional world, and the tools in [`scripts/`](scripts/). The app was retired from production
+after the newest tag (the top row); it now runs only as the demo ([docs/DEMO.md](docs/DEMO.md)).
+
+Rows before this file existed were backfilled from git history.
 
 | Date (local) | Tag | Commit | Summary |
 |---|---|---|---|
@@ -67,5 +74,5 @@ Backfilled below from git history for the releases that shipped before this file
 | 2026-07-30 | — | df7b4ba | PCO Phase 2b: door mode, Check-Ins reconciliation, door-pass QRs |
 | 2026-07-30 | — | c0e46cf | PCO Phase 1: People identity sync (link/create/patch, webhook, delta poll) |
 
-*(History before 2026-07-30 — demo prep, volleyball, parties, confirm flow, audits 1–3 — is in
-`git log`; memory file `bridge-runs-features-added` narrates it.)*
+*(History before 2026-07-30 (demo prep, volleyball, parties, the confirm flow, audits 1–3) is in
+`git log`.)*
