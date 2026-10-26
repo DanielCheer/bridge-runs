@@ -1,253 +1,234 @@
-# The Bridge Adv Runs
+# The Bridge Runs
 
-Two things in one small web app:
+[![CI](https://github.com/DanielCheer/bridge-runs/actions/workflows/ci.yml/badge.svg)](https://github.com/DanielCheer/bridge-runs/actions/workflows/ci.yml)
+![Node >= 22.13](https://img.shields.io/badge/node-%E2%89%A522.13-339933)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-1. **Application form** (`/`) — public. Anyone can apply to the Adv Run. Collects name, phone, email, level, where they've played, and waiver confirmation.
-2. **Friday check-in** (`/checkin`) — approved players sign in with their email and tap **I'm in**. Caps at 15, everyone after goes on a waitlist that auto-promotes when someone drops.
-3. **Council review** (`/admin`) — admins only. Approve / clear-for-tryout / reject applicants.
+Sign-ups, live waitlists and check-in for a church's young-adults sports programs: basketball,
+pickleball and volleyball, built so the church's other programs could use it too (a new program is
+created from the admin screen, no deploy). Players apply once, join each week's run from an
+installable phone app, and get a push notification when a waitlist spot opens; organizers run the
+night, a council votes on newcomers, and a door screen shows who's in. I (Daniel Cheer) built it
+between July and September 2026 with Claude Code: the AI wrote nearly all of the code, and I
+directed it, set the rules it had to follow, reviewed the plans and diffs, and tested everything on
+real phones. It works and was production-ready, but the church chose to stay on its existing system
+(Church Center), so the app is retired from production and lives on as a demo.
 
-The waiver QR shown on the form and the check-in page is generated from `WAIVER_URL` (served at `/waiver-qr.svg`); with it unset, the waiver QR/link section is not shown.
+## Try the live demo
 
----
+**DEMO_URL_TBD**
 
-## How the flow works (the design you chose)
+The sign-in page offers six fictional people. Pick one and you're signed in as them:
 
-- Someone fills out the **form** → they're `pending`.
-- The **council** reviews in `/admin`. The form is a *low bar* — it should rarely reject anyone. Its job is to catch obvious non-fits and collect contact + waiver, not to judge skill.
-- Council taps **Clear for tryout** → player can now check in, and shows a yellow **TRYOUT** tag on the floor list so you know who to watch.
-- After they've played and you've seen them, tap **Approve** → permanent spot.
-- **Play decides the ceiling. The form is just the front door.**
+| Persona | Try |
+|---|---|
+| Organizer | the admin screens (council, people, programs, analytics, audit) and the waitlist showcase on `/demo` |
+| Team member | running the floor and the teams board |
+| Council voter | voting on applicants |
+| Core player | joining a run before it opens to everyone |
+| Regular player | runs, chat with photos and voice notes, DMs, friends and parties |
+| Pending applicant | the "application in review" page |
 
-Only `approved` and `tryout` players can check in. `pending` and `rejected` can't.
+Nothing is real: every person is generated, no email or notification leaves the server, and the
+whole world is wiped and reseeded every 6 hours (or when the Organizer presses Reset). Anything you
+post is visible to other visitors until then. Details: [docs/DEMO.md](docs/DEMO.md).
 
-## Managing people (admin-only)
+## Screenshots
 
-`/admin` → **Manage people** opens a full directory (`/admin/people`):
-- **Search** by name, email, or phone.
-- **Add a pre-approved player** — type name/phone/email, they're created as approved, skipping the form AND the vote. Use this for people you already know meet the bar. If the email already exists, it just approves that record instead of duplicating. **The email must be the exact one they'll sign in with**, or they're locked out.
-- **Edit** anyone's name, phone, or email inline (email changes are checked for collisions and synced to any active check-in).
-- **Delete** a person — removes their record, check-ins, and votes. Confirmation required.
-- **Copy all numbers** — one tap copies every approved player's "Name: phone" to your clipboard for pasting into the group chat.
+**The waitlist moment.** The organizer removes a player; the engine immediately offers the spot to
+the top of the waitlist (⏳ Claiming); the claim moves them onto the floor.
 
-This screen is admin-only. Team approvers can't reach it.
+<img src="docs/img/waitlist-offer.gif" width="300" alt="Who's going sheet: a floor player is removed, the top waitlister is offered the spot, then claims it and appears on the floor">
 
-## Unapproved players can't see the check-in
+<p>
+  <img src="docs/img/login.png" width="200" alt="Demo sign-in: pick one of six fictional personas">
+  <img src="docs/img/runs-hub.png" width="200" alt="Runs hub: this week's basketball, pickleball and volleyball nights with live counts">
+  <img src="docs/img/checkin-offer.png" width="200" alt="Who's going: the floor list, a spot held for an offer, and the waitlist">
+  <img src="docs/img/chat.png" width="200" alt="Run chat with a pinned post, a reply, a mention and a photo">
+</p>
+<p>
+  <img src="docs/img/teams.png" width="200" alt="Teams board: three sides, tap a name to move them">
+  <img src="docs/img/pickleball-ladder.png" width="200" alt="Pickleball ladder standings and recent games">
+  <img src="docs/img/council.png" width="200" alt="Council review: the vote tally and approve or reject buttons">
+  <img src="docs/img/analytics.png" width="200" alt="Analytics: engagement pulse and newcomers versus returning players per week">
+</p>
 
-A logged-in player who isn't approved (pending, rejected, or no record) is redirected off `/checkin` to a plain `/status` page showing only their standing. They can't see the run, the count, the roster, or the join button. Only approved players (and admins running it) reach the check-in.
+More: [people directory](docs/img/people.png) · [door kiosk](docs/img/kiosk.png)
 
-## Approving applicants: unanimous vote
+## Features
 
-Applicants are decided by a **team vote with a fixed threshold**: **3 approvals** gets someone in, **3 rejects** blocks them, anything less stays pending. The admin (you) does **not** vote — you have oversight and manage people, but decisions belong to the team. Team members are auto-approved and skip the vote.
+- **Runs.** Each program has its own weekly night, cap, season and rules. A run opens and closes
+  on command or on schedule; past the cap, players queue on a waitlist. When a spot frees up, the
+  top waitlister gets a time-limited offer by push and email, and an unclaimed offer moves on to
+  the next person. Friends can queue together as a party, regulars can auto-renew their spot (with
+  a no-show penalty), and operators add walk-in guests.
+- **Night-of tools.** A teams board with party-aware auto-fill and game results, a doubles ladder
+  for pickleball, a token-gated door kiosk, and an optional door mode that takes arrivals from
+  Planning Center Check-Ins.
+- **Membership.** A public application form, a council that votes newcomers in (configurable
+  threshold), invites for people the organizers already know, per-program waivers, and roles
+  (team, core, council, host) that decide who can do what.
+- **Social.** A chat room per program (photos, voice notes, video, stickers, reactions, mentions,
+  pins), direct messages, friends, follows and blocks, and scheduled announcements.
+- **Admin.** People directory, CSV exports, run history, an audit record of every significant
+  action, analytics (attendance trends, newcomers versus returning, fill speed, notification open
+  rates), and programs created and configured in the app.
+- **App.** An installable PWA with push notifications, an offline card, live updates by polling
+  and two themes.
+- **Planning Center.** Optional sync with the church's own directory, registrations and check-ins,
+  authorized by the church through OAuth; see [docs/PCO-SYNC-PHASE1-SPEC.md](docs/PCO-SYNC-PHASE1-SPEC.md).
 
-The threshold is set by `VOTE_THRESHOLD` (default 3). Raise it as the team grows. Note: you need at least `VOTE_THRESHOLD` team members voting or nobody can ever reach it — don't let the team shrink below the threshold.
+### Safeguarding
 
-- Each applicant card in `/admin` shows a live tally (e.g. "2/3 approved") and Approve/Reject buttons for you. You can change your vote; status recomputes instantly.
-- **Approved** the moment every approver has voted approve. **Rejected** the moment anyone votes reject. Otherwise **pending**.
-- Admins see a "Waiting on: [names]" line so you can chase approvers who haven't voted — because under unanimity, one person who never votes leaves an applicant stuck pending forever.
-- **Team members are auto-approved** and skip the vote entirely (making someone team sets them approved). They can't be voted on.
-- You can't vote on your own application. Admin can **Reset votes** to send an applicant back to pending for a re-vote.
-- Only **approved** players can check in. There's no "tryout" backdoor — the vote is the only way in (besides being team).
+Some players are under 18. The rules for them are enforced on the server, not just in the UI:
 
-**Two things to keep in mind about unanimity:**
-1. There is no hardcoded "3." The threshold is *every current approver*. Add a 4th (a 3rd team member) and now 4 must agree. If you want exactly 3 deciders, keep the pool at 3.
-2. Unanimity's failure mode is limbo, not rejection. One approver who never logs in = an applicant stuck pending indefinitely. Watch the "waiting on" list.
+- **Known minors are marked.** Age comes from the member's date of birth; anyone under 18 carries
+  an under-18 marker on rosters, the waitlist, teams, chat member lists and their profile, so the
+  people running the night can see it (`isMinor` in `engine/applicants.js`).
+- **No one-to-one DMs with a known minor.** `canMessage` (`engine/social.js`) refuses a DM to or
+  from a known minor for everyone except the organizers. The send route checks it on every message,
+  not only when deciding whether to draw the button.
+- **Guardian consent on youth waivers.** A program's waiver can require a parent or guardian below
+  a set age. A minor under it isn't cleared to play until a guardian gives their name, phone and
+  their own email (not the player's) and ticks consent, or an organizer verifies the signed paper
+  waiver (`engine/waivers.js`, `routes/waivers.js`).
+- **Guardian details only when required.** Those fields are asked for only in that case, and they
+  are deleted with the member's account ([docs/PII-RETENTION.md](docs/PII-RETENTION.md)).
 
-## Who can approve applicants (two power levels)
+## Architecture
 
-**Admin** — set by the `ADMIN_EMAILS` env var. Full control: approve, reject, assign roles, open/close runs, remove players, and view the audit log.
+One Node.js process: Express renders HTML on the server, a single SQLite file (`node:sqlite`) holds
+all state, and a small client script makes the pages an installable PWA that patches itself by
+polling. No framework, no template engine, no build step.
 
-**Team approver** — any player flagged **◆ Team** can approve/reject applicants AND run the floor: open/close the run, see the players list (with names), and remove or bump players. They're your co-runners for when you're not there. What team **cannot** do stays locked to admin: delete a person from the database, edit anyone's contact info, assign roles, reset votes, or open the People-management screen. So a team member can fully run a Friday without you, but can't erase the member list or hand out roles. Every team action is checked against the database per request and recorded in the audit log with their name.
+```mermaid
+flowchart LR
+  subgraph Phone["Phone or browser (PWA)"]
+    UI["server-rendered pages<br/>+ /app.js poll-and-patch"]
+    SW["sw.js<br/>push, offline card"]
+  end
+  subgraph App["One Node process"]
+    G["guard.js<br/>isolation check at boot"]
+    R["routes/"]
+    E["engine/"]
+    V["views/"]
+    DB[("node:sqlite<br/>one WAL file")]
+    T["scheduler<br/>60 s tick"]
+    M["mailer.js<br/>SMTP or dev mode"]
+    P["lib/push.js<br/>web-push (VAPID)"]
+    C["pco.js<br/>Planning Center adapter"]
+  end
+  PCO["Planning Center API"]
+  UI -- "HTTPS (Tailscale Funnel)" --> R
+  R --> E
+  R --> V
+  E --> DB
+  T --> E
+  E --> M
+  E --> P
+  P -. "push" .-> SW
+  E <--> C
+  C <--> PCO
+  G -. "refuses a test or demo<br/>aimed at real data" .-> DB
+```
 
-## Audit log
+The code is in seven layers, and **a module imports only from layers below it**: entry
+(`server.js`), `routes/`, `engine/`, `lib/`, infrastructure (`db.js`, `auth.js`, `mailer.js`,
+`backup.js`, `pco.js`, `guard.js`), `views/`, `config.js`. `test/layers.test.mjs` fails on any
+upward import, and CI runs `madge --circular`. The engine holds the domain: one program registry,
+one seating engine (floor, offers, waitlist, parties) shared by every sport, and the scheduler.
+Module map, request flow and the concurrency rule: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-Every status change, role change, run open/close, and player removal is recorded with who did it, their role, the action, the target, and a timestamp. The log shows on the `/admin` page — **admin-only** (team approvers don't see it). Last 40 entries. This is how you answer "who rejected that guy?" on Monday.
+## Run it
 
-## Late Core & Friday 4pm release
-
-A Core member who joins **after** you open the run (didn't pre-register) is a *late regular* — they go on the **waitlist**, not the floor, so the open-phase floor spots stay reserved for Approved players. From **Friday 4pm** onward, if the floor still has open spots, held late-Core are released and move onto the floor automatically (normals had all week and the open window to claim them first).
-
-## Guests
-
-On the check-in page, operators (admin/team) have an **Add a guest** box for last-minute additions — type a name, they're dropped onto the run for that Friday (floor if there's room, waitlist if not). Guests show a **Guest** tag in the roster and don't need an application or login. Subject to the same 20-person hard cap.
-
-## Weekly reset & regular cap
-
-**Midnight reset:** the active run is the coming Friday. It stays on that Friday all day; at **Saturday 00:00** it rolls to the next Friday, the old week's check-ins and opt-outs are purged, and Core can immediately start pre-joining the new week.
-
-**Pre-register cap:** while the run is closed, **team + Core combined** can hold at most `PREREG_CAP` (default 10) of the 15 floor spots — so at least 5 spots are always reserved for Approved players. Regulars pre-register through the week (you'll typically open the run to everyone around Wednesday evening). Once the pre-register total hits 12, extra Core can't lock a spot early, but they can still join once you open check-in to everyone — and if normals don't claim the reserved spots, whoever taps first gets them.
-
-## Roles: Team and Core
-
-Two roles, set per player in `/admin` (only approved/tryout players can hold one):
-
-**◆ Team** — people who help run it.
-- **Auto-renew:** each team member can toggle whether they get a guaranteed floor spot every week. ON (default) = auto-added each Friday. OFF = not auto-added; they join manually when they want to play. (Separate from "sit out this week," which is a one-off skip for an auto-renew-on member.)
-- Auto-added to the floor with **top priority** the moment you open the run. If pre-access joiners already filled the cap, the newest of them is bumped to the waitlist rather than a team member.
-- Get a **Sit out this week** button to clear their own auto-seat; the opt-out sticks for that Friday across close/reopen.
-- Still fully removable by admins.
-
-**★ Core** — trusted core with pre-access.
-- Can tap **I'm in (early access)** and join while the run is still closed to everyone else.
-- No auto-join, no held seat. If they don't act, they get nothing — the role is a head start, not a reservation.
-
-**Count visibility:** while the run is closed, the player count is hidden (shows a dash) from Approved players. Admins, team, and Core — the people who can act on it — still see the real number. Once you open, everyone sees the count.
-
-Rejecting a player strips both roles automatically.
-
-## Opening and closing the run
-
-You manually control when people can join. On the check-in page (as admin) there's an **Open check-in / Close check-in** toggle.
-
-- Every new Friday starts **CLOSED** — nobody can join until you open it. This stops people piling in before you've said go.
-- While **closed**: players see "Check-in isn't open yet" and no join button. Anyone already checked in can still drop out. The join lock is enforced on the server, so it can't be bypassed.
-- While **open**: approved/tryout players get the "I'm in" button.
-- Close it again any time (e.g. once you've got your 15 and don't want more waitlist churn).
-
----
-
-## Requirements
-
-- **Node.js 22 or newer** (uses the built-in SQLite — nothing to compile, no build tools). Check with `node --version`. If you're below 22, install the latest LTS from nodejs.org.
-
-## Try the demo
+Node 22.13 or newer. Three commands start the demo on fictional data:
 
 ```bash
 git clone https://github.com/DanielCheer/bridge-runs && cd bridge-runs
 npm ci
-npm run demo
+npm run demo        # http://localhost:3100
 ```
 
-Open http://localhost:3100 and pick a persona (organizer, team, council, core player, regular
-player, pending applicant). Everything is fictional and resets every 6 hours. Details:
-[docs/DEMO.md](docs/DEMO.md). There's also a `Dockerfile` that runs the same thing.
+Use `localhost`, not a LAN address: the session cookie is `Secure`, and browsers accept that over
+plain HTTP only from `localhost`. The `Dockerfile` runs the same demo.
 
-## Run it locally (test first)
+To run it for real, copy [`.env.example`](.env.example) to `.env` (every variable is listed there
+with its default) and run `npm start`. The ones that matter:
 
-```bash
-npm install
-ADMIN_EMAILS="your@email.com" npm start
-```
+| Variable | What it does |
+|---|---|
+| `ADMIN_EMAILS` | Comma-separated organizer accounts |
+| `SESSION_SECRET` | Signs sessions and derives the at-rest keys; the app refuses to start without it |
+| `PUBLIC_URL` | The public origin that sign-in links, claim links and QR codes are built from |
+| `SMTP_HOST` / `SMTP_USER` / `SMTP_PASS` | Email for sign-in codes and offers; unset means dev mode (codes print to the console) |
+| `DB_PATH` | The SQLite file (default `./bridge.db`) |
+| `TRUST_PROXY` | Proxy hops in front of the app, for the per-IP rate limits (default 1) |
 
-Open http://localhost:3000. With no email configured it runs in **DEV MODE** — sign-in links print to the terminal instead of being emailed, so you can test the whole thing solo.
+Hosting and week-to-week operation: [docs/OPERATOR-GUIDE.md](docs/OPERATOR-GUIDE.md).
 
----
+## Security
 
-## Environment variables
+Passwordless sign-in (an emailed link or 6-digit code: 15 minutes, single use, attempt-capped);
+signed long-lived cookies with "sign out everywhere"; admin sign-ins audited and pushed to the
+admin's own devices; rate limits on everything that costs something; `SameSite=Lax` cookies and no
+state-changing `GET`s against CSRF; a CSP subset and the usual headers; DMs and stored credentials
+encrypted at rest; encrypted, integrity-checked backups with a tested restore; capability URLs with
+documented strength and lifetime. The isolation guard makes a test or demo instance refuse to start
+if anything points at production data, the production port, Planning Center or a real mail server.
 
-Copy `.env.example` to `.env` and fill in, OR set them inline. The app reads plain env vars (there's no dotenv loader wired in — on Render you set these in the dashboard; locally, prefix the command or use `export`).
+Known gaps, stated in [docs/SECURITY.md](docs/SECURITY.md): no `script-src` in the CSP yet (47
+inline scripts and 80 inline handlers have to move first), and no Fetch Metadata check behind
+`SameSite`.
 
-| Var | What it does | Required? |
-|---|---|---|
-| `ADMIN_EMAILS` | Comma-separated admin emails. These get `/admin`. | **Yes** |
-| `SESSION_SECRET` | Random string that signs login cookies. | **Yes** (any long random string) |
-| `PUBLIC_URL` | Your real public URL, e.g. `https://desktop-xyz.tailXXXX.ts.net`. Used to build the magic link. | Yes once public |
-| `RUN_CAP` | Player cap. Default `15`. | No |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | Email sending. See below. | Yes for real email |
-| `DB_PATH` | Where the SQLite file lives. Default: next to the code. | No |
+## Testing
 
-Generate a session secret:
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-```
+`npm test` runs 220 tests in 25 suites. Each suite boots **the real server** as a child process on
+its own temp database, seeded with a deterministic fictional world, and talks to it over HTTP:
+seating and offers under a pinned clock, the council, waivers and the under-18 rules, chat and DMs,
+the Planning Center sync against a local mock, encrypted backup and restore, the isolation guard,
+a crawl of 37 pages as 11 kinds of viewer, the demo, and colour contrast from the real CSS tokens.
 
----
+Refactors are checked against golden masters. `test/snapshots/routes.txt` pins every Express layer,
+its order and each route's middleware chain. A private golden master byte-compares 224 rendered
+pages before and after a change; it runs on a copy of real data, so it isn't in this repository.
+Splitting the original single-file server into the layers above was done one module per commit,
+each checked against both. CI runs lint, the cycle check, the tests and `npm audit` on Node 22 and
+24. More: [docs/TESTING.md](docs/TESTING.md).
 
-## Email (magic-link sign-in)
+## Data and privacy
 
-Sign-in needs to send email. Easiest free option is **Gmail with an App Password**:
+What is collected and why, how long each kind is kept, and how a member is deleted (a hard,
+cascading delete; backups age out in about two weeks): [docs/PII-RETENTION.md](docs/PII-RETENTION.md).
+No payment data, location, trackers or passwords. Usage statistics are aggregate and carry no names.
 
-1. Turn on 2-Step Verification on your Google account.
-2. Go to Google Account → Security → App passwords → create one for "Mail".
-3. Set:
-   ```
-   SMTP_HOST=smtp.gmail.com
-   SMTP_PORT=587
-   SMTP_USER=youraddress@gmail.com
-   SMTP_PASS=the-16-char-app-password
-   SMTP_FROM=youraddress@gmail.com
-   ```
+## Deployment
 
-Gmail free sends to anyone, ~500/day — way more than 15 players need. (Any other SMTP provider works too.)
+In production the app ran on a Windows PC behind **Tailscale Funnel** (public HTTPS without port
+forwarding), supervised by the scripts in [`ops/windows/`](ops/windows/): a logon task, a launcher
+that restarts the process when it exits, and a watchdog that restarts the launcher if `/healthz`
+dies. Encrypted snapshots were mirrored to an off-site folder. The demo runs the same way on another
+port, or from the `Dockerfile`.
 
----
+## Releases
 
-## Option A — Run on your PC via Tailscale Funnel (recommended for you)
+Each production deploy was tagged once it was verified: 42 release tags, listed with their
+summaries in [RELEASES.md](RELEASES.md). Rolling back meant checking out a tag and restarting.
 
-You already have Tailscale. Funnel exposes your local app to the public internet over HTTPS, hides your home IP, and gives players a normal link — no Render cold-starts, no port forwarding.
+## Limitations and what I'd do next
 
-**One-time tailnet setup** (in the Tailscale admin console at login.tailscale.com):
-1. DNS → enable **MagicDNS**.
-2. DNS → **Enable HTTPS** certificates.
-3. Access Controls → make sure your device can use Funnel. Add to the policy file if needed:
-   ```json
-   "nodeAttrs": [
-     { "target": ["autogroup:member"], "attr": ["funnel"] }
-   ]
-   ```
+- **A strict CSP.** Move the inline handlers to delegated listeners in `/app.js`, then send
+  `script-src 'self' 'nonce-…'` with a per-response nonce (the plan is in
+  [SECURITY.md](docs/SECURITY.md#known-gaps)).
+- **A Fetch Metadata check** that refuses cross-site `POST`s, as a second layer behind
+  `SameSite=Lax`.
+- **Migration v3.** `db.js` still adds columns through 56 guarded `ALTER TABLE` statements; they
+  belong in one versioned migration, proven by a schema dump.
+- **Pickleball route unification.** Basketball and pickleball predate the generic program routes
+  and keep their own. Moving pickleball over would give it 18 routes it doesn't have today, so it's
+  a product decision, not a refactor ([ARCHITECTURE.md](docs/ARCHITECTURE.md#programs)).
+- **One process on one machine.** Rate limits live in memory and the scheduler runs in-process;
+  more than one instance would need both moved out.
 
-**Every time you host:**
-```bash
-# 1. start the app (with your env vars set)
-npm start
+## License
 
-# 2. in another terminal, expose port 3000 to the public internet
-tailscale funnel 3000
-```
-
-Tailscale prints your public URL, like:
-```
-https://your-machine.tailXXXX.ts.net/
-```
-Set that as `PUBLIC_URL` (restart the app so magic links use it), then paste the link into your group chat. **Your PC has to be on and running the app while people are checking in** — fine for a Friday night.
-
-To run Funnel in the background so it survives terminal close: `tailscale funnel --bg 3000`. Turn it off with `tailscale funnel 3000 off`.
-
-> Note: Funnel does **not** add any login itself — that's why the app has its own magic-link sign-in. Don't rely on Tailscale for auth here.
-
----
-
-## Option B — Host it free on Render (always-on link)
-
-1. Push this folder to a GitHub repo.
-2. On render.com → New → **Web Service** → connect the repo.
-3. Build command: `npm install` · Start command: `npm start`.
-4. Add a **Disk** (e.g. 1 GB) mounted at `/data`, and set `DB_PATH=/data/bridge.db` so data survives deploys.
-5. Set all the env vars from the table above (`PUBLIC_URL` = the `onrender.com` URL Render gives you).
-
-Caveat: Render's free tier **sleeps after 15 min idle**, so the first person to open it after a quiet spell waits ~30s for cold start. Fine for a scheduled run.
-
----
-
-## Data / admin notes
-
-- Everything lives in one SQLite file (`bridge.db` by default). Back it up by copying that file.
-- The "run" is automatically the **next Friday**. After Friday 11pm it rolls to the following week. Each Friday starts with an empty check-in list.
-- To reset all data: stop the app, delete `bridge.db` (and `bridge.db-wal` / `-shm` if present), restart.
-
-## Files
-
-```
-server.js     the entry: builds the app, mounts the routes, boots
-config.js     every environment variable the app reads
-lib/          shared helpers (settings, audit, push, media, dates, …)
-engine/       the domain logic (programs, seating, runs, chat, teams, ladder, …)
-routes/       the HTTP routes, one module per area
-views/        the HTML pages (shell, components, pages/)
-db.js         database + schema
-auth.js       magic-link sessions, admin/login guards
-mailer.js     email sending (SMTP or dev-console)
-public/
-  styles.css  the look
-```
-
-## Auto-open on Wednesday night (optional — not enabled)
-
-Right now you open each run manually by tapping **Open check-in**. The player-facing copy says "opens Wednesday night," so you must actually tap it Wednesday and announce it, or the copy is a lie.
-
-If you'd rather it open itself every Wednesday at a set time, that's a scheduled job (a few lines using node-cron calling `setRunOpen(nextFriday(), true)` at, say, Wed 8pm). Not built — ask for it if you want the timing enforced by code instead of by you remembering.
-
-## Operational notes
-
-**Timezone:** the Friday date and the after-11pm rollover use the server's local time. Run the app on a machine set to your local timezone (Eastern), or the run could roll to the next week at the wrong moment.
-
-**Sign-in emails:** magic links expire in 15 minutes, and requesting a new one invalidates the old. If a player says their link doesn't work, have them request a fresh one from the sign-in page. They must use the exact email they applied with. When you approve someone, grab the sign-in link from the People screen ("Copy sign-in link") and send it to them — approval doesn't notify anyone automatically.
+[MIT](LICENSE)
