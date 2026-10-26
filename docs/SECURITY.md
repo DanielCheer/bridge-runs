@@ -33,6 +33,9 @@ any older unused one.
 - Post-login redirects go through `safeNextPath`, a strict local-path allowlist (no `//host`, no
   backslashes, no characters that could break out of the client-side redirect page).
 - Mail goes out after the response is sent; dev mode (no SMTP) shows the link on the page instead.
+- The public application form (`/apply`) only ever creates a record. An email already on file gets
+  the form back with an "already applied" notice, so knowing someone's address doesn't let you
+  rewrite their name, phone or date of birth; the organizer edits records.
 
 ## Rate limits
 
@@ -42,8 +45,10 @@ the Gmail quota and people's inboxes), code attempts (10 per address, 30 per IP 
 applications (8 per IP per 10 minutes), and per-account caps on chat posts, media uploads, reactions,
 DMs, friend and party requests, searches, push subscriptions, join requests and announcements.
 
-The per-IP buckets key on the client address Express derives from `X-Forwarded-For`, trusting
-exactly one proxy hop (Funnel), so a client can't rotate fake addresses by sending its own header.
+The per-IP buckets key on `req.ip`, the address Express derives from `X-Forwarded-For` while
+trusting exactly `TRUST_PROXY` proxy hops (default 1, Funnel). A client can't rotate its key by
+sending its own header: only the entry the outermost trusted hop appended counts. Set
+`TRUST_PROXY` to the real number of hops; one too many hands the key back to the client.
 
 Being in memory, the windows reset on a restart. That is accepted: a restart is rare and visible,
 and none of the limits guards a secret that a burst could brute-force (codes also have the
@@ -100,6 +105,10 @@ Details: [TESTING.md](TESTING.md) and [DEMO.md](DEMO.md).
 - **Snapshots** are taken at boot and daily with `VACUUM INTO`, then encrypted (AES-256-GCM in a
   `BRENC1` container) under a key kept in its own file (`backup.key`, never beside the snapshots) and
   optionally mirrored to an off-site folder. The plaintext temp file is removed in the same step.
+- **Failures are loud.** Each attempt records `last_backup_at` (success) or `last_backup_error`, and
+  `/admin` shows admins the last good backup or a red "backups are failing" notice. The moment
+  backups start failing, the admins get a push notification (once per failing streak) and the
+  failure is audited.
 - **The admin download** (`/admin/export/db`) is the same encrypted container, named
   `bridge-backup-<date>.db.enc`; every download is audited.
 - **Restore** with `node scripts/restore-backup.mjs <file> <out.db> [backup.key]`. GCM authenticates

@@ -133,6 +133,8 @@ current night of every program is left empty; a suite sets up the night it is te
 | `waiver-qr` | the waiver QR/link section exists only when `WAIVER_URL` is set |
 | `routes` | the route table: every Express layer in registration order with each route's handler chain, against `test/snapshots/routes.txt` (`UPDATE_SNAPSHOTS=1` regenerates it after an intended change) |
 | `layers` | the module layering: no import goes up a layer (see [ARCHITECTURE.md](ARCHITECTURE.md)); reads the source, boots nothing |
+| `security` | the P3 hardening, one block per fix: `/apply` never rewrites a row, `?joinerr=` reasons, secrets sealed at rest (and legacy plaintext migrated), the encrypted export restoring, `/chat-media` sign-in and 128-bit upload names, the CSP, backup-failure alerts, legal pages cached at boot, `TRUST_PROXY` keying the rate limits, zoom and focus ring, no seeded avatar |
+| `contrast` | `scripts/contrast-check.mjs`: WCAG contrast of the main text/background pairs, from the real tokens in `public/styles.css` |
 | `demo-mode` | the demo: guard refusals, self-seeding, persona sign-in per role, the strip, organizer-only reset, and the supervisor wiping a post on reset |
 
 The private golden master (byte-comparing 224 page snapshots across a change, on a copy of real

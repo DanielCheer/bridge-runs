@@ -43,22 +43,23 @@ pass it in, and `lib/media.js` and the program loader can hand them their few ru
 | `auth.js` | Signed, versioned session cookies; `requireLogin` / `requireAdmin` and the approver/council guard factories. |
 | `mailer.js` | Magic links, announcements and spot offers over SMTP; dev mode prints links. |
 | `pco.js` | Planning Center sync. See [PCO-SYNC-PHASE1-SPEC.md](PCO-SYNC-PHASE1-SPEC.md). |
-| `backup.js` | Encrypted `VACUUM INTO` snapshots at boot and daily. |
+| `backup.js` | Encrypted `VACUUM INTO` snapshots at boot and daily (`writeEncryptedSnapshot`, also behind the admin download); records `last_backup_at` / `last_backup_error` and calls the injected `onFailure` (an admin push) when backups start failing. |
 
 **`lib/`** — shared helpers with no domain knowledge
 
 | Module | What it is |
 |---|---|
-| `settings.js` | `getSetting` / `setSetting` / `delSetting` over `app_settings` (also used by `pco.js`). |
+| `settings.js` | `getSetting` / `setSetting` / `delSetting` over `app_settings` (also used by `pco.js` and `backup.js`), and `getSecret` / `setSecret` for the credentials kept there, sealed at rest; the plain accessors refuse those keys. |
 | `audit.js` | `audit()` (with the never-pruned key-event mirror), `metric()`, the daily audit-log trim. |
 | `email.js` | `isValidEmail` (the only gate before the mailer) and `lc` (email normalisation). |
 | `rate-limit.js` | In-memory sliding-window `rateLimited()` and its hourly prune. |
 | `push.js` | The VAPID keypair (`initPush()` at boot) and `sendPush()`. |
 | `sign-in.js` | `signIn()` (session plus the admin sign-in ping) and `createLoginLink()`. |
 | `dates.js` | Local-calendar helpers (`ymdLocal`, `shiftYmd`, weekday labels, clock labels) and `schedNow()`, the scheduler clock `TEST_NOW` pins. |
-| `http.js` | `mountHttpBasics(app)`: security headers, compression, body/cookie parsing, the iOS form-POST redirect shim; `clientIp`, `safeNextPath`. |
-| `media.js` | Uploads: parsers, magic-byte sniffing, server-named writes, safe deletes, retention, banner paths, stickers, the avatar map. Creates its directories on import. |
-| `dm-crypto.js` | DM at-rest encryption (`dmEnc` / `dmDec`). |
+| `http.js` | `mountHttpBasics(app)`: `trust proxy` from `TRUST_PROXY` (so `req.ip` is the per-IP rate-limit key), security headers including the CSP subset, compression, body/cookie parsing, the iOS form-POST redirect shim; `safeNextPath`. |
+| `media.js` | Uploads: parsers, magic-byte sniffing, server-named writes (`serverFileName`: owner id plus 128 random bits), safe deletes, retention, banner paths, stickers, the avatar map. Creates its directories on import. |
+| `at-rest-crypto.js` | The one at-rest scheme (AES-256-GCM `enc1:`, key HKDF-derived from `SESSION_SECRET`, one salt per use). |
+| `dm-crypto.js` | DM at-rest encryption (`dmEnc` / `dmDec`) on that scheme. |
 | `csv.js` | CSV cell encoding with formula-injection neutralised. |
 | `demo-world.js` | The fixture world module, imported only in demo mode. |
 
@@ -130,12 +131,13 @@ from a child's environment), `fixtures/world.mjs` (the synthetic world), `test/`
 
 ## Request flow
 
-1. `mountHttpBasics`: security headers (`X-Frame-Options: DENY`, `nosniff`, referrer and
-   permissions policy, HSTS on HTTPS), compression, urlencoded and cookie parsing, then the iOS
+1. `mountHttpBasics`: security headers (the CSP subset, `X-Frame-Options: DENY`, `nosniff`,
+   referrer and permissions policy, HSTS on HTTPS; see [SECURITY.md](SECURITY.md)), compression, urlencoded and cookie parsing, then the iOS
    form-POST fix (a non-fetch form POST that redirects gets a 200 page that redirects on the
    client, because a 302 after a native form POST blanks a home-screen PWA on iOS).
-2. `mountAssets`: `/avatars` and `/chat-media` (overridable directories, immutable names) **before**
-   the public static so an override wins, `/sw.js`, `/app.js` (immutable, `?v=BUILD_VER`),
+2. `mountAssets`: `/avatars` (public: the kiosk shows avatars without a cookie) and `/chat-media`
+   (signed-in only, `private` cache), both overridable directories with immutable names, mounted
+   **before** the public static so an override wins, `/sw.js`, `/app.js` (immutable, `?v=BUILD_VER`),
    `/waiver-qr.svg`, `public/`, then the sliding session and activity stamp.
 3. The route modules, in the order `server.js` mounts them. `test/routes.test.mjs` pins the whole
    stack (every layer, its order and each route's middleware chain) against
@@ -208,4 +210,6 @@ the app is network or file work (Planning Center, mail, QR rendering, image proc
 placed before the reads that depend on it or after the writes; the profile-photo upload re-reads
 the current photo after its awaits for exactly this reason. Keep it that way.
 
-What is kept, for how long, and how it is deleted: [PII-RETENTION.md](PII-RETENTION.md).
+What is kept, for how long, and how it is deleted: [PII-RETENTION.md](PII-RETENTION.md). What
+protects it (sessions, encryption at rest, backups, headers, capability URLs) and the known gaps:
+[SECURITY.md](SECURITY.md).
