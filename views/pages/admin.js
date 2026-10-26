@@ -1,14 +1,26 @@
 // views/pages/admin.js — /admin: applications and council votes, run settings and the run day.
-import { esc, fmtWhen, wdayFull, wdayShort } from '../util.js';
+import { esc, fmtWhen, fmtDay, wdayFull, wdayShort } from '../util.js';
 import { avatarInner, tabNav, opsNav, firstRunTour, backBtn } from '../components.js';
 import { HEAD, header, footWithTabs } from '../shell.js';
+
+// Database backup health (admins only; `backup` is null for everyone else). The last success is
+// shown to the day (Today / Yesterday / a date): backups run daily, and a day-level label keeps
+// the page deterministic for the golden master.
+function backupNotice(backup) {
+  if (!backup) return '';
+  const last = backup.at ? fmtDay(backup.at) : 'never';
+  if (backup.error) {
+    return `<div class="notice bad"><b>Database backups are failing.</b> ${esc(backup.error)} Last good backup: ${esc(last)}. Check the server log and the backup folder.</div>`;
+  }
+  return `<div class="notice">Last database backup: <b>${esc(last)}</b>.</div>`;
+}
 
 // ---------- ADMIN / COUNCIL ----------
 export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–10:30 PM', checkedInCount, cap,
                            waitlistCap = 5, preregCap = 10, msg = '',
                            viewerIsAdmin = true, viewerIsTeam = false, viewerIsHost = false, viewerCanVote = false, viewerEmail = '', log = [],
                            filter = 'all', counts = {}, teamMembers = [], ann = null,
-                           dmUnread = 0, groupUnread = 0, groupMention = 0 }) {
+                           dmUnread = 0, groupUnread = 0, groupMention = 0, backup = null }) {
   const pill = (s) => `<span class="pill ${s}">${s}</span>`;
   // Map a voter email → their display name (voters are always team members, so the
   // council roster covers every one). Falls back to the raw email if somehow unseen.
@@ -113,7 +125,7 @@ export function adminPage({ applicants, runLabel, runDate = '', hours = '8:30–
     <p class="lead">${viewerCanVote
       ? 'It takes <b>3 approvals</b> to get an applicant in, or <b>3 rejects</b> to block them. Cast your vote below.'
       : 'Approval is decided by the <b>council</b>: 3 approvals gets an applicant in, 3 rejects blocks them. You have oversight and manage people, but you don\'t vote. Team members are auto-approved and skip the vote.'}</p>
-    <div class="notice">This ${wdayFull(runDate)} (${esc(runLabel)}): <b>${checkedInCount}/${cap}</b> checked in.</div>
+    <div class="notice">This ${wdayFull(runDate)} (${esc(runLabel)}): <b>${checkedInCount}/${cap}</b> checked in.</div>${backupNotice(backup)}
     ${msg ? `<div class="notice good">${esc(msg)}</div>` : ''}
     ${viewerIsAdmin ? `<details class="announce-compose" style="margin-top:12px"><summary>⚙️ Run settings — capacity</summary>
       <form method="POST" action="/admin/settings" class="editrow swapform" style="margin-top:10px">

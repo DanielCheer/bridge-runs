@@ -168,7 +168,12 @@ app.listen(PORT, () => {
   console.log(`\nThe Bridge Adv Runs → http://localhost:${PORT}`);
   console.log(`Cap: ${CAP} · Email: ${emailConfigured ? 'SMTP configured' : 'DEV MODE (links print here)'}`);
   console.log(`Admin emails: ${ADMIN_EMAILS_ENV || '(none set — set ADMIN_EMAILS!)'}\n`);
-  startBackups(); // snapshot the DB now + once a day
+  // Snapshot the DB now + once a day. A failing backup is silent data risk, so the admins are pushed
+  // the moment it starts failing (and /admin shows it until a snapshot succeeds again).
+  startBackups({ onFailure: (message) => {
+    audit('system', 'system', 'backup:failed', String(message).slice(0, 120));
+    sendPush(ADMINS, { title: 'Database backup failed', body: 'The scheduled snapshot could not be written. Open /admin for the error.', url: '/admin', tag: 'backupfail' });
+  } });
   pruneOldMedia(); pruneAuditLog();
   setInterval(() => { pruneOldMedia(); pruneAuditLog(); }, 24 * 60 * 60 * 1000).unref(); // media (1yr) + audit_log (5000) retention, boot + daily
   // PCO daily delta poll — the inbound path when no webhook is registered, AND the thing that keeps

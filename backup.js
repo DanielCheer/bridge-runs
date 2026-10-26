@@ -11,6 +11,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import db, { DB_PATH } from './db.js';
+import { getSetting, setSetting, delSetting } from './lib/settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BACKUP_DIR = process.env.BACKUP_DIR || path.join(__dirname, 'backups');
@@ -74,6 +75,14 @@ export function writeEncryptedSnapshot(dest) {
   return dest;
 }
 
+// Outcome of the last attempt, for /admin: last_backup_at (SQLite-style UTC, the last success) and
+// last_backup_error (the message of the latest failure; cleared by the next success). A failure
+// calls onFailure (injected by startBackups; it alerts the admins) once per transition into the
+// failing state, the same way the Planning Center pause alerts, so a daily failure doesn't page
+// anyone every day while the /admin notice keeps saying it.
+let onFailure = null;
+const sqlUtcNow = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
+
 export function backupNow() {
   try {
     fs.mkdirSync(BACKUP_DIR, { recursive: true });
@@ -89,11 +98,18 @@ export function backupNow() {
     prune();
     offsiteCopy(dest);
     console.log(`[backup] wrote ${path.basename(dest)} (encrypted)`);
+    setSetting('last_backup_at', sqlUtcNow());
+    delSetting('last_backup_error');
     return dest;
   } catch (e) {
     // Fail loud but never crash the server over a backup problem (writeEncryptedSnapshot has
     // already removed any plaintext vacuum).
     console.error(`[backup] FAILED: ${e.message}`);
+    const wasFailing = getSetting('last_backup_error') != null;
+    setSetting('last_backup_error', String(e.message).slice(0, 300));
+    if (!wasFailing && onFailure) {
+      try { onFailure(e.message); } catch (err) { console.error(`[backup] failure alert failed: ${err.message}`); }
+    }
     return null;
   }
 }
@@ -136,7 +152,8 @@ function offsiteCopy(encPath) {
 
 // Snapshot at startup, then daily. A run that stays up all week still gets
 // covered; a run that restarts often gets a fresh snapshot each launch.
-export function startBackups() {
+export function startBackups({ onFailure: notify } = {}) {
+  onFailure = typeof notify === 'function' ? notify : null;
   backupNow();
   const t = setInterval(backupNow, EVERY_MS);
   t.unref?.();   // don't keep the process alive solely for the backup timer

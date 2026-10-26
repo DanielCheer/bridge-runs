@@ -4,6 +4,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import webpush from 'web-push';
@@ -171,4 +172,64 @@ test('every response carries the CSP subset', async () => {
     assert.equal((await app.get(p)).headers.get('content-security-policy'), want, p);
   }
   assert.equal((await app.get('/runs', { as: 'player01@test.local' })).headers.get('content-security-policy'), want);
+});
+
+// ---------- backup failures alert the admins and show on /admin ----------
+const waitFor = async (fn, what, ms = 20_000) => {
+  const end = Date.now() + ms;
+  for (;;) {
+    const v = fn(); if (v) return v;
+    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 100));
+  }
+};
+const settingIn = (d, k) => d.prepare('SELECT value v FROM app_settings WHERE key = ?').get(k)?.v;
+
+test('a backup directory that is a file: the app boots, records the error, and /admin says so', async () => {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-bkfile-'));
+  const file = path.join(work, 'not-a-dir');
+  fs.writeFileSync(file, 'x');
+  const bad = await startApp({ env: { BACKUP_DIR: file } });
+  try {
+    const d = bad.db();
+    try {
+      await waitFor(() => settingIn(d, 'last_backup_error'), 'last_backup_error');
+      assert.equal(settingIn(d, 'last_backup_at'), undefined);
+      assert.ok(d.prepare("SELECT 1 FROM audit_log WHERE action = 'backup:failed'").get(), 'the failure is audited');
+    } finally { d.close(); }
+    const html = await (await bad.get('/admin', { as: ADMIN })).text();
+    assert.match(html, /Database backups are failing\./);
+    assert.match(html, /Last good backup: never/);
+  } finally { await bad.stop(); fs.rmSync(work, { recursive: true, force: true }); }
+});
+
+test('a backup that starts failing mid-run pushes the admins once; the next success clears it', async () => {
+  const live = await startApp({ env: { BACKUP_EVERY_HOURS: String(1 / 3600) } });   // a snapshot every second
+  const d = live.db();
+  try {
+    await waitFor(() => settingIn(d, 'last_backup_at'), 'the boot snapshot');
+    assert.match(await (await live.get('/admin', { as: ADMIN })).text(), /Last database backup: <b>Today<\/b>/);
+    assert.doesNotMatch(await (await live.get('/admin', { as: 'team@test.local' })).text(), /Last database backup/, 'admins only');
+    // An admin device (added after boot: the guard refuses subscriptions in a fixture). The push
+    // itself can't be delivered here; sendPush records push_send with its tag before it sends.
+    const ecdh = crypto.createECDH('prime256v1'); ecdh.generateKeys();
+    d.prepare('INSERT INTO push_subscriptions (email, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)')
+      .run(ADMIN, 'https://127.0.0.1:9/backup-test', ecdh.getPublicKey().toString('base64url'), crypto.randomBytes(16).toString('base64url'));
+    const dir = path.join(live.work, 'backups');
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    fs.writeFileSync(dir, 'now a file');
+    await waitFor(() => settingIn(d, 'last_backup_error'), 'the failure to be recorded');
+    await new Promise((r) => setTimeout(r, 2500));   // two more failing runs
+    const pushes = d.prepare("SELECT COUNT(*) n FROM metrics_events WHERE kind = 'push_send' AND meta = 'backupfail'").get().n;
+    assert.equal(pushes, 1, 'pushed once, on the transition, not on every failing run');
+    assert.match(await (await live.get('/admin', { as: ADMIN })).text(), /Database backups are failing\..*Last good backup: Today/s);
+    fs.rmSync(dir, { force: true });
+    fs.mkdirSync(dir);
+    await waitFor(() => !settingIn(d, 'last_backup_error'), 'the next success to clear the error');
+    assert.doesNotMatch(await (await live.get('/admin', { as: ADMIN })).text(), /backups are failing/);
+  } finally {
+    d.prepare('DELETE FROM push_subscriptions').run();
+    d.close();
+    await live.stop();
+  }
 });

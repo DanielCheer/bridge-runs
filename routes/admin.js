@@ -98,6 +98,7 @@ export function mountAdmin(app) {
       viewerEmail: req.userEmail, log, msg: req.query.msg || '',
       filter, counts, teamMembers, ann: annPanel(req.userEmail),
       dmUnread: unreadCount(req.userEmail), groupUnread: groupUnread(req.userEmail), groupMention: groupMentionUnread(req.userEmail, applicantIdOf(req.userEmail)),
+      backup: viewerIsAdmin ? { at: getSetting('last_backup_at'), error: getSetting('last_backup_error') } : null,
     }));
   });
 
