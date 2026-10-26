@@ -121,6 +121,7 @@ import {
 import { autoJoinTeam, loadRun, ensureWeek } from './engine/basketball.js';
 import { PROGRAM_THEMES, slugIsReserved, buildPrograms } from './engine/program-loader.js';
 import { recomputeStatus } from './engine/council.js';
+import { startScheduler } from './engine/scheduler.js';
 
 // Demo mode (DEMO_MODE=1, docs/DEMO.md) seeds itself: a fresh, wiped database gets the synthetic
 // world (fixtures/world.mjs) before any code below reads state. guard.js has already refused a
@@ -3919,25 +3920,8 @@ app.post('/admin/people/delete', requireAdmin, (req, res) => {
   }
   res.redirect('/admin/people?msg=Deleted');
 });
-// The boot-time weekly rollover runs BELOW, after buildPrograms() — ensureWeek → autoJoinTeam →
-// seatRenewers reads P(1).config, so the PROGRAMS registry must be hydrated first. This 60s
-// interval is safe as-is: it first fires ~60s in, long after buildPrograms() has run.
-setInterval(() => {
-  try {
-    // Each program runs its own per-tick work via its registry tick() — program-generic, so a new
-    // run is picked up with zero scheduler code change. id order (basketball, then pickleball)
-    // preserves the original call sequence. Each program is isolated: with in-app program creation
-    // a single bad program must not starve every other run's rollover/expiry every 60 s.
-    for (const p of PROGRAMS.values()) {
-      try { p.tick(); } catch (e) { console.error(`[interval] program ${p.id} (${p.key}) tick FAILED: ${e.message}`); }
-    }
-  } catch (e) { console.error(`[interval] rollover/expiry FAILED: ${e.message}`); }
-  try { fireScheduledAnnouncements(); } catch (e) { console.error(`[sched-announce] tick FAILED: ${e.message}`); }
-  // PCO People sync: drain the outbox + reconcile unlinked members. Async and fully
-  // self-contained (own error handling, inert without credentials) — fire and forget.
-  pcoTick().catch(e => console.error('[pco] tick rejected:', e.message));
-}, 60000).unref();
-armScheduleTimer();   // precise firing for any pending post that survived a restart
+
+startScheduler();
 
 // Test-only: synchronously run every program's scheduler tick (rollover + auto open/ping/lock).
 // Mounted ONLY when ENABLE_TEST_TICK=1 so it can never exist in prod — lets the harness drive the
