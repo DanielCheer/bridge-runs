@@ -233,6 +233,22 @@ function annBell(ann) {
 // server's PROGRAMS registry is the single source of truth. The seed default keeps program 1
 // working if a render somehow beats hydration (it never does at request time).
 let PROGRAM_META = { 1: { chat: '/chat', season: '/season', seasonLabel: 'Season board' } };
+// Why a join POST didn't seat you: the join handlers redirect back with ?joinerr=<code> and the
+// run page shows one line. Unknown codes render nothing (the param is user-controlled).
+const JOIN_ERRORS = {
+  notapproved: "You need to be an approved member of this run before you can check in.",
+  suspended: "Your check-in is paused, so you weren't added. Reach out to the host if you think this is a mistake.",
+  cancelled: "This week's run is cancelled, so check-in is off.",
+  locked: 'Check-in is locked for this run. The host can still add you at the door.',
+  closed: "Check-in isn't open yet. Try again once it opens.",
+  prereg: 'The early-access spots are full. Check-in opens to everyone later.',
+  full: 'The run and its waitlist are full, so nobody new can join.',
+};
+export function joinErrNotice(code) {
+  const msg = Object.hasOwn(JOIN_ERRORS, code) ? JOIN_ERRORS[code] : '';
+  return msg ? `<div class="notice bad" style="margin-top:12px">${msg}</div>` : '';
+}
+
 export function setProgramMeta(meta) { if (meta && meta[1]) PROGRAM_META = meta; }
 const progMeta = (id) => PROGRAM_META[id] || PROGRAM_META[1];
 // data-tab lets the live poll patch the right tab regardless of its (varying) href; the Chat

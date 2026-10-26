@@ -3,7 +3,7 @@
 import { esc, fmtWhen, wdayFull, wdayShort } from '../util.js';
 import {
   IC_CLOSE, qrBlock, locationBlock, avatarInner, GROUP_ICON, MINOR_STAR, progMeta, tabNav, opsNav,
-  backToRuns, firstRunTour, WELCOME_MODAL, GAME_FORMAT_CARD,
+  backToRuns, firstRunTour, WELCOME_MODAL, GAME_FORMAT_CARD, joinErrNotice,
 } from '../components.js';
 import { HEAD, FOOT, header, footWithTabs } from '../shell.js';
 
@@ -85,7 +85,7 @@ function runDayControls({ runDay, rdMsg = '' }) {
 
 export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–10:30 PM', startLabel = '8:30 PM', tipoff = 0, openDay = 'Monday', openTime = '5 PM', cap, waitlistCap, going, waiting, full, runFull, isOpen, canSeeCount, regularSlotsFull,
                              myState, myWaitPos, myOffer = null, offerWindowHours = 3, iAmTeam, iAmCouncil = false, iAmRegular, iOptedOut, iAutoRenew,
-                             viewerIsAdmin, canOperate, canSeeRoster, kioskUrl = '', suspended = false, suspendReason = '', myConfirmed = false, confirmBy = '', msg = '', bannerVer = '4', cancelled = false, locked = false, announcement = null, announcementLog = [], inPlayers, offeredPlayers = [], waitPlayers, host = null, runDay = null, rdMsg = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
+                             viewerIsAdmin, canOperate, canSeeRoster, kioskUrl = '', suspended = false, suspendReason = '', myConfirmed = false, confirmBy = '', msg = '', bannerVer = '4', cancelled = false, locked = false, announcement = null, announcementLog = [], inPlayers, offeredPlayers = [], waitPlayers, host = null, runDay = null, rdMsg = '', joinErr = '', dmUnread = 0, groupUnread = 0, groupMention = 0, ann = null }) {
 
   // Not cleared to play yet (admins always get through — they run the check-in)
   if (!viewerIsAdmin && status !== 'approved') {
@@ -419,7 +419,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
     ${hero}
     ${annBanner}
     ${cancelled ? `<div class="notice bad" style="margin-top:12px"><b>🚫 This week's run is cancelled.</b> No run ${esc(wdayFull(runDate))}, ${esc(runLabel)} — check-in is off. Watch for an announcement about the next one.</div>` : ''}
-    ${msg ? `<div class="notice good" style="margin-top:12px">${esc(msg)}</div>` : ''}
+    ${msg ? `<div class="notice good" style="margin-top:12px">${esc(msg)}</div>` : ''}${joinErrNotice(joinErr)}
     ${suspended ? `<div class="notice bad" style="margin-top:12px"><b>⊘ Your check-in is paused.</b>${suspendReason ? ' ' + esc(suspendReason) : ''} Reach out to the host if you think this is a mistake.</div>` : ''}
     ${mine}
     ${(action || runToggle) ? `<div class="controls" data-tour="join">${action}${runToggle}</div>` : ''}

@@ -145,5 +145,5 @@ test('editing: the season gate sets and clears; the waiver key survives a slug r
   await post('/admin/programs/edit', ADMIN, { ...edit, slug: 'ytx', seasonStart: '' });
   assert.equal(JSON.parse(db.prepare('SELECT config FROM program WHERE id = ?').get(PID).config).waiverKey, 'youthtest');
   const to = redirTo(await post('/ytx/join', YT('adult')));
-  assert.ok(to.endsWith('/ytx') && !to.includes('/waiver'), `signed records still satisfy after the rename (went to ${to})`);
+  assert.ok(to.split('?')[0].endsWith('/ytx') && !to.includes('/waiver'), `signed records still satisfy after the rename (went to ${to})`);
 });

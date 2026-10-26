@@ -2,7 +2,7 @@
 // fail on the code before its fix.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp } from './helpers/app.mjs';
+import { startApp, ADMIN } from './helpers/app.mjs';
 import { PERSONAS } from '../fixtures/world.mjs';
 
 let app, db;
@@ -35,4 +35,32 @@ test('/apply still creates a brand-new applicant', async () => {
   });
   assert.match(await r.text(), /Application received/);
   assert.equal(one('SELECT status FROM applicants WHERE email = ?', 'brandnew@test.local')?.status, 'pending');
+});
+
+// ---------- join refusals say why (?joinerr=) ----------
+const loc = (r) => r.headers.get('location');
+test('basketball join refusals redirect with a reason the page explains', async () => {
+  assert.equal(loc(await app.post('/checkin/join', {}, { as: PERSONAS.suspended })), '/checkin?joinerr=suspended');
+  assert.equal(loc(await app.post('/checkin/join', {}, { as: PERSONAS.pending })), '/checkin?joinerr=notapproved');
+  await app.post('/admin/run/cancel', { on: '1' }, { as: ADMIN });
+  try {
+    assert.equal(loc(await app.post('/checkin/join', {}, { as: 'player01@test.local' })), '/checkin?joinerr=cancelled');
+    const html = await (await app.get('/checkin?joinerr=cancelled', { as: 'player01@test.local' })).text();
+    assert.match(html, /This week's run is cancelled, so check-in is off\./);
+  } finally {
+    await app.post('/admin/run/cancel', { on: '0' }, { as: ADMIN });
+  }
+  const plain = await (await app.get('/checkin?joinerr=%3Cb%3Ex', { as: 'player01@test.local' })).text();
+  assert.ok(!plain.includes('<b>x') && !plain.includes('&lt;b&gt;x'), 'an unknown code renders nothing');
+});
+
+test('generic run join refusals redirect with a reason the page explains', async () => {
+  await app.post('/pickleball/cancel', { on: '1' }, { as: ADMIN });
+  try {
+    assert.equal(loc(await app.post('/pickleball/join', {}, { as: 'player01@test.local' })), '/pickleball?joinerr=cancelled');
+    const html = await (await app.get('/pickleball?joinerr=cancelled', { as: 'player01@test.local' })).text();
+    assert.match(html, /This week's run is cancelled, so check-in is off\./);
+  } finally {
+    await app.post('/pickleball/cancel', { on: '0' }, { as: ADMIN });
+  }
 });

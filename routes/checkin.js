@@ -119,6 +119,7 @@ export function mountCheckin(app) {
       // Operator run-day + cancel controls (HOST/ADMIN only) — moved here from the profile.
       runDay: runDayFor(req, gate),
       rdMsg: req.query.rdset ? String(req.query.rdset) : (req.query.rderr || ''),
+      joinErr: String(req.query.joinerr || ''),
       dmUnread: unreadCount(email),
       groupUnread: groupUnread(email),
       groupMention: groupMentionUnread(email, a ? a.id : 0),
@@ -140,27 +141,28 @@ export function mountCheckinActions(app) {
   app.post('/checkin/join', requireLogin, (req, res) => {
     const email = req.userEmail;
     const a = applicantByEmail(email);
-    if (!a || a.status !== 'approved') return res.redirect('/checkin');
-    if (a.suspended) return res.redirect('/checkin'); // suspended → can't check in (page shows why)
+    // Every refusal redirects with ?joinerr=<reason>, which the page turns into one line.
+    if (!a || a.status !== 'approved') return res.redirect('/checkin?joinerr=notapproved');
+    if (a.suspended) return res.redirect('/checkin?joinerr=suspended'); // suspended → can't check in
     if (!a.waiver_ok) return res.redirect('/waiver?next=/checkin'); // one-time waiver before first join
     const runDate = nextRunDate();
-    if (runIsCancelled(runDate)) return res.redirect('/checkin'); // run cancelled → no check-in (page shows why)
-    if (runIsLocked(runDate)) return res.redirect('/checkin'); // locked at 2 PM → no new self-joins (drops/waitlist still churn; host adds a +1)
+    if (runIsCancelled(runDate)) return res.redirect('/checkin?joinerr=cancelled'); // run cancelled → no check-in
+    if (runIsLocked(runDate)) return res.redirect('/checkin?joinerr=locked'); // locked at 2 PM → no new self-joins (drops/waitlist still churn; host adds a +1)
     // Pre-access: regulars and team can join while the run is still closed.
     const hasPreAccess = !!(a.is_regular || a.is_team);
     const runOpen = runIsOpen(runDate);
-    if (!runOpen && !hasPreAccess) return res.redirect('/checkin');
+    if (!runOpen && !hasPreAccess) return res.redirect('/checkin?joinerr=closed');
     const already = db.prepare('SELECT 1 FROM checkins WHERE run_date=? AND email=? AND program_id = 1').get(runDate, email);
     // Pre-register cap: while CLOSED, team + regulars can hold at most PREREG_CAP
     // spots, so at least (floor − cap) survive for normals once you open.
     if (!runOpen && a.is_regular && !a.is_team && !already) {
       const { r } = stmtPreregCount.get(runDate);
-      if (r >= PREREG_CAP) return res.redirect('/checkin'); // early spots full; opens to all later
+      if (r >= PREREG_CAP) return res.redirect('/checkin?joinerr=prereg'); // early spots full; opens to all later
     }
     // Hard cap: 15 floor + 5 waitlist. Past that, nobody new joins.
     if (!already) {
       const { n } = db.prepare('SELECT COUNT(*) n FROM checkins WHERE run_date=? AND program_id = 1').get(runDate);
-      if (n >= TOTAL_CAP) return res.redirect('/checkin'); // run + waitlist full
+      if (n >= TOTAL_CAP) return res.redirect('/checkin?joinerr=full'); // run + waitlist full
     }
     try {
       // A regular who joins AFTER the run opens is "late" — held on the waitlist

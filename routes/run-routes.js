@@ -227,18 +227,21 @@ function runBump(programId, req, res) {
 function runJoin(programId, req, res) {
   const base = P(programId).paths.run, cfg = P(programId).config;
   const g = programGate(programId, req, res); if (!g) return;
-  if (!g.a || g.a.suspended) return res.redirect(base); // need a profile to join; suspended can't
+  // Every refusal redirects with ?joinerr=<reason>, which the run page turns into one line.
+  if (!g.a) return res.redirect(base + '?joinerr=notapproved');   // need a profile to join
+  if (g.a.suspended) return res.redirect(base + '?joinerr=suspended');
   if (!waiverSatisfied(programId, g.a.email)) return res.redirect(waiverGateUrl(programId, base)); // one-time waiver before first join (program-scoped when config.waiver is set — F6)
   ensureWeekFor(programId);
   const rd = programRunDate(programId);
-  if (runCancelledFor(programId, rd) || !runOpenFor(programId, rd)) return res.redirect(base);
+  if (runCancelledFor(programId, rd)) return res.redirect(base + '?joinerr=cancelled');
+  if (!runOpenFor(programId, rd)) return res.redirect(base + '?joinerr=closed');
   const { rows } = partitionFor(programId, rd);
-  if (rows.length >= cfg.cap + cfg.waitlist && !rows.find(p => p.email === req.userEmail)) return res.redirect(base); // full
+  if (rows.length >= cfg.cap + cfg.waitlist && !rows.find(p => p.email === req.userEmail)) return res.redirect(base + '?joinerr=full');
   // F3 enforcement (P2-1): a direct POST here must not bypass the program's join mode — it
   // previously enrolled ANY approved club player, invite-only or not (and let a pending
   // requester self-approve). Non-members of a non-open program go back to the join prompt,
   // which explains / requests properly. Open mode keeps the auto-enroll below.
-  if (!memberOf(programId, req.userEmail) && (cfg.joinMode || 'open') !== 'open') return res.redirect(base);
+  if (!memberOf(programId, req.userEmail) && (cfg.joinMode || 'open') !== 'open') return res.redirect(base + '?joinerr=notapproved');
   // Taking a seat makes you a member — a direct POST skips the GET that would enroll you, so
   // without this an approved player could seat as a ghost (on the floor, absent from the member
   // list / chat audience / push). Idempotent + guest-safe.
@@ -571,6 +574,7 @@ function runGetPage(programId, req, res) {
     season: opener || '', seasonWeekday: opener ? runWeekday(opener) : '', seasonLabel: opener ? runLabelFor(opener) : '',
     preseason: pre, today: ymdLocal(), seasonMax: shiftYmd(ymdLocal(), 365),
     pkMsg: req.query.pkset ? String(req.query.pkset) : (req.query.pkerr || ''),
+    joinErr: String(req.query.joinerr || ''),
     dmUnread: unreadCount(req.userEmail), groupUnread: chatUnreadFor(programId, req.userEmail), groupMention: chatMentionUnreadFor(programId, req.userEmail, g.a ? g.a.id : 0), ann: annPanel(req.userEmail),
     runBase: base, programId, theme: cfg.theme, sport: prog.displayName, sportEmoji: prog.emoji, dayName: DAY_NAMES[cfg.dow], pollKey: prog.key,
     teamsCfg: teamsFeature(programId), teamRows: teamsFeature(programId) ? runTeamsFor(programId, rd, part) : [], teamsOpen: teamsFeature(programId) ? teamsOpen(programId, rd) : false,
