@@ -6587,7 +6587,7 @@ function seatRenewers(programId, rd) {
   const cfg = P(programId).config, total = cfg.cap + cfg.waitlist, today = ymdLocal(new Date(schedNow()));  // schedNow so the auto-renew pause window honours the TEST_NOW seam (== real time in prod)
   const insTeam = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, sort_order, program_id, auto_seated) VALUES (?,?,?,?,?,1)');
   const insR = db.prepare('INSERT OR IGNORE INTO checkins (run_date, email, name, program_id, auto_seated) VALUES (?,?,?,?,1)');
-  let team = [], nonTeam = [];
+  let team, nonTeam = [];
   if (cfg.autoRenew.from === 'members') {
     // Waiver filtering happens in JS via waiverSatisfied — a program with its OWN waiver (F6)
     // must not seat someone who only holds the club-wide flag, and vice versa. For global-waiver

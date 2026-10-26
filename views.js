@@ -2170,7 +2170,7 @@ export function checkinPage({ email, status, runLabel, runDate, hours = '8:30–
 
   // ----- my own action button (nine branches, unchanged POSTs) -----
   const canPlay = status === 'approved';
-  let action = '';
+  let action;
   if (cancelled) {
     // Run cancelled → no check-in for anyone; the banner below explains (server blocks the POST too).
     action = `<button class="btn" type="button" disabled>Run cancelled</button>`;
@@ -3296,7 +3296,7 @@ export function runPage({ email, runDate = '', runLabel = '', hours = '6–8 PM'
     ? `<form method="POST" action="${runBase}/claim/${encodeURIComponent(p.claim_token)}" style="margin:0"><button class="btn primary sm" type="submit" title="Complete the claim (demo)">✓ Claim</button></form>`
     : '';
   const rowOffer = (p) => `<div class="lr"><span class="ln">·</span>${nameLink(p, `<span class="lav wl">${avatarInner(p.email, p.name)}</span><span class="lnm">${esc(p.name)}${p.minor ? MINOR_STAR : ''}${p.email === email ? ' <span class="tag">You</span>' : ''} <span class="tag">⏳ Claiming</span></span>`)}${canOperate ? demoClaimForm(p) + rmForm(p) : ''}</div>`;
-  let action = '';
+  let action;
   if (cancelled) action = `<button class="btn" type="button" disabled>Run cancelled</button>`;
   else if (myState === 'in') action = `<form method="POST" action="${runBase}/leave"><button class="btn ghost" type="submit">Sit out</button></form>`;
   else if (myState === 'waitlist') action = `<form method="POST" action="${runBase}/leave"><button class="btn ghost" type="submit">Leave waitlist (#${myWaitPos} of ${waiting})</button></form>`;
@@ -4787,7 +4787,7 @@ export function programsAdminPage({ rows = [], msg = '', form = false, themes = 
   const hourOpts = (sel) => Array.from({ length: 24 }, (_, h) =>
     `<option value="${h}"${h === sel ? ' selected' : ''}>${hourLabel(h)}</option>`).join('');
   const THEME_LABEL = { default: 'Court orange', pk: 'Teal & cream', vb: 'Navy & cream' };
-  const dayName = (d) => (DAYS[d] || [, '—'])[1];
+  const dayName = (d) => (DAYS[d] || [null, '—'])[1];
 
   const card = (r) => {
     const badge = r.active
