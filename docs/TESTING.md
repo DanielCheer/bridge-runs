@@ -54,7 +54,7 @@ These exist only for test instances, and the guard refuses them on the productio
 - `TEST_NOW` pins the app's scheduling clock (`schedNow()`).
 - `ENABLE_TEST_TICK=1` mounts `POST /admin/test/tick`, which runs every program's scheduler tick,
   scheduled announcements and the Planning Center outbox synchronously, so a test can assert right
-  after.
+  after, and `GET /admin/test/routes`, the route-table dump the `routes` suite compares.
 - `COOKIE_INSECURE=1` lets the session cookie travel over plain `http://localhost`.
 - `FORCE_HELD_RELEASED` forces the held-spot release path.
 
@@ -131,6 +131,8 @@ current night of every program is left empty; a suite sets up the night it is te
 | `pco` | the Planning Center sync against a local mock of its API |
 | `backup` | encrypted snapshots and the restore path, including tamper and wrong-key refusal |
 | `waiver-qr` | the waiver QR/link section exists only when `WAIVER_URL` is set |
+| `routes` | the route table: every Express layer in registration order with each route's handler chain, against `test/snapshots/routes.txt` (`UPDATE_SNAPSHOTS=1` regenerates it after an intended change) |
+| `layers` | the module layering: no import goes up a layer (see [ARCHITECTURE.md](ARCHITECTURE.md)); reads the source, boots nothing |
 | `demo-mode` | the demo: guard refusals, self-seeding, persona sign-in per role, the strip, organizer-only reset, and the supervisor wiping a post on reset |
 
 The private golden master (byte-comparing 224 page snapshots across a change, on a copy of real
