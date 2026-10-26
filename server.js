@@ -1156,6 +1156,7 @@ app.post('/apply', (req, res) => {
   }
 });
 
+// ---------- LOGIN (magic link) ----------
 app.get('/login', (req, res) => {
   if (currentUser(req)) return res.redirect(safeNextPath(req.query.next));
   // `msg` is a benign notice (e.g. "signed out on every device") — rendered via the page's
