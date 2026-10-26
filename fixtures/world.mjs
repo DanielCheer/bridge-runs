@@ -51,7 +51,7 @@ const PLAYER_NAMES = ['Jordan Avery', 'Casey Brooks', 'Riley Chen', 'Taylor Dunn
   'Quinn Garcia', 'Drew Hayes', 'Skyler Ito', 'Reese Jensen', 'Parker Kim', 'Rowan Lee'];
 
 // The three standing programs, by id. dow = the run weekday (0 Sun … 6 Sat); seasonKey = the
-// app_settings key holding that program's season opener (see PROGRAM_DEFS in server.js).
+// app_settings key holding that program's season opener (see PROGRAM_DEFS in engine/builtin-programs.js).
 export const PROGRAMS = {
   1: { dow: 3, seasonKey: 'season_start' },      // basketball, Wednesdays
   2: { dow: 2, seasonKey: 'pk_season_start' },   // pickleball, Tuesdays
@@ -223,7 +223,7 @@ export function seedWorld(db, { today } = {}) {
     msg(3, VB_MEMBERS[0], 'anyone want to set for us on Friday?', { at: at() });
 
     // A direct-message thread between a player and the organizer. Bodies are stored as plaintext,
-    // which the app reads as legacy rows (new DMs are encrypted at rest by server.js).
+    // which the app reads as legacy rows (new DMs are encrypted at rest by lib/dm-crypto.js).
     const insDM = db.prepare('INSERT INTO messages (from_email, to_email, body, created_at, read_at) VALUES (?,?,?,?,?)');
     insDM.run(PLAYERS[0], PERSONAS.admin, 'Hey, can I bring a friend next week?', `${chatDay} 18:00:00`, `${chatDay} 18:05:00`);
     insDM.run(PERSONAS.admin, PLAYERS[0], 'Sure, have them apply first so the council can approve them.', `${chatDay} 18:06:00`, null);

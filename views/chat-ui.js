@@ -9,7 +9,7 @@ import {
 } from './components.js';
 
 // ---------- STICKER PACK (Bridge / basketball themed, SVGs in public/stickers) ----------
-// The single source of truth for the starter pack. server.js imports this to validate
+// The single source of truth for the starter pack. lib/media.js imports this to validate
 // a `sticker=<name>` send against the known set (no upload path). Each name maps to
 // /stickers/<name>.svg (served statically). Owner can add more files + names later.
 export const STICKERS = ['ball', 'hoop', 'swish', 'fire', 'win', 'gameon', 'letsrun', 'jersey', 'gg', 'bridge'];

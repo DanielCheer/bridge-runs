@@ -40,7 +40,7 @@ function programAdminRows() {
       mounted: !!p, emoji: p ? p.emoji : (spec && spec.emoji) || '',
       runPath: p ? p.paths.run : (row.slug ? '/' + row.slug : ''),
       cap: cfg ? cfg.cap : null, dow: cfg && Number.isFinite(cfg.dow) ? cfg.dow : null,
-      // One ready-to-print label, built here because server.js owns the clock formatter: the
+      // One ready-to-print label, built here because lib/dates.js owns the clock formatter: the
       // generic shape carries whole hours, basketball carries 'HH:MM' strings — both render.
       timeLabel: !cfg ? ''
         : Number.isFinite(cfg.startHour) && Number.isFinite(cfg.endHour)

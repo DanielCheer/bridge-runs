@@ -30,7 +30,7 @@ anything from third-party accounts. Sign-in is by emailed link or code; no passw
   with the program).
 - **Sign-in links/codes:** used or expired ones are purged at every backup and at startup.
 - **Chat media (photos/voice/video):** pruned after one year, at boot and daily (`pruneOldMedia`
-  in `server.js`).
+  in `lib/media.js`).
 - **Operational log:** trimmed to the newest 5,000 entries (`pruneAuditLog`). A small permanent
   ledger (`audit_key_events`) keeps only organizationally significant events: waiver
   confirmations, role changes, account approvals/removals, admin sign-ins.

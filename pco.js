@@ -439,7 +439,7 @@ export function pcoHandleWebhook(rawBody, signature) {
   return { ok: true, code: 200 };
 }
 
-// ---------- the tick (wired into server.js's 60s interval + test tick) ----------
+// ---------- the tick (wired into engine/scheduler.js's 60s interval + the test tick) ----------
 export async function pcoTick() {
   if (!pcoConnected() || getSetting('pco_error') === 'auth') return;
   if (Number(getSetting('pco_backoff_until') || 0) > Date.now()) return;
@@ -662,8 +662,9 @@ const stmtAttCandidates = db.prepare(
    WHERE pco_id IS NOT NULL AND ${SYNTHETIC} ORDER BY id`);
 const stmtSetAttSig = db.prepare('UPDATE applicants SET pco_att_sig = ? WHERE email = ?');
 
-// Program id → the label the church sees in PCO. Injected from server.js's registry at boot so
-// this module never imports the program layer (and a new sport needs no edit here).
+// Program id → the label the church sees in PCO. Injected from the registry at boot (buildPrograms
+// in engine/program-loader.js) so this module never imports the program layer (and a new sport
+// needs no edit here).
 let PROGRAM_LABELS = { 1: 'Basketball', 2: 'Pickleball', 3: 'Volleyball' };
 export function pcoSetProgramLabels(map) { if (map && Object.keys(map).length) PROGRAM_LABELS = map; }
 
@@ -1158,7 +1159,7 @@ export async function pcoSignupRosterForDate(namePrefix, ymd) {
   return { signup, people };
 }
 // A UTC instant's calendar date in the SERVER's local time — the same convention ymdLocal() uses in
-// server.js, so a signup matches the run date the app already computed. (The box runs in Eastern;
+// lib/dates.js, so a signup matches the run date the app already computed. (The box runs in Eastern;
 // deriving the date any other way would put a Wednesday 8:30 PM run on Thursday.)
 function localYmd(iso) {
   const d = new Date(iso);

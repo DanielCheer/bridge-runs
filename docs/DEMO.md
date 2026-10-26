@@ -58,8 +58,10 @@ The world is wiped and reseeded:
 A reset is a clean process exit. `scripts/run-demo.mjs` is a small supervisor: on every start it
 empties its data folder (database, backups and key, chat uploads, avatars, banners), starts
 `node server.js` with `DEMO_MODE=1`, and waits. The server finds an empty database and seeds the
-synthetic world (`seedWorld()` from `fixtures/world.mjs`, the same world the tests use), so every
-lap begins from the same state, and nothing anyone posted or uploaded survives it. Each start
+synthetic world (`seedWorld()` from `fixtures/world.mjs`, the same world the tests use), then seeds
+demo program 90's showcase (`seedDemoRun()` in `engine/demo-run.js`, what the organizer's Seed
+button runs: a full floor and waitlist, chat, parties and teams), so every lap begins from the same
+state, and nothing anyone posted or uploaded survives it. Each start
 also gets a new random `SESSION_SECRET`, so everyone is signed out.
 
 The supervisor only wipes a folder it owns: an empty one, or one carrying its `.bridge-runs-demo`
@@ -91,5 +93,7 @@ in on their own device.
 
 - Anyone can apply through the public form or post in chat. What they enter is visible to other
   visitors until the next reset. Don't put real personal details in the demo.
-- Program 90's showcase starts empty after each reset; the organizer seeds it from `/demo`.
+- Program 90's showcase is seeded at every start. A visitor who changes it (removes players, claims
+  offers) changes it for everyone until the next reset; the organizer's Seed button on `/demo`
+  restores it.
 - Policy pages show `[PLACEHOLDER]` contact details (no `LEGAL_*` variables are set).

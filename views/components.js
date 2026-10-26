@@ -1,5 +1,5 @@
 // views/components.js — the shared building blocks every page draws from: icons, avatars (the
-// map server.js hands over via setAvatarMap), badges, the announcements bell, the tab bar and
+// map lib/media.js hands over via setAvatarMap), badges, the announcements bell, the tab bar and
 // nav buttons (program paths via setProgramMeta), share/copy buttons, the waiver QR, onboarding
 // cards (install steps, sign-in code, first-run tour, welcome modal) and follow buttons.
 import { AVATAR_SEED_EMAIL, WAIVER_URL } from '../config.js';
@@ -20,7 +20,7 @@ const initials = (name = '') => name.trim().split(/\s+/).map(w => w[0]).slice(0,
 // (Daniel, the host) maps by email → /avatars/daniel.jpg; everyone else falls
 // back to initials. AVATAR_SEED_EMAIL unset → no seeded avatar at all.
 const AVATAR_SEED = AVATAR_SEED_EMAIL.toLowerCase();
-// Uploaded-photo registry: lowercased email -> { file, v }. server.js rebuilds this
+// Uploaded-photo registry: lowercased email -> { file, v }. lib/media.js rebuilds this
 // (from applicants.avatar) at boot and after any avatar/email mutation, so avatarUrl
 // can resolve email -> photo with NO per-call db access and NO change to avatarInner's
 // signature across the ~10 render sites (roster, host card, inbox, chat, /u/:id, …).
@@ -39,7 +39,7 @@ const avatarInner = (email, name) => {
   const url = avatarUrl(email);
   return url ? `<img src="${esc(url)}" alt="">` : esc(initials(name));
 };
-// Public avatar-URL resolver (single source of truth) — server.js reuses this for
+// Public avatar-URL resolver (single source of truth) — routes/chat.js reuses this for
 // the /players/search JSON so the mention dropdown shows the same photo the chat does.
 // Returns '' when the person has no photo (client falls back to initials).
 export function avatarUrlFor(email) { return avatarUrl(email); }
@@ -598,7 +598,7 @@ const GAME_FORMAT_CARD = `
 
 // Relationship action button(s): a set of `.swapform` POSTs (already in the SPA interceptor
 // selector) whose route redirects back to `back` and is swapped in place — no full reload.
-// `rel` is the viewer's relationship toward this person (see relationshipTo in server.js).
+// `rel` is the viewer's relationship toward this person (see relationshipTo in engine/social.js).
 // Reused on the /friends rows AND on a player's full profile.
 function friendBtn(id, rel, back = '/friends') {
   const f = (action, label, cls) =>

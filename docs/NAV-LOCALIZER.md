@@ -5,8 +5,9 @@ The fixed bottom tab bar sometimes rendered mid-screen in the installed iOS PWA.
 the device where it happens. This document describes the instrument built to end that: capture
 what the device actually reports, map the capture to one mechanism, and only then change code.
 
-Code: the client half is `__kbSync` in `views.js` (the client app script); the server half is
-`POST /debug/geo` / `GET /debug/geo` in `server.js`, stored in the `geo_reports` table (`db.js`).
+Code: the client half is `__kbSync` in `views/client-app.js` (the client app script); the server
+half is `POST /debug/geo` / `GET /debug/geo` in `routes/admin.js` (`mountNavLocalizer`), stored in
+the `geo_reports` table (`db.js`).
 
 ---
 

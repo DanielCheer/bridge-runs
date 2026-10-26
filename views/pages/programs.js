@@ -8,8 +8,8 @@ import { HEAD, FOOT, header } from '../shell.js';
 // formulaic wiring (paths, setting keys, notification copy, banner) is derived server-side.
 export function programsAdminPage({ rows = [], msg = '', form = false, themes = [], kioskToken = '' }) {
   const DAYS = [['0', 'Sunday'], ['1', 'Monday'], ['2', 'Tuesday'], ['3', 'Wednesday'], ['4', 'Thursday'], ['5', 'Friday'], ['6', 'Saturday']];
-  // Whole-hour label, local to the view: server.js's fmtClockLabel/fmtClockRange can't be imported
-  // here (views is imported BY server — the reverse would be circular), and this screen only ever
+  // Whole-hour label, local to the view: lib/dates.js's fmtClockLabel/fmtClockRange can't be imported
+  // here (views sit below lib/ and import only config.js and each other), and this screen only ever
   // renders on-the-hour times, so a 2-line formatter beats threading 24 strings through props.
   const hourLabel = (h) => `${((h % 12) || 12)}${h < 12 || h === 24 ? ' AM' : ' PM'}`;
   const hourOpts = (sel) => Array.from({ length: 24 }, (_, h) =>

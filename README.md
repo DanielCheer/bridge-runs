@@ -227,11 +227,15 @@ Caveat: Render's free tier **sleeps after 15 min idle**, so the first person to 
 ## Files
 
 ```
-server.js     routes + logic
+server.js     the entry: builds the app, mounts the routes, boots
+config.js     every environment variable the app reads
+lib/          shared helpers (settings, audit, push, media, dates, …)
+engine/       the domain logic (programs, seating, runs, chat, teams, ladder, …)
+routes/       the HTTP routes, one module per area
+views/        the HTML pages (shell, components, pages/)
 db.js         database + schema
 auth.js       magic-link sessions, admin/login guards
 mailer.js     email sending (SMTP or dev-console)
-views.js      the HTML pages
 public/
   styles.css  the look
 ```

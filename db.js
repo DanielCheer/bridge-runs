@@ -233,7 +233,7 @@ db.exec(`
   );
 `);
 // Optional per-week TIME override (2026-07): the host can move the start/end time as
-// well as the day. NULL = the DEFAULT_START–DEFAULT_END window in server.js. A row may exist for a
+// well as the day. NULL = the DEFAULT_START–DEFAULT_END window in engine/basketball-calendar.js. A row may exist for a
 // time-only change even when run_date === default_date. Additive + migration-guarded.
 const roCols = db.prepare('PRAGMA table_info(run_overrides)').all().map(c => c.name);
 if (!roCols.includes('run_time')) db.exec('ALTER TABLE run_overrides ADD COLUMN run_time TEXT');
@@ -390,7 +390,7 @@ if (!appCols.includes('suspend_reason')) {
 // Profile photo (2026-07): stored filename (NOT a path) in public/avatars/, keyed by
 // applicant id (<id>-<shortrandom>.jpg) so it survives email changes. Nullable — NULL
 // means "no photo, render initials". Additive + migration-guarded, matching every
-// column above. server.js owns the file lifecycle (write/replace-delete/remove-delete).
+// column above. lib/media.js owns the file lifecycle (write/replace-delete/remove-delete).
 if (!appCols.includes('avatar')) {
   db.exec('ALTER TABLE applicants ADD COLUMN avatar TEXT');
 }
@@ -470,7 +470,7 @@ db.exec(`
 
 // --- Chat media (2026-07): photos + stickers on messages -------------------
 // A message may carry an `image` — either an uploaded photo (/chat-media/<id-hex>.jpg,
-// resized/stripped by server.js) or a sticker (/stickers/<name>.svg). Stickers are
+// resized/stripped by lib/media.js) or a sticker (/stickers/<name>.svg). Stickers are
 // detected by the /stickers/ prefix (bubble-less, larger render) — no separate column.
 // Additive + migration-guarded on BOTH messaging tables, matching every column above.
 const msgCols = db.prepare('PRAGMA table_info(messages)').all().map(c => c.name);
@@ -797,7 +797,7 @@ db.exec(`
 //   signup_group_members — invite lifecycle per member: 'invited' → 'joined' | 'declined'.
 // Additive + migration-guarded (brand-new tables the Phase-2 migration never rebuilds). Every
 // email/run-scoped column joins rekeyEmailTx + person-delete + the rollover/cancel/date purges
-// in this same commit (see server.js). A member's checkins.group_id points back here when they're
+// in this same commit (see engine/parties.js). A member's checkins.group_id points back here when they're
 // seated as part of the party.
 db.exec(`
   CREATE TABLE IF NOT EXISTS signup_groups (
