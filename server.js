@@ -40,6 +40,7 @@ import {
   friendsPage, friendsSearchFragment, chatLockedPage, runChatPage, pcoAdminPage, programsAdminPage, kioskPage, analyticsPage, auditViewerPage, runHistoryPage,
   ladderPage, ladderBoardPage, teamsBoardPage, leaderboardPage, WAIVER_URL, setDemoMode, demoResetPage,
 } from './views.js';
+import { getSetting, setSetting, delSetting } from './lib/settings.js';
 
 // Demo mode (DEMO_MODE=1, docs/DEMO.md) seeds itself: a fresh, wiped database gets the synthetic
 // world (fixtures/world.mjs) before any code below reads state. guard.js has already refused a
@@ -192,19 +193,6 @@ function queueOpenEmailRecipients() {
   return db.prepare("SELECT email FROM applicants WHERE status = 'approved' AND email NOT LIKE '%@guest.local' AND is_regular = 0 AND is_team = 0 AND is_host = 0 AND COALESCE(email_optout,0) = 0")
     .all().map(r => r.email);
 }
-
-// ---- Web Push: load-or-generate the VAPID keypair (persisted in app_settings so it
-// survives restarts + rides the db backup — never in .env) and a fire-and-forget send
-// helper that prunes dead subscriptions on 404/410. ----
-// Hoisted — settings sit on the hottest path (seasonStart/pkSeasonStart inside nextRunDate,
-// chat_seq every /poll tick, bumpChatSeq on every send). node:sqlite has no stmt cache, so
-// re-preparing per call recompiles the SQL each time; prepare once, reuse.
-const stmtGetSetting = db.prepare('SELECT value FROM app_settings WHERE key = ?');
-const stmtSetSetting = db.prepare('INSERT OR REPLACE INTO app_settings (key,value) VALUES (?,?)');
-const stmtDelSetting = db.prepare('DELETE FROM app_settings WHERE key = ?');
-const getSetting = (k) => stmtGetSetting.get(k)?.value;
-const setSetting = (k, v) => stmtSetSetting.run(k, String(v));
-const delSetting = (k) => stmtDelSetting.run(k);
 // Door check-in mode (the PCO Check-Ins hybrid): the physical door tap IS the confirmation, so
 // the in-app "✓ I'm coming" step disappears everywhere — no run-day ping, no confirm-or-release
 // sweep, no button (views key off confirmBy === ''). One admin toggle on /admin/pco, read LIVE
@@ -222,6 +210,9 @@ function reloadRunSettings() {
   TOTAL_CAP = CAP + WAITLIST_CAP;
 }
 reloadRunSettings();
+// ---- Web Push: load-or-generate the VAPID keypair (persisted in app_settings so it
+// survives restarts + rides the db backup — never in .env) and a fire-and-forget send
+// helper that prunes dead subscriptions on 404/410. ----
 let VAPID_PUBLIC = getSetting('vapid_public'), VAPID_PRIVATE = getSetting('vapid_private');
 if (!VAPID_PUBLIC || !VAPID_PRIVATE) {
   const kp = webpush.generateVAPIDKeys();

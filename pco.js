@@ -10,6 +10,7 @@
 // PCO outage can't slow or block anything a player does.
 import crypto from 'node:crypto';
 import db, { transact } from './db.js';
+import { getSetting, setSetting, delSetting } from './lib/settings.js';
 
 // Test seam: the pco-fn suite points this at a local mock. Unset in prod → the real API.
 const API_BASE = process.env.PCO_API_BASE || 'https://api.planningcenteronline.com';
@@ -27,9 +28,6 @@ const SCAN_BATCH = 10;       // unlinked members processed per tick — polite p
 const SYNTHETIC = "email NOT LIKE '%@guest.local' AND email NOT LIKE '%@demo.local'";
 
 // Hoisted statements (node:sqlite has no statement cache).
-const stmtGetSetting = db.prepare('SELECT value FROM app_settings WHERE key = ?');
-const stmtSetSetting = db.prepare('INSERT OR REPLACE INTO app_settings (key,value) VALUES (?,?)');
-const stmtDelSetting = db.prepare('DELETE FROM app_settings WHERE key = ?');
 const stmtAudit = db.prepare('INSERT INTO audit_log (actor,actor_role,action,target) VALUES (?,?,?,?)');
 const stmtByEmail = db.prepare('SELECT * FROM applicants WHERE email = ?');
 const stmtByPcoId = db.prepare('SELECT * FROM applicants WHERE pco_id = ?');
@@ -48,9 +46,6 @@ const stmtOutboxDead = db.prepare(
 const stmtOutboxPending = db.prepare('SELECT COUNT(*) n FROM pco_outbox WHERE done_at IS NULL');
 const stmtInbound = db.prepare('UPDATE applicants SET full_name = ?, phone = ?, dob = ? WHERE email = ?');
 
-const getSetting = (k) => stmtGetSetting.get(k)?.value;
-const setSetting = (k, v) => stmtSetSetting.run(k, String(v));
-const delSetting = (k) => stmtDelSetting.run(k);
 const audit = (action, target) => stmtAudit.run('planning-center', 'system', action, target || '');
 
 // ---------- connection state ----------
