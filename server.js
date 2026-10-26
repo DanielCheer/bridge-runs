@@ -1629,7 +1629,7 @@ app.post('/announce', requireApprover, (req, res) => {
       .run(body, req.userEmail, schedAt, req.body.email_everyone ? 1 : 0);
     audit(req.userEmail, req.actorRole, 'announce:scheduled', `${schedAt} ${body.slice(0, 40)}`);
     armScheduleTimer();
-    return res.redirect('/checkin?msg=' + encodeURIComponent(`Scheduled for ${fmtWhen(schedAt.replace('T', ' '))}.`));
+    return res.redirect('/checkin?msg=' + encodeURIComponent(`Scheduled for ${fmtScheduleAt(schedAt)}.`));
   }
   if (body && !dup) {
     db.prepare("UPDATE announcements SET archived = 1, archived_at = datetime('now') WHERE archived = 0 AND program_id = 1").run();
@@ -4859,6 +4859,12 @@ function parseScheduleAt(v) {
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) return null;
   const t = new Date(s + ':00').getTime();
   return Number.isFinite(t) && t > schedNow() ? s : null;
+}
+// "Thu, Oct 29, 6:30 PM" for parseScheduleAt's LOCAL "YYYY-MM-DDTHH:MM". Same shape as views.js's
+// fmtWhen, which can't be reused here: it reads its input as a UTC SQLite timestamp, and this value
+// is already local, so it would be shifted by the UTC offset.
+function fmtScheduleAt(s) {
+  return new Date(s + ':00').toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 const localNowMinute = () => {
   const d = new Date(schedNow());
