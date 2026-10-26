@@ -3366,7 +3366,7 @@ function programAdminRows() {
 }
 // Validate + normalize the wizard's input into the stored spec. Returns {spec, name, slug, approval}
 // or {error}. Everything the engine needs is either validated here or derived in defFromRow.
-function parseProgramForm(body, { existingSlug = null } = {}) {
+function parseProgramForm(body, { existingSlug = null, app } = {}) {
   const name = String(body.name || '').trim().slice(0, 40);
   if (name.length < 2) return { error: 'Give the program a name (at least 2 characters).' };
   // The name is a DISPLAY string that reaches page headings, aria-labels, placeholders and push
@@ -3383,7 +3383,7 @@ function parseProgramForm(body, { existingSlug = null } = {}) {
     // Program-collision FIRST: a mounted program's routes also make its slug "reserved", and
     // "another program already uses this" is the message that tells the admin what to actually do.
     if (db.prepare('SELECT 1 FROM program WHERE slug = ?').get(slug)) return { error: `Another program already uses “/${slug}”.` };
-    if (slugIsReserved(slug)) return { error: `“/${slug}” is already used by the app — pick a different web address.` };
+    if (slugIsReserved(slug, app)) return { error: `“/${slug}” is already used by the app — pick a different web address.` };
   }
   const int = (v, d) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : d; };
   const cap = int(body.cap, 0), waitlist = int(body.waitlist, 0), prereg = int(body.prereg, 0);
@@ -3443,7 +3443,7 @@ app.get('/admin/programs', requireAdmin, (req, res) => {
   res.send(programsAdminPage({ rows: programAdminRows(), msg: req.query.msg || '', form: req.query.form === '1', themes: PROGRAM_THEMES, kioskToken: getSetting('kiosk_token') || '' }));
 });
 app.post('/admin/programs/create', requireAdmin, (req, res) => {
-  const parsed = parseProgramForm(req.body);
+  const parsed = parseProgramForm(req.body, { app: req.app });
   if (parsed.error) return res.redirect('/admin/programs?form=1&msg=' + encodeURIComponent(parsed.error));
   if (parsed.spec.waiver) parsed.spec.waiverKey = parsed.slug;   // frozen forever — renames must not orphan signed waiver records (F6)
   // ids 4..89 are the in-app range (90 is the demo showcase, reserved).
@@ -3471,7 +3471,7 @@ app.post('/admin/programs/edit', requireAdmin, (req, res) => {
   const row = db.prepare('SELECT * FROM program WHERE id = ?').get(id);
   if (!row) return res.redirect('/admin/programs?msg=' + encodeURIComponent('No such program.'));
   if (PROGRAM_CODE_IDS.has(id)) return res.redirect('/admin/programs?msg=' + encodeURIComponent('Basketball, pickleball, volleyball and the demo are managed in code — they can be published or hidden here, not edited.'));
-  const parsed = parseProgramForm(req.body, { existingSlug: row.slug });
+  const parsed = parseProgramForm(req.body, { existingSlug: row.slug, app: req.app });
   if (parsed.error) return res.redirect('/admin/programs?msg=' + encodeURIComponent(parsed.error));
   // Waiver key survives every edit (F6): carry the creation-time stamp; a program that ENABLES
   // its own waiver later gets stamped with its current slug from that moment on.
@@ -5613,8 +5613,9 @@ function defFromRow(row) {
 }
 // A program's own routes live under /<slug>, so a slug must never shadow an app route or a real
 // file in public/. Computed from the LIVE router stack rather than a hand-kept list — a list would
-// silently rot the next time a route is added.
-function slugIsReserved(slug) {
+// silently rot the next time a route is added. `app` is the Express app whose stack is walked (a
+// route handler passes req.app).
+function slugIsReserved(slug, app) {
   if (fs.existsSync(path.join(APP_ROOT, 'public', slug))) return true;
   // A slug also becomes a NAMESPACE: defFromRow derives `<slug>_run_date`, `<slug>_chat_seq`,
   // `<slug>mention` and the rate-limit bucket from it. The code programs' namespaces do NOT match
