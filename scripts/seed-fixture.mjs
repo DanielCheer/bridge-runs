@@ -28,6 +28,7 @@ const env = {
   PORT: '0',                                   // never bound: this process only builds the file
   DB_PATH: dbPath,
   BACKUP_DIR: path.join(work, 'backups'),
+  BACKUP_KEY_FILE: path.join(work, 'backup.key'),
   CHAT_MEDIA_DIR: path.join(work, 'media'),
   AVATARS_DIR: path.join(work, 'avatars'),
   BANNER_DIR: path.join(work, 'banners'),
