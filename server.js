@@ -123,6 +123,7 @@ import { PROGRAM_THEMES, slugIsReserved, buildPrograms } from './engine/program-
 import { recomputeStatus } from './engine/council.js';
 import { startScheduler } from './engine/scheduler.js';
 import { requireApprover, requirePlayer, mutedOut, requireCouncil } from './routes/guards.js';
+import { terminalError, TERMINAL_REGISTERED, registerTerminalError } from './routes/errors.js';
 
 // Demo mode (DEMO_MODE=1, docs/DEMO.md) seeds itself: a fresh, wiped database gets the synthetic
 // world (fixtures/world.mjs) before any code below reads state. guard.js has already refused a
@@ -3402,7 +3403,7 @@ app.post('/admin/programs/create', requireAdmin, (req, res) => {
     return res.redirect('/admin/programs?form=1&msg=' + encodeURIComponent('Couldn’t create that program: ' + e.message.slice(0, 100)));
   }
   buildPrograms();            // registry + view meta + PCO sport labels
-  mountPendingPrograms();     // routes live immediately — no restart
+  mountPendingPrograms(app);     // routes live immediately — no restart
   // Season start from the form (F6 follow-up) — after buildPrograms so P(id) exists. Invalid dates
   // don't block creation; the program lands and the message says what to fix.
   const season = applySeasonStart(id, req.body.seasonStart);
@@ -3445,7 +3446,7 @@ app.post('/admin/programs/edit', requireAdmin, (req, res) => {
   // A slug change means new paths: mount the new ones (the old routes stay registered but their
   // program is gone from the registry, so they 404 through the normal gate — never a stale run).
   MOUNTED_PROGRAMS.delete(id);
-  mountPendingPrograms();
+  mountPendingPrograms(app);
   // Season start rides the same form (F6 follow-up): unchanged is a no-op; blanking clears the gate.
   const season = applySeasonStart(id, req.body.seasonStart);
   audit(req.userEmail, 'admin', 'program:edit', `${id}:${parsed.slug}`);
@@ -5480,7 +5481,7 @@ buildPrograms();
 // mounts therefore re-append the terminal handler (see terminalError), or a throw in a
 // brand-new program's route would fall through to Express's stack-trace-leaking default.
 const MOUNTED_PROGRAMS = new Set();
-function mountPendingPrograms() {
+function mountPendingPrograms(app) {
   let mounted = 0;
   for (const p of PROGRAMS.values()) {
     if (p.id >= 3 && !MOUNTED_PROGRAMS.has(p.id)) { mountRunProgram(app, p); MOUNTED_PROGRAMS.add(p.id); mounted++; }
@@ -5489,18 +5490,9 @@ function mountPendingPrograms() {
   if (mounted && TERMINAL_REGISTERED) app.use(terminalError);
   return mounted;
 }
-// Terminal error handler — registered LAST (after every inline + mounted route) so a sync throw
-// (or a forwarded async reject via next(e)) in ANY route lands here with a friendly 500 instead of
-// a hung socket OR Express's stack-trace-leaking default handler. Must be the last app.use (4-arg).
-function terminalError(err, req, res, next) {
-  console.error(`[route-error] ${req.method} ${req.originalUrl}: ${(err && err.stack) || err}`);
-  if (res.headersSent) return next(err);
-  res.status(500).send('Something went wrong on our end. Please try again in a moment.');
-}
-let TERMINAL_REGISTERED = false;
-mountPendingPrograms();
-app.use(terminalError);
-TERMINAL_REGISTERED = true;
+mountPendingPrograms(app);
+
+registerTerminalError(app);
 // Boot-time weekly rollover (archive/purge/auto-seat) — MUST run after buildPrograms() so the
 // unified engine's P(id).config is hydrated (ensureWeek → autoJoinTeam → seatRenewers reads it).
 ensureWeek(nextRunDate());
