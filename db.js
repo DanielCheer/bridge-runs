@@ -889,6 +889,11 @@ db.exec(`
   // Opt-in "every chat message" pushes (2026-08-05). Default 0 = the standing posture:
   // only announcements / spot offers / @mentions / DMs buzz. Toggled on /profile.
   if (!cols.includes('chat_push')) db.exec('ALTER TABLE applicants ADD COLUMN chat_push INTEGER NOT NULL DEFAULT 0');
+  // guardian_name/_phone/_email (F6 youth pack): the guardian who consented for a minor, stamped
+  // by POST /waiver alongside the per-program waiver_records row and shown on the People card.
+  // Older databases already carry them; a fresh one never got them, so a minor's waiver 500'd.
+  for (const c of ['guardian_name', 'guardian_phone', 'guardian_email'])
+    if (!cols.includes(c)) db.exec(`ALTER TABLE applicants ADD COLUMN ${c} TEXT`);
 }
 // run_state.opened_at (2026-08-03, metrics layer): when check-in FIRST opened for this run —
 // the anchor for "the floor filled in N minutes". Stamped by the two open funnels (setRunOpen /

@@ -89,13 +89,10 @@ test("a minor needs a guardian's consent, from someone other than the player", a
   assert.ok(onRun(YT('minor')));
 });
 
-// KNOWN BUG (reported, not fixed here): POST /waiver also stamps the guardian onto
-// applicants.guardian_name/_phone/_email, but db.js never creates those columns -- they exist only
-// in databases old enough to predate their removal from the schema. On a fresh database the UPDATE
-// throws "no such column: guardian_name" after the waiver record is written, so the guardian's
-// form ends in a 500 and the People card has no guardian. Marked todo until db.js gains the
-// guarded ALTERs; it then passes as written.
-test('the guardian is also stamped on the person record', { todo: 'db.js does not create applicants.guardian_* on a fresh database' }, () => {
+// POST /waiver also stamps the guardian onto applicants.guardian_name/_phone/_email (shown on the
+// People card). Those columns were once missing from a fresh database's schema, so the guardian's
+// form ended in a 500 after the waiver record was written; this guards against that coming back.
+test('the guardian is also stamped on the person record', () => {
   const cols = db.prepare('PRAGMA table_info(applicants)').all().map((c) => c.name);
   assert.ok(cols.includes('guardian_name'), 'applicants.guardian_name exists');
   const person = db.prepare('SELECT guardian_name, guardian_email FROM applicants WHERE email = ?').get(YT('minor'));

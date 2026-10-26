@@ -129,10 +129,6 @@ current night of every program is left empty; a suite sets up the night it is te
 | `pco` | the Planning Center sync against a local mock of its API |
 | `backup` | encrypted snapshots and the restore path, including tamper and wrong-key refusal |
 
-One check is marked `todo` rather than failing the run: on a fresh database the guardian's waiver
-form errors after saving, because `db.js` doesn't create the `applicants.guardian_*` columns it
-writes (see `test/youth.test.mjs`). It turns green once the schema gains those columns.
-
 The private golden master (byte-comparing 224 page snapshots across a change, on a copy of real
 data) and the browser-driven suites stay outside the repository, because they need real data.
 
