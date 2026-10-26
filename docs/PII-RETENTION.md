@@ -65,7 +65,7 @@ anything from third-party accounts. Sign-in is by emailed link or code; no passw
 Data lives in a single SQLite database on a machine the operator controls, reachable only over
 HTTPS. Sessions are signed and revocable ("Sign out everywhere"), and admin sign-ins alert the
 admin's own devices. Backups are encrypted at rest with a tested restore path
-(`restore-backup.mjs`, including tamper rejection). The Planning Center connection, when
+(`scripts/restore-backup.mjs`, including tamper rejection). The Planning Center connection, when
 enabled, uses the organization's own authorization, can be revoked by them at any time, and syncs
 only the directory fields listed above; attendance detail stays in the app. Test instances are
 structurally prevented from touching real member data or devices (`guard.js`).

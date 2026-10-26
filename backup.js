@@ -19,7 +19,7 @@ const KEEP = Number(process.env.BACKUP_KEEP || 14);   // retain the last N snaps
 // Planning Center tokens and member data, and the continuity plan copies them to church-controlled
 // storage. Encryption protects those OFF-SITE copies; an attacker on THIS disk has the live DB
 // anyway (full-disk encryption is that answer, not this one). The key lives in its own file so it
-// can never be inside the thing it encrypts. Restore path: `node restore-backup.mjs <enc> <out.db>`
+// can never be inside the thing it encrypts. Restore path: `node scripts/restore-backup.mjs <enc> <out.db>`
 // — tested by gm-harness/backup-fn-test.sh, including tamper rejection.
 const KEY_FILE = process.env.BACKUP_KEY_FILE || path.join(__dirname, 'backup.key');
 function backupKey() {

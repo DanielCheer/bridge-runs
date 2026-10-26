@@ -10,7 +10,10 @@
 # kill blind). External-path failures (Funnel/Tailscale/internet) are invisible
 # from here by nature — that is exactly why UptimeRobot exists alongside this.
 $ErrorActionPreference = 'SilentlyContinue'
-$dir = 'E:\YA Bridge Runs\bridge-runs'
+# This script lives in <app>\ops\windows; the app root is two levels up. Derived, not hardcoded,
+# so the checkout can live anywhere.
+$dir = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$launcherCmd = Join-Path $PSScriptRoot 'start-bridge.cmd'
 $log = Join-Path $dir 'watchdog.log'
 
 function Write-Log($msg) {
@@ -45,4 +48,4 @@ if ($held) {
 # 4. Nothing supervising, port free. Bring the launcher back (same invocation as
 #    the BridgeAdvRuns logon task) and record the incident.
 Write-Log 'healthz dead + no launcher process - restarting start-bridge.cmd'
-Start-Process cmd.exe -ArgumentList '/c start "Bridge Adv Runs" /min start-bridge.cmd' -WorkingDirectory $dir
+Start-Process cmd.exe -ArgumentList "/c start `"Bridge Adv Runs`" /min `"$launcherCmd`"" -WorkingDirectory $dir

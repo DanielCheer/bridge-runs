@@ -1,9 +1,9 @@
 # Releases
 
 Every deploy to live gets a row here and an annotated git tag (`rel-YYYYMMDD-HHMM`), written by
-`./release.sh "summary"` after the deploy is verified. **Reverting** = `git checkout <tag>` (the
+`scripts/release.sh "summary"` after the deploy is verified. **Reverting** = `git checkout <tag>` (the
 launcher boots the working tree, so checking out a tag and restarting IS the rollback), plus — if
-data must roll back too — `node restore-backup.mjs backups/<snapshot>.db.enc bridge.db` with the
+data must roll back too — `node scripts/restore-backup.mjs backups/<snapshot>.db.enc bridge.db` with the
 server stopped. Code tags and DB snapshots are deliberately independent: most rollbacks want old
 code with CURRENT data.
 

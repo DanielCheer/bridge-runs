@@ -6,7 +6,8 @@ REM `npm start` so a hiccup can't take the check-in offline unattended.
 REM Everything it prints is ALSO appended to launcher.log for troubleshooting.
 REM To stop for good: close this window.
 title The Bridge Adv Runs  --  KEEP THIS WINDOW OPEN
-cd /d "%~dp0"
+REM This file lives in <app>\ops\windows; the app runs from its root, two levels up.
+cd /d "%~dp0..\.."
 echo ==================================================================
 echo   The Bridge Adv Runs is starting up.
 echo   KEEP THIS WINDOW OPEN. Closing it stops the check-in app.

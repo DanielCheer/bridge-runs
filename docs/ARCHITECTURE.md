@@ -24,6 +24,8 @@ template engine.
 | `backup.js` | Encrypted (AES-256-GCM) `VACUUM INTO` snapshots at boot and daily, keeping the newest `BACKUP_KEEP`. |
 | `public/` | Static assets: `styles.css`, `sw.js` (conservative service worker), icons, fonts, stickers, banners, demo media. |
 | `legal/` | Markdown for `/privacy`, `/terms`, `/conduct`, rendered with the operator's contact details from env. |
+| `scripts/` | Operator tools: `restore-backup.mjs` (decrypt and integrity-check a snapshot), `release.sh` (tag a verified deploy and log it in `RELEASES.md`). |
+| `ops/windows/` | Self-hosting on a Windows PC: `start-bridge.cmd` (supervised launcher that restarts node on exit), `install-autostart.ps1` (logon task), `watchdog.ps1` + `watchdog-hidden.vbs` (restarts a missing launcher when `/healthz` is dead). Paths are derived from each script's own location. |
 
 ## Request flow
 

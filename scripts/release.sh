@@ -1,12 +1,12 @@
 #!/bin/bash
-# release.sh "summary of what shipped" — run AFTER a deploy is verified.
+# scripts/release.sh "summary of what shipped" — run AFTER a deploy is verified.
 # Appends a row to RELEASES.md and lays an annotated tag, so every live version is findable and
 # revertible by name: `git checkout rel-YYYYMMDD-HHMM` + restart = code rollback (the launcher
-# boots the working tree); data rollback is a separate, deliberate restore-backup.mjs step.
+# boots the working tree); data rollback is a separate, deliberate scripts/restore-backup.mjs step.
 set -e
-cd "$(dirname "${BASH_SOURCE[0]}")"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."   # the repo root (this script lives in scripts/)
 SUMMARY="$1"
-[ -n "$SUMMARY" ] || { echo "usage: ./release.sh \"summary of what shipped\""; exit 2; }
+[ -n "$SUMMARY" ] || { echo "usage: scripts/release.sh \"summary of what shipped\""; exit 2; }
 if ! git diff --quiet || ! git diff --cached --quiet; then
   echo "working tree has uncommitted changes — commit the release first, then tag it"; exit 1;
 fi

@@ -1,9 +1,10 @@
 // restore-backup.mjs — decrypt + verify a backup snapshot. The other half of "encrypted backups
 // with a tested restore path": an encrypted backup nobody has ever restored is a hope, not a backup.
 //
-//   node restore-backup.mjs <bridge-....db.enc> <out.db> [keyfile]
+//   node scripts/restore-backup.mjs <bridge-....db.enc> <out.db> [keyfile]
 //
-// keyfile defaults to ./backup.key next to this script. On success the restored DB is opened and
+// keyfile defaults to backup.key in the app root (the parent of scripts/), where backup.js keeps
+// it. On success the restored DB is opened and
 // integrity-checked, and the member count is printed so a human can sanity-check it instantly.
 // GCM authenticates the whole container: a tampered or truncated snapshot FAILS decryption —
 // it can never restore silently corrupted data.
@@ -15,8 +16,8 @@ import { DatabaseSync } from 'node:sqlite';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const [, , src, out, keyArg] = process.argv;
-if (!src || !out) { console.error('usage: node restore-backup.mjs <snapshot.db.enc> <out.db> [keyfile]'); process.exit(2); }
-const keyFile = keyArg || path.join(__dirname, 'backup.key');
+if (!src || !out) { console.error('usage: node scripts/restore-backup.mjs <snapshot.db.enc> <out.db> [keyfile]'); process.exit(2); }
+const keyFile = keyArg || path.join(__dirname, '..', 'backup.key');
 
 const hex = fs.readFileSync(keyFile, 'utf8').trim();
 if (!/^[0-9a-f]{64}$/.test(hex)) { console.error(`key at ${keyFile} is malformed`); process.exit(2); }

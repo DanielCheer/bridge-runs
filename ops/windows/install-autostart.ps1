@@ -5,7 +5,7 @@
 # HOW TO RUN (once):
 #   Right-click this file  ->  "Run with PowerShell"  ->  approve the admin prompt.
 #   (If right-click doesn't offer that: open PowerShell as Administrator and run
-#    powershell -ExecutionPolicy Bypass -File "E:\YA Bridge Runs\bridge-runs\install-autostart.ps1")
+#    powershell -ExecutionPolicy Bypass -File "<app>\ops\windows\install-autostart.ps1")
 
 $ErrorActionPreference = 'Stop'
 
@@ -18,9 +18,11 @@ if (-not $admin) {
   return
 }
 
-$dir = 'E:\YA Bridge Runs\bridge-runs'
+# This script lives in <app>\ops\windows; the app root is two levels up (derived, not hardcoded).
+$dir = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$launcherCmd = Join-Path $PSScriptRoot 'start-bridge.cmd'
 $action   = New-ScheduledTaskAction -Execute 'cmd.exe' `
-              -Argument '/c start "Bridge Adv Runs" /min start-bridge.cmd' -WorkingDirectory $dir
+              -Argument "/c start `"Bridge Adv Runs`" /min `"$launcherCmd`"" -WorkingDirectory $dir
 $trigger  = New-ScheduledTaskTrigger -AtLogOn
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
               -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)
