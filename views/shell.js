@@ -193,7 +193,7 @@ const demoPersonaPicker = () => DEMO ? `
     <p class="tally-note" style="margin:18px 0 8px">Or use the normal sign-in below. No email is sent in the demo: the code shows on the next screen.</p>` : '';
 
 const HEAD = (title, bodyClass = '', { wall = true } = {}) => `<!doctype html><html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#F8F5EF">
 <script>/* User theme bootstrap — BEFORE styles load so there is no flash. Class lives on <html>
 (the router swap replaces body.className, html survives). Whitelisted; a stale value from a

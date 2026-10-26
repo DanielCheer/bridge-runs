@@ -22,7 +22,9 @@
   --link:var(--orange-deep); --link-hover:var(--orange-dark);
   --orange:#E4611F; --orange-deep:#C24512; --orange-dark:#D0530F; --peach:#FBB360; --burn:#3a1405;
   --foil:linear-gradient(145deg,#C24512 0%,#FBB360 38%,#E4611F 56%,#FFCF98 100%);
-  --solid:linear-gradient(180deg,#F59248,#E4611F 55%,#D0530F);
+  /* White button text needs >= 4.5:1 where it sits (40-60% of the height): checked by
+     scripts/contrast-check.mjs, which reads these tokens. */
+  --solid:linear-gradient(180deg,#E4611F,#C24512 55%,#A63A0E);
   --good:#2E7D53; --warn:#A2751B; --bad:#BC4837;
   --anton:'Anton',Impact,sans-serif; --head:'Archivo',system-ui,-apple-system,sans-serif;
   --body:'Inter',system-ui,sans-serif; --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
@@ -35,6 +37,7 @@
 /* Premium "teal + cream" palette (jewel teal dress + warm satin cream blazer). */
 body.pk{
   --teal:#2c8175;
+  --teal-ink:#2a7b70;   /* teal TEXT on the light ground: --teal is 4.28:1 there, this is 4.63:1 */
   --hero:linear-gradient(150deg,#3a9285 0%,#2b7669 56%,#1f5a50 100%);
   --orange:#e7d7b3; --orange-deep:#b7a273; --orange-dark:#cdb888; --peach:#f1e8d1; --burn:#463a20; --accent-ink:#20211c;
   --foil:linear-gradient(145deg,#dbc796 0%,#f1e8d1 38%,#e7d7b3 56%,#f5eddb 100%);
@@ -50,9 +53,9 @@ body.pk .backruns{background:var(--solid)!important;color:var(--accent-ink)!impo
    ghost active tab + eyebrow + links get a readable teal instead of near-invisible cream. */
 body.pk .tabbadge{color:var(--burn)}
 body.pk .bdg.host,body.pk .sb.host,body.pk .tag.host{color:var(--burn)}
-body.pk .tab.on{color:var(--teal)}
-body.pk .eyebrow{color:var(--teal)}
-body.pk a{color:var(--teal)}
+body.pk .tab.on{color:var(--teal-ink)}
+body.pk .eyebrow{color:var(--teal-ink)}
+body.pk a{color:var(--teal-ink)}
 /* Volleyball run theme — court blue in the accent slot + warm sand gold in place of orange.
    Same re-point-the-variables technique as body.pk; applied via body.vb. */
 body.vb{
@@ -71,6 +74,9 @@ body.vb .tab.on{color:var(--teal)}
 body.vb .eyebrow{color:var(--teal)}
 body.vb a{color:var(--teal)}
 *{box-sizing:border-box}
+/* One keyboard-focus ring for everything focusable (links, buttons, summaries, chips). Text fields
+   keep their own border-and-glow focus style below. */
+:focus-visible{outline:3px solid var(--orange-deep);outline-offset:2px}
 /* Kill the iOS overscroll rubber-band on the document scroller: without this, pulling
    past the top/bottom bounces the page AND drags the position:fixed bars (bottom tabs,
    top masthead) out of place mid-scroll. `none` also disables pull-to-refresh (unwanted
@@ -269,7 +275,6 @@ a.score{cursor:pointer}
 .btn.primary{background:var(--solid)}
 .btn:hover{box-shadow:0 16px 32px -12px rgba(218,90,32,.85),inset 0 1px 0 rgba(255,255,255,.45)}
 .btn:active{transform:translateY(1px)}
-.btn:focus-visible{outline:2px solid var(--orange);outline-offset:2px}
 .btn:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none}
 /* Share button starts hidden via [hidden]; shareScript reveals it only where
    navigator.share exists. .btn's display:inline-flex would OTHERWISE beat the UA
@@ -427,7 +432,7 @@ h1{font-size:34px}
 h2{font-size:23px}
 .lead{color:var(--muted);font-size:15px;max-width:60ch;margin:0 0 4px;line-height:1.55}
 .lead b{color:var(--ink);font-weight:600}
-.eyebrow{font-family:var(--head);font-weight:800;font-size:11px;letter-spacing:.28em;text-transform:uppercase;color:var(--orange);display:block;margin:0 0 10px}
+.eyebrow{font-family:var(--head);font-weight:800;font-size:12px;letter-spacing:.28em;text-transform:uppercase;color:var(--orange-deep);display:block;margin:0 0 10px}
 
 /* ---------- cards ---------- */
 .card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:20px;margin:16px 0;
@@ -471,12 +476,12 @@ h2{font-size:23px}
 .a2hs .sub{margin-top:14px;font-size:13px;color:var(--muted);line-height:1.5}
 
 /* ---------- forms ---------- */
-label{display:block;font-family:var(--head);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);font-weight:700;margin:16px 0 7px}
+label{display:block;font-family:var(--head);font-size:12px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);font-weight:700;margin:16px 0 7px}
 input,select,textarea{width:100%;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:12px;
   padding:14px;font:inherit;min-height:48px;transition:border-color .15s ease,box-shadow .15s ease}
-/* Zoom kill (owner: "never zoom ever"): iOS Safari zooms the page when focusing
-   any field under 16px. Global 16px floor on every input/textarea/select so focus
-   never triggers a zoom. Paired with the viewport user-scalable=no in views.js. */
+/* iOS Safari zooms the page when focusing any field under 16px. A global 16px floor on every
+   input/textarea/select means focus never triggers that zoom, so the viewport doesn't need to
+   disable zooming: pinch-zoom stays available to anyone who needs larger text (WCAG 1.4.4). */
 input,textarea,select{font-size:16px}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--orange);box-shadow:0 0 0 3px rgba(228,97,31,.15)}
 textarea{min-height:84px;resize:vertical}
@@ -1267,7 +1272,7 @@ html.theme-midnight body{background:var(--bg)}
 /* Program accent skins re-point --teal to values tuned for CREAM grounds (pickleball deep teal,
    volleyball court blue) — on slate cards they sink to near-invisible (owner report 2026-08-05:
    vb eyebrows/links unreadable). Theme-scoped light variants; higher specificity than body.pk/.vb. */
-html.theme-midnight body.pk{--teal:#6FBFAC}
+html.theme-midnight body.pk{--teal:#6FBFAC;--teal-ink:#6FBFAC}
 html.theme-midnight body.vb{--teal:#93B4E8}
 /* 2026-08-05 audit: the brightness passes lifted the ground ~5x but left every color OUTSIDE the
    token block behind. Twins below flip white-on-accent states to dark ink (the burn-on-cream

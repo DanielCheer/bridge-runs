@@ -271,3 +271,16 @@ test('TRUST_PROXY=2: the key is the entry the outer of two trusted hops saw', as
     assert.ok(!(await limited(await applyFrom(two, '198.51.100.2, 203.0.113.0'))), 'another client through the same edge: its own bucket');
   } finally { await two.stop(); }
 });
+
+// ---------- accessibility: zoom allowed, a real keyboard focus ring ----------
+test('pages allow pinch-zoom and the stylesheet has a global focus-visible ring', async () => {
+  for (const p of ['/', '/login']) {
+    const html = await (await app.get(p)).text();
+    const vp = /<meta name="viewport" content="([^"]*)"/.exec(html)?.[1] || '';
+    assert.ok(vp.includes('width=device-width'), p);
+    assert.ok(!/user-scalable=no|maximum-scale=1\b/.test(vp), `${p}: zoom is not disabled (${vp})`);
+  }
+  const css = await (await app.get('/styles.css')).text();
+  assert.match(css, /(^|\n):focus-visible\{outline:3px solid var\(--orange-deep\);outline-offset:2px\}/);
+  assert.match(css, /input,textarea,select\{font-size:16px\}/, 'the 16px field floor that prevents iOS focus zoom stays');
+});
