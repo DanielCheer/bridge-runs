@@ -11,8 +11,9 @@ backup.key
 public/chat-media/
 public/avatars/
 _predesign_backup/
-# private licensing/strategy docs (NDA, term sheet, feature spec, deal plan) — must NOT travel with the code
-docs/
+# private licensing/strategy material (NDA, term sheet, deal plan, briefs) — must NOT travel with the code.
+# The public, sanitized docs live in docs/ and ARE tracked.
+private-docs/
 
 # stray db from a DB_PATH-unset node invocation
 undefined
