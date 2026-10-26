@@ -42,6 +42,7 @@ import {
 } from './views.js';
 import { getSetting, setSetting, delSetting } from './lib/settings.js';
 import { audit, metric, pruneAuditLog } from './lib/audit.js';
+import { isValidEmail } from './lib/email.js';
 
 // Demo mode (DEMO_MODE=1, docs/DEMO.md) seeds itself: a fresh, wiped database gets the synthetic
 // world (fixtures/world.mjs) before any code below reads state. guard.js has already refused a
@@ -82,18 +83,6 @@ function signIn(res, email, how) {
     }));
   }
 }
-
-// ---- email validation ----
-// The ONLY gate between a typed address and nodemailer's `to:`/`bcc:`. An `includes('@')`
-// check is not enough: nodemailer parses `to:` as an RFC-5322 ADDRESS LIST, so a string like
-// "a@b.com, victim@x.org, …" is a hundred recipients in one field — a relay that also sails
-// past the per-address rate limit (which keys on the whole string, so every list is a fresh
-// bucket). Quoted/grouped/commented forms are refused for the same reason: what we validate
-// must be what the mailer sends. Local part therefore excludes the list/group/comment/quote
-// metacharacters entirely, and the domain must be dotted labels (so `@guest.local`
-// placeholders still pass). Lengths are the RFC-5321 maximums.
-const EMAIL_RE = /^[^\s@,;:<>"'\\()[\]]{1,64}@[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$/;
-const isValidEmail = (e) => typeof e === 'string' && e.length <= 254 && EMAIL_RE.test(e);
 
 // ---- in-memory rate limiter ----
 // Guards the two unauthenticated POSTs (/login, /apply). /login fires a real
