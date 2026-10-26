@@ -24,7 +24,10 @@ template engine.
 | `backup.js` | Encrypted (AES-256-GCM) `VACUUM INTO` snapshots at boot and daily, keeping the newest `BACKUP_KEEP`. |
 | `public/` | Static assets: `styles.css`, `sw.js` (conservative service worker), icons, fonts, stickers, banners, demo media. |
 | `legal/` | Markdown for `/privacy`, `/terms`, `/conduct`, rendered with the operator's contact details from env. |
-| `scripts/` | Operator tools: `restore-backup.mjs` (decrypt and integrity-check a snapshot), `release.sh` (tag a verified deploy and log it in `RELEASES.md`). |
+| `scripts/` | Operator and test tools: `restore-backup.mjs` (decrypt and integrity-check a snapshot), `release.sh` (tag a verified deploy and log it in `RELEASES.md`), `seed-fixture.mjs` (build a fresh database holding the synthetic world), `sanitize-db.mjs` (strip outward-reaching credentials from a test database). |
+| `fixtures/world.mjs` | The synthetic world every test starts from: fictional personas, three programs with history, chat, parties. |
+| `test/` | `node:test` suites, one per area, each booting the real app on its own temp directory and port (`test/helpers/app.mjs`); a local Planning Center mock (`test/helpers/pco-mock.mjs`). See [TESTING.md](TESTING.md). |
+| `.github/workflows/ci.yml` | Lint, circular-import check, tests and a production-dependency audit on Node 22 and 24. |
 | `ops/windows/` | Self-hosting on a Windows PC: `start-bridge.cmd` (supervised launcher that restarts node on exit), `install-autostart.ps1` (logon task), `watchdog.ps1` + `watchdog-hidden.vbs` (restarts a missing launcher when `/healthz` is dead). Paths are derived from each script's own location. |
 
 ## Request flow

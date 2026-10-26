@@ -110,6 +110,32 @@ a ladder, chat (every message type), a DM thread, announcements, friendships and
 current night of every program is left empty; a suite sets up the night it is testing, using
 `runDateFor(programId, today)` for the date the app will render.
 
+### The suites
+
+| File | What it covers |
+|---|---|
+| `session` | session cookies and revocation ("sign out everywhere"), security headers, `/healthz`, the permanent audit record |
+| `guard` | the isolation contract above: every missing or unsafe variable refused and named, a dirty fixture refused |
+| `crawl-smoke` | 37 pages x 11 kinds of viewer, no server errors |
+| `demo-program` | the demo run: seeded floor, the real offer-and-claim cycle, party-aware teams, every chat message type, reset |
+| `program` | creating a program in the app: validation, live routes, publish, join modes, host role, kiosk tokens, scheduled announcements |
+| `chat` | posting, reacting, pinning and deleting in program rooms; the membership gate |
+| `confirm`, `door` | the run-day confirm ping and cutoff sweep under a pinned clock, and door mode switching them off |
+| `penalty` | the auto-renew no-show penalty: strikes, pause, exemptions, lift, operator clear |
+| `hub`, `party`, `dm`, `dob` | status badges and guest priority; persistent parties; DM encryption and mutual follows; the under-18 rule |
+| `metrics` | run summaries, event capture and the analytics surfaces |
+| `youth` | per-program waivers, guardian consent, the council role |
+| `games`, `ladder` | basketball game results and the leaderboard; the pickleball doubles ladder |
+| `pco` | the Planning Center sync against a local mock of its API |
+| `backup` | encrypted snapshots and the restore path, including tamper and wrong-key refusal |
+
+One check is marked `todo` rather than failing the run: on a fresh database the guardian's waiver
+form errors after saving, because `db.js` doesn't create the `applicants.guardian_*` columns it
+writes (see `test/youth.test.mjs`). It turns green once the schema gains those columns.
+
+The private golden master (byte-comparing 224 page snapshots across a change, on a copy of real
+data) and the browser-driven suites stay outside the repository, because they need real data.
+
 ### Writing a suite
 
 ```js
