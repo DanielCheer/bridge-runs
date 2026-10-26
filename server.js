@@ -12,8 +12,8 @@ import { DEMO_MODE } from './guard.js';
 import {
   APP_ROOT, PORT, PUBLIC_URL, CAP_ENV, WAITLIST_CAP_ENV, PREREG_CAP_ENV, VOTE_THRESHOLD,
   OFFER_WINDOW_HOURS, PK_CAP, PK_WAIT, AVATARS_DIR, CHAT_MEDIA_DIR, CHAT_VIDEO_MAX_MB, BANNER_DIR,
-  BANNER_PATH_ENV, PK_BANNER_PATH_ENV, EXPORT_TMP_DIR, DM_KEY_SECRET, ADMIN_EMAILS_ENV, LEGAL_ENV,
-  LEGAL, DEMO_RESET_HOURS, DEMO_RESET_COOLDOWN_MS, TEST_NOW, ENABLE_TEST_TICK, FORCE_HELD_RELEASED,
+  BANNER_PATH_ENV, PK_BANNER_PATH_ENV, EXPORT_TMP_DIR, ADMIN_EMAILS_ENV, LEGAL_ENV, LEGAL,
+  DEMO_RESET_HOURS, DEMO_RESET_COOLDOWN_MS, TEST_NOW, ENABLE_TEST_TICK, FORCE_HELD_RELEASED,
 } from './config.js';
 import { startBackups } from './backup.js';
 import { sendMagicLink, sendAnnouncement, sendSpotOffer, emailConfigured } from './mailer.js';
@@ -49,6 +49,7 @@ import {
   DAY_NAMES,
 } from './lib/dates.js';
 import { csvCell } from './lib/csv.js';
+import { dmDec, dmEnc } from './lib/dm-crypto.js';
 
 // Demo mode (DEMO_MODE=1, docs/DEMO.md) seeds itself: a fresh, wiped database gets the synthetic
 // world (fixtures/world.mjs) before any code below reads state. guard.js has already refused a
@@ -2601,36 +2602,6 @@ app.post('/profile', requireLogin, (req, res) => {
   if (email !== a.email) { setSession(res, email); refreshAvatarMap(); } // cookie IS the email — re-sign it; re-key the avatar map
   res.redirect('/profile?saved=1');
 });
-
-// ---------- DM at-rest encryption ----------
-// Direct-message bodies are encrypted at rest (AES-256-GCM) so a leaked DB file / off-site
-// backup does not spill people's private conversations in plaintext. The key is derived from
-// SESSION_SECRET (already mandatory + fail-loud in auth.js) via HKDF — no new secret to manage,
-// and no key material sits inside the DB it protects. Legacy plaintext rows (pre-encryption)
-// stay readable: dmDec passes through anything without the `enc1:` marker, and empty bodies
-// (sticker/photo-only rows) are never encrypted. This is at-rest privacy, NOT end-to-end: the
-// host process can derive the key, so there is no admin-facing surface that reads DMs (that is
-// deliberate), but the operator is not cryptographically locked out — see SECURITY-OVERVIEW.
-const DM_KEY = crypto.hkdfSync('sha256',
-  Buffer.from(DM_KEY_SECRET),
-  Buffer.from('bridge-dm-atrest'), Buffer.from('dm-body-v1'), 32);
-function dmEnc(text) {
-  if (!text) return text || '';                    // '' / null → store as-is (no empty ciphertext)
-  const iv = crypto.randomBytes(12);
-  const c = crypto.createCipheriv('aes-256-gcm', Buffer.from(DM_KEY), iv);
-  const ct = Buffer.concat([c.update(String(text), 'utf8'), c.final()]);
-  return 'enc1:' + Buffer.concat([iv, c.getAuthTag(), ct]).toString('base64');
-}
-function dmDec(stored) {
-  if (typeof stored !== 'string' || !stored.startsWith('enc1:')) return stored; // legacy plaintext / non-string
-  try {
-    const buf = Buffer.from(stored.slice(5), 'base64');
-    const iv = buf.subarray(0, 12), tag = buf.subarray(12, 28), ct = buf.subarray(28);
-    const d = crypto.createDecipheriv('aes-256-gcm', Buffer.from(DM_KEY), iv);
-    d.setAuthTag(tag);
-    return Buffer.concat([d.update(ct), d.final()]).toString('utf8');
-  } catch { return ''; }                             // tamper / wrong key → empty, never crash the thread
-}
 
 // ---------- MESSAGES (in-app, host <-> players) ----------
 // Threads: requireLogin + requirePlayer + require an applicant row. Sender identity
