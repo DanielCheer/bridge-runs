@@ -18,7 +18,7 @@ import { pcoDaily, pcoSetNotifier, pcoSetRosterProvider } from './pco.js';
 import { ADMINS, setSessionVersionLookup } from './auth.js';
 
 import { getSetting } from './lib/settings.js';
-import { pruneAuditLog } from './lib/audit.js';
+import { audit, pruneAuditLog } from './lib/audit.js';
 import { sendPush, initPush } from './lib/push.js';
 import { mountHttpBasics } from './lib/http.js';
 import { refreshAvatarMap, pruneOldMedia } from './lib/media.js';
@@ -30,6 +30,7 @@ import { partitionFor, partitionRun } from './engine/seating.js';
 import { ensureWeek } from './engine/basketball.js';
 import { buildPrograms } from './engine/program-loader.js';
 import { startScheduler } from './engine/scheduler.js';
+import { seedDemoRun } from './engine/demo-run.js';
 
 import { mountAssets, mountIntake, mountLegal, mountInvite } from './routes/public.js';
 import { mountAuth, mountStatus } from './routes/auth.js';
@@ -59,9 +60,11 @@ import { registerTerminalError } from './routes/errors.js';
 // world (fixtures/world.mjs) before any code below reads state. guard.js has already refused a
 // database holding anyone outside the fixture domain, so this never writes into real data. The
 // fixture module is loaded only in demo mode; production never imports it.
+let freshDemoWorld = false;
 if (demoWorld && db.prepare('SELECT COUNT(*) n FROM applicants').get().n === 0) {
   const { today } = demoWorld.seedWorld(db);
   console.log(`[demo] seeded the synthetic world for ${today}`);
+  freshDemoWorld = true;
 }
 
 const app = express();
@@ -140,6 +143,15 @@ buildPrograms();
   const c = P(1).config;
   if (c.confirmCutoff && c.lockTime && c.confirmCutoff < c.lockTime)
     throw new Error(`[config] basketball: confirmCutoff (${c.confirmCutoff}) must be >= lockTime (${c.lockTime}) — the inline sweep runs post-lock`);
+}
+// A fresh demo world also gets demo program 90's showcase (a full floor and waitlist, chat,
+// parties, teams), the same thing the organizer's Seed button does, so the remove → offer → claim
+// moment works from the first visit after every reset. Needs the registry, so after buildPrograms().
+if (freshDemoWorld) {
+  const organizer = demoWorld.DEMO_PERSONAS.find((p) => p.key === 'organizer').email;
+  const { total, rd } = seedDemoRun(organizer);
+  audit(organizer, 'admin', 'demo:seed', `${total} players on ${rd} (at boot)`);
+  console.log(`[demo] seeded the program-90 showcase: ${total} players on ${rd}`);
 }
 // Routes for every program beyond basketball and pickleball (which keep their inline routes),
 // after buildPrograms() so P(id) is hydrated.

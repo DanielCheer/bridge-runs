@@ -97,6 +97,23 @@ test('a fresh demo database is seeded with the synthetic world', () => {
   assert.match(demo.log, /\[demo\] seeded the synthetic world/);
 });
 
+test('a fresh demo boots with the program-90 showcase ready; a plain instance does not', async () => {
+  const count = (inst, sql) => { const db = inst.db(); try { return db.prepare(sql).get().n; } finally { db.close(); } };
+  // A full floor and waitlist on an open run, chat with every message type, party-aware teams.
+  assert.ok(count(demo, 'SELECT COUNT(*) n FROM checkins WHERE program_id = 90') >= 12);
+  assert.equal(count(demo, 'SELECT COUNT(*) n FROM run_state WHERE program_id = 90 AND is_open = 1'), 1);
+  assert.ok(count(demo, 'SELECT COUNT(*) n FROM group_messages WHERE program_id = 90 AND video IS NOT NULL') > 0);
+  assert.ok(count(demo, 'SELECT COUNT(*) n FROM team_assignments WHERE program_id = 90') > 0);
+  assert.equal(count(demo, "SELECT COUNT(*) n FROM audit_log WHERE action = 'demo:seed'"), 1);
+  assert.match(demo.log, /\[demo\] seeded the program-90 showcase: \d+ players on \d{4}-\d{2}-\d{2}/);
+  // The organizer sees the populated run without pressing Seed.
+  const page = await (await demo.get('/demo', { as: await loginAs('organizer') })).text();
+  assert.match(page, /Marcus B\./);
+  // Outside demo mode nothing is seeded at boot.
+  assert.equal(count(plain, 'SELECT COUNT(*) n FROM checkins WHERE program_id = 90'), 0);
+  assert.doesNotMatch(plain.log, /program-90 showcase/);
+});
+
 test('/login shows every persona and still offers the email sign-in', async () => {
   const html = await (await demo.get('/login')).text();
   assert.match(html, /action="\/demo\/login"/);
