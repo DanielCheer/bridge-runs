@@ -70,10 +70,16 @@ function demoEnv() {
   };
 }
 
+// Stopping the supervisor stops the server. Ctrl+C (SIGINT), SIGTERM (docker stop, kill), Ctrl+Break
+// on Windows (SIGBREAK) and a closed terminal or console window (SIGHUP) all end the loop and pass
+// the stop on to the child; the loop then exits once the child has. The exit hook covers every
+// other way out (a crash-loop give-up, an uncaught error): a server must never outlive its
+// supervisor and keep the port. A hard kill of the supervisor itself (SIGKILL, taskkill /F) can't
+// be caught by any process; run it under a service manager or Docker for that case.
 let child = null, stopping = false;
-for (const sig of ['SIGINT', 'SIGTERM']) {
-  process.on(sig, () => { stopping = true; if (child) child.kill(); else process.exit(0); });
-}
+const stop = () => { stopping = true; if (child) child.kill(); else process.exit(0); };
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP']) process.on(sig, stop);
+process.on('exit', () => { if (child && child.exitCode === null) child.kill(); });
 
 claimRoot();
 const crashes = [];
