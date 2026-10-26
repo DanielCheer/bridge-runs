@@ -8,7 +8,10 @@
 //
 // Path defaults resolve against APP_ROOT (this file's directory), never the working directory.
 // guard.js refuses an isolated instance (HARNESS=1 / DEMO_MODE=1) whose path variables are unset or
-// point inside APP_ROOT, so the defaults below are production's.
+// point inside APP_ROOT, so the defaults below are production's. That check runs when guard.js is
+// first imported, so it is imported here first: no module can see a path from this file before the
+// isolation contract has been enforced.
+import './guard.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
