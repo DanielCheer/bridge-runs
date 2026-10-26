@@ -107,12 +107,12 @@ import { mountChat, mountPlayerSearch } from './routes/chat.js';
 import {
   runBannerGet, runBannerPost, mountPendingPrograms, MOUNTED_PROGRAMS, mountInlineRunRoutes,
 } from './routes/run-routes.js';
+import { demoWorld } from './lib/demo-world.js';
 
 // Demo mode (DEMO_MODE=1, docs/DEMO.md) seeds itself: a fresh, wiped database gets the synthetic
 // world (fixtures/world.mjs) before any code below reads state. guard.js has already refused a
 // database holding anyone outside the fixture domain, so this never writes into real data. The
 // fixture module is loaded only in demo mode; production never imports it.
-const demoWorld = DEMO_MODE ? await import('./fixtures/world.mjs') : null;
 if (demoWorld && db.prepare('SELECT COUNT(*) n FROM applicants').get().n === 0) {
   const { today } = demoWorld.seedWorld(db);
   console.log(`[demo] seeded the synthetic world for ${today}`);
