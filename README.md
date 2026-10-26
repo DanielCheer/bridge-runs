@@ -184,7 +184,7 @@ tailscale funnel 3000
 
 Tailscale prints your public URL, like:
 ```
-https://desktop-ctmk5jq.tailXXXX.ts.net/
+https://your-machine.tailXXXX.ts.net/
 ```
 Set that as `PUBLIC_URL` (restart the app so magic links use it), then paste the link into your group chat. **Your PC has to be on and running the app while people are checking in** — fine for a Friday night.
 
