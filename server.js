@@ -8,10 +8,15 @@ import path from 'path';
 import fs from 'fs';
 import multer from 'multer';
 import sharp from 'sharp';
-import { fileURLToPath } from 'url';
 
 import db, { rekeyEmailTx, transact } from './db.js';
 import { DEMO_MODE } from './guard.js';
+import {
+  APP_ROOT, PORT, PUBLIC_URL, CAP_ENV, WAITLIST_CAP_ENV, PREREG_CAP_ENV, VOTE_THRESHOLD, OFFER_WINDOW_HOURS,
+  PK_CAP, PK_WAIT, AVATARS_DIR, CHAT_MEDIA_DIR, CHAT_VIDEO_MAX_MB, BANNER_DIR, BANNER_PATH_ENV, PK_BANNER_PATH_ENV,
+  EXPORT_TMP_DIR, DM_KEY_SECRET, PUSH_CONTACT_EMAIL, ADMIN_EMAILS_ENV, LEGAL_ENV, LEGAL, DEMO_RESET_HOURS,
+  DEMO_RESET_COOLDOWN_MS, TEST_NOW, ENABLE_TEST_TICK, FORCE_HELD_RELEASED,
+} from './config.js';
 import { startBackups } from './backup.js';
 import { sendMagicLink, sendAnnouncement, sendSpotOffer, emailConfigured } from './mailer.js';
 import {
@@ -46,24 +51,15 @@ if (demoWorld && db.prepare('SELECT COUNT(*) n FROM applicants').get().n === 0) 
   console.log(`[demo] seeded the synthetic world for ${today}`);
 }
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
-const PORT = process.env.PORT || 3000;
 // Run capacities. `let` (not const) because a host can edit them in-app (stored in
 // app_settings, applied by reloadRunSettings() at startup + on save). The env values are
 // the DEFAULTS/fallback. Every consumer reads these at request time, so a live edit takes
 // effect on the next check-in with no restart. TOTAL_CAP is derived — recomputed on reload.
-const CAP_ENV = Number(process.env.RUN_CAP || 15);
-const WAITLIST_CAP_ENV = Number(process.env.WAITLIST_CAP || 5);
-const PREREG_CAP_ENV = Number(process.env.PREREG_CAP || process.env.REGULAR_CAP || 10);
 let CAP = CAP_ENV;
 let WAITLIST_CAP = WAITLIST_CAP_ENV;
 let TOTAL_CAP = CAP + WAITLIST_CAP;
-const VOTE_THRESHOLD = Number(process.env.VOTE_THRESHOLD || 3); // approvals to get in / rejects to block
 let PREREG_CAP = PREREG_CAP_ENV; // max team+regular pre-joining while closed; reserves the rest for normals
-// Waitlist offer-and-confirm window. SINGLE source of truth, env-overridable so the
-// owner can lower it (e.g. to 1h) without a code change — ms is derived from it.
-const OFFER_WINDOW_HOURS = Number(process.env.OFFER_WINDOW_HOURS || 3);
 const OFFER_WINDOW_MS = OFFER_WINDOW_HOURS * 60 * 60 * 1000;
 const requireApprover = makeRequireApprover(db);
 const requireCouncil = makeRequireCouncil(db);   // /admin + /admin/vote only — the council's one surface
@@ -234,7 +230,7 @@ if (!VAPID_PUBLIC || !VAPID_PRIVATE) {
   VAPID_PUBLIC = kp.publicKey; VAPID_PRIVATE = kp.privateKey;
   console.log('[push] generated + persisted VAPID keypair');
 }
-webpush.setVapidDetails('mailto:' + (process.env.SMTP_FROM || process.env.SMTP_USER || 'admin@localhost'), VAPID_PUBLIC, VAPID_PRIVATE);
+webpush.setVapidDetails('mailto:' + PUSH_CONTACT_EMAIL, VAPID_PUBLIC, VAPID_PRIVATE);
 function sendPush(emails, { title, body, url, tag, badge }) {
   try {
   const list = [...new Set((emails || []).map(e => String(e || '').toLowerCase()))].filter(Boolean);
@@ -403,7 +399,6 @@ app.use((req, res, next) => {
 // /avatars BEFORE the public static so an override wins, yet a missing file falls
 // through to the public mount (keeps the hand-placed daniel.jpg seed working even
 // when AVATARS_DIR is a temp dir). Created on boot so the first upload never ENOENTs.
-const AVATARS_DIR = process.env.AVATARS_DIR || path.join(__dirname, 'public', 'avatars');
 fs.mkdirSync(AVATARS_DIR, { recursive: true });
 app.use('/avatars', express.static(AVATARS_DIR, { maxAge: '365d', immutable: true })); // content-addressed name + ?v= bust → safe to pin
 // Chat photo storage. Same override pattern as avatars: CHAT_MEDIA_DIR points it
@@ -411,7 +406,6 @@ app.use('/avatars', express.static(AVATARS_DIR, { maxAge: '365d', immutable: tru
 // so an override wins, yet a missing file falls through. Created on boot so the first
 // upload never ENOENTs. Stickers live in public/stickers and are served by the general
 // public mount below (no per-file DB — validated by name against STICKERS on send).
-const CHAT_MEDIA_DIR = process.env.CHAT_MEDIA_DIR || path.join(__dirname, 'public', 'chat-media');
 fs.mkdirSync(CHAT_MEDIA_DIR, { recursive: true });
 app.use('/chat-media', express.static(CHAT_MEDIA_DIR, { maxAge: '365d', immutable: true })); // <msgid>-<hex> names never rewritten → safe to pin
 // The service worker must never be pinned by HTTP cache (it controls the whole app),
@@ -419,7 +413,7 @@ app.use('/chat-media', express.static(CHAT_MEDIA_DIR, { maxAge: '365d', immutabl
 app.get('/sw.js', (req, res) => {
   res.set('Cache-Control', 'no-cache');
   res.type('application/javascript');
-  res.sendFile(path.join(__dirname, 'public', 'sw.js'));
+  res.sendFile(path.join(APP_ROOT, 'public', 'sw.js'));
 });
 // The client engine (router/poll/swap/push/badges/logout — see APP_JS in views.js),
 // extracted from an inline HEAD script so it caches once instead of re-shipping ~15KB per
@@ -441,7 +435,7 @@ app.get('/waiver-qr.svg', async (req, res, next) => {
     res.set('Cache-Control', 'public, max-age=604800').type('image/svg+xml').send(waiverQrSvg);
   } catch (e) { next(e); } // QR failure must not take the process down (Express 4 won't catch async throws)
 });
-app.use(express.static(path.join(__dirname, 'public'), { maxAge: '7d', immutable: false }));
+app.use(express.static(path.join(APP_ROOT, 'public'), { maxAge: '7d', immutable: false }));
 
 // Sliding session: any request carrying a valid cookie gets its ~10-year window
 // pushed forward, so a player who keeps showing up never has to sign in again.
@@ -513,9 +507,8 @@ const RUN_DOW = 3;
 const OPEN_DAYS_BEFORE = 2, OPEN_H = 17;
 // "T17:00:00" — the local-time suffix for an hour. Shared by both programs' schedules.
 const hhLocal = h => `T${String(h).padStart(2, '0')}:00:00`;
-// Test seam: override "now" for the auto-scheduler so its clock phases (auto open/ping/lock) are
-// drivable in tests. Unset in prod → real Date.now(). Precedent: FORCE_HELD_RELEASED.
-const TEST_NOW = (process.env.TEST_NOW && !isNaN(new Date(process.env.TEST_NOW).getTime())) ? new Date(process.env.TEST_NOW).getTime() : null;
+// Test seam: TEST_NOW (config.js) overrides "now" for the auto-scheduler so its clock phases (auto
+// open/ping/lock) are drivable in tests. Unset in prod → real Date.now(). Precedent: FORCE_HELD_RELEASED.
 function schedNow() { return TEST_NOW != null ? TEST_NOW : Date.now(); }
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];  // dow → standing-day label
 // The date check-in opens for run `rd`.
@@ -771,7 +764,6 @@ async function writeChatAudio(buf, msgId, ext) {
 // — CHAT_VIDEO_MAX_MB (default 40) tunes it, since the upload rides Daniel's home
 // connection through Funnel. Single field `video`. safeUnlinkChatImage deletes ANY
 // /chat-media/<name>, so video files clean up on message/account delete too.
-const CHAT_VIDEO_MAX_MB = Number(process.env.CHAT_VIDEO_MAX_MB || 40);
 const uploadChatVideo = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: CHAT_VIDEO_MAX_MB * 1024 * 1024, files: 1 },
@@ -790,10 +782,9 @@ async function writeChatVideo(buf, msgId, ext) {
 // `public/`, so volleyball's and any in-app-created program's banner had NO env override at all —
 // a test that uploaded a banner would overwrite an image the LIVE server serves immediately. Now
 // there is a single writable location for the guard to verify and for the harness to redirect.
-const BANNER_DIR = process.env.BANNER_DIR || path.join(__dirname, 'public');
 fs.mkdirSync(BANNER_DIR, { recursive: true });   // a redirected banner dir may not exist yet (matches AVATARS_DIR/CHAT_MEDIA_DIR)
 const bannerFile = (name) => path.join(BANNER_DIR, name);
-const BANNER_PATH = process.env.BANNER_PATH || bannerFile('gym.jpg');
+const BANNER_PATH = BANNER_PATH_ENV || bannerFile('gym.jpg');
 const uploadBanner = multer({ storage: multer.memoryStorage(), limits: { fileSize: 14 * 1024 * 1024, files: 1 } }).single('photo');
 // Cache-bust token = the banner file's mtime, so an upload busts the <img> the moment it's
 // saved (no restart, no manual version bump). Falls back to a constant if the file is absent.
@@ -802,7 +793,7 @@ function bannerVersion() {
 }
 // Pickleball gets its OWN banner photo (pk-banner.jpg); until one is uploaded it falls back
 // to the basketball court photo, so the page always shows something.
-const PK_BANNER_PATH = process.env.PK_BANNER_PATH || bannerFile('pk-banner.jpg');
+const PK_BANNER_PATH = PK_BANNER_PATH_ENV || bannerFile('pk-banner.jpg');
 // Banner (own uploaded photo else the shared gym.jpg) — program-generic; the file path + public URL
 // come from config.bannerPath/bannerPublic. pk* names stay wrappers.
 function bannerHasOwnFor(programId) { try { return fs.statSync(P(programId).config.bannerPath).size > 0; } catch { return false; } }
@@ -1351,7 +1342,7 @@ function createLoginLink(req, email, next = '/checkin') {
   const expires = Date.now() + 15 * 60 * 1000;
   db.prepare('UPDATE login_tokens SET used = 1 WHERE email = ? AND used = 0').run(email);
   db.prepare('INSERT INTO login_tokens (token,email,expires_at,code) VALUES (?,?,?,?)').run(token, email, expires, code);
-  const base = process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
+  const base = PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
   return { url: `${base}/auth?token=${token}&next=${encodeURIComponent(next)}`, code };
 }
 // Local-path guard for post-login redirects (blocks open-redirects like //evil.com).
@@ -1479,10 +1470,10 @@ if (DEMO_MODE) {
   const organizer = PERSONAS.find(p => p.key === 'organizer');
   if (!isAdmin(organizer.email))
     throw new Error(`[demo] ADMIN_EMAILS must include the organizer persona (${organizer.email}) — scripts/run-demo.mjs sets it`);
-  const RESET_HOURS = Number(process.env.DEMO_RESET_HOURS || 6);
+  const RESET_HOURS = DEMO_RESET_HOURS;
   // One reset per minute: each reset restarts the process, so a minimum uptime IS the rate limit
   // (an in-memory limiter would be wiped by the very reset it limits).
-  const RESET_COOLDOWN_MS = Number(process.env.DEMO_RESET_COOLDOWN_S ?? 60) * 1000;
+  const RESET_COOLDOWN_MS = DEMO_RESET_COOLDOWN_MS;
   if (!(RESET_HOURS > 0) || !(RESET_COOLDOWN_MS >= 0))
     throw new Error('[demo] DEMO_RESET_HOURS must be > 0 and DEMO_RESET_COOLDOWN_S >= 0');
   setDemoMode(true, { personas: PERSONAS, resetHours: RESET_HOURS });
@@ -1523,18 +1514,16 @@ const LEGAL_DOCS = {
   terms: { file: 'terms-of-use.md', title: 'Terms of Use' },
   conduct: { file: 'code-of-conduct.md', title: 'Code of Conduct' },
 };
-// Who the policies name as the operator/contact. Unset → the [PLACEHOLDER] stays visible
-// on the page (honest about missing config) rather than a made-up value.
-const LEGAL_ENV = { date: 'LEGAL_EFFECTIVE_DATE', name: 'LEGAL_CONTACT_NAME', email: 'LEGAL_CONTACT_EMAIL' };
-const LEGAL = Object.fromEntries(Object.entries(LEGAL_ENV).map(([k, env]) => [k, process.env[env]]));
-for (const env of Object.values(LEGAL_ENV)) {
-  if (!process.env[env]) console.warn(`[legal] ${env} unset — policy pages will show the placeholder`);
+// Who the policies name as the operator/contact: LEGAL (config.js). Unset → the [PLACEHOLDER]
+// stays visible on the page (honest about missing config) rather than a made-up value.
+for (const [key, env] of Object.entries(LEGAL_ENV)) {
+  if (!LEGAL[key]) console.warn(`[legal] ${env} unset — policy pages will show the placeholder`);
 }
 function renderLegal(key) {
   const d = LEGAL_DOCS[key];
   if (!d) return null;
   let md;
-  try { md = fs.readFileSync(path.join(__dirname, 'legal', d.file), 'utf8'); } catch { return null; }
+  try { md = fs.readFileSync(path.join(APP_ROOT, 'legal', d.file), 'utf8'); } catch { return null; }
   md = md.replace(/^\s*\*\*[^\n]*DRAFT[^\n]*\*\*\s*\n/, '');                 // drop the operator-only draft note
   md = md.replace(/\[DATE\]/g, LEGAL.date || '$&')                          // '$&' = leave the token as-is
          .replace(/\[HOST NAME\]/g, LEGAL.name || '$&')
@@ -2027,7 +2016,7 @@ const stmtPollDM = db.prepare('SELECT MAX(id) mx, COUNT(*) c FROM messages WHERE
 // Held late-regulars are released onto the floor from 4pm on the RUN DAY onward — keyed
 // to the actual run date so it stays correct when the host moves the run off Friday.
 function heldReleased(runDate, d = new Date()) {
-  if (process.env.FORCE_HELD_RELEASED === '1') return true; // test hook only
+  if (FORCE_HELD_RELEASED) return true; // test hook only
   return d.getTime() >= new Date(runDate + 'T16:00:00').getTime();
 }
 
@@ -2155,7 +2144,7 @@ function createOffer(runDate, w, req, programId = 1) {
     'UPDATE checkins SET offered_at = ?, claim_token = ? WHERE run_date = ? AND email = ? AND program_id = ? AND offered_at IS NULL')
     .run(Date.now(), token, runDate, w.email, programId);
   if (info.changes === 0) return; // already offered — don't email twice
-  const base = process.env.PUBLIC_URL || (req ? `${req.protocol}://${req.get('host')}` : `http://localhost:${PORT}`);
+  const base = PUBLIC_URL || (req ? `${req.protocol}://${req.get('host')}` : `http://localhost:${PORT}`);
   const link = `${base}${P(programId).paths.run}/claim/${token}`;
   audit('system', 'system', 'offer:send', w.email);
   if (!P(programId).config.static) metric('offer_send', { programId, runDate });   // durable funnel count (demo excluded) — audit_log ages out at 5000 rows
@@ -2855,7 +2844,7 @@ app.post('/profile', requireLogin, (req, res) => {
 // host process can derive the key, so there is no admin-facing surface that reads DMs (that is
 // deliberate), but the operator is not cryptographically locked out — see SECURITY-OVERVIEW.
 const DM_KEY = crypto.hkdfSync('sha256',
-  Buffer.from(process.env.SESSION_SECRET || 'CHANGE_ME_dev_secret_do_not_ship'),
+  Buffer.from(DM_KEY_SECRET),
   Buffer.from('bridge-dm-atrest'), Buffer.from('dm-body-v1'), 32);
 function dmEnc(text) {
   if (!text) return text || '';                    // '' / null → store as-is (no empty ciphertext)
@@ -4467,7 +4456,7 @@ app.post('/admin/season', requireLogin, (req, res) => {
 // so it never points at a stale address.
 app.get('/admin/share', requireAdmin, async (req, res, next) => {
   try {
-    const base = process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
+    const base = PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
     const applyUrl = base + '/';
     const [applyQr, loginQr] = await Promise.all([
       QRCode.toString(applyUrl, { type: 'svg', margin: 1, color: { dark: '#183B38', light: '#ffffff' } }),
@@ -4491,7 +4480,7 @@ app.get('/admin/people', requireAdmin, (req, res) => {
   }
   const approvedPhones = db.prepare(
     "SELECT full_name, phone FROM applicants WHERE status='approved' ORDER BY full_name COLLATE NOCASE").all();
-  const base = process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
+  const base = PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
   const signInUrl = base + '/login';
   const invites = db.prepare('SELECT * FROM invites WHERE used = 0 ORDER BY created_at DESC').all()
     .map(iv => ({ ...iv, link: `${base}/invite/${iv.token}` }));
@@ -4592,7 +4581,6 @@ app.get('/admin/export/attendance.csv', requireAdmin, (req, res) => {
 // scheduled backupNow() (whose second-precision filenames would clash) and has none of its side
 // effects. Deleted after the response. Contains ALL data (chat, DMs, contacts) \u2192 requireAdmin +
 // audited; the page warns to store it securely.
-const EXPORT_TMP_DIR = process.env.BACKUP_DIR || path.join(__dirname, 'backups');
 app.get('/admin/export/db', requireAdmin, (req, res, next) => {
   let tmp;
   try {
@@ -5418,7 +5406,7 @@ app.post('/admin/pco/connect', requireAdmin, async (req, res) => {
 // from PUBLIC_URL (the Funnel/production origin) rather than the request host — a request arriving
 // on localhost must not mint a localhost redirect that PCO would reject.
 function pcoRedirectUri(req) {
-  const base = (process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+  const base = (PUBLIC_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
   return base + '/admin/pco/oauth/callback';
 }
 app.post('/admin/pco/oauth/app', requireAdmin, (req, res) => {
@@ -5855,7 +5843,7 @@ armScheduleTimer();   // precise firing for any pending post that survived a res
 // Test-only: synchronously run every program's scheduler tick (rollover + auto open/ping/lock).
 // Mounted ONLY when ENABLE_TEST_TICK=1 so it can never exist in prod — lets the harness drive the
 // clock phases (paired with TEST_NOW) without waiting for the 60s interval. Precedent: FORCE_HELD_RELEASED.
-if (process.env.ENABLE_TEST_TICK === '1') {
+if (ENABLE_TEST_TICK) {
   app.post('/admin/test/tick', requireAdmin, async (req, res) => {
     for (const p of PROGRAMS.values()) p.tick();
     try { fireScheduledAnnouncements(); } catch (e) { console.error(e.message); }
@@ -5914,7 +5902,6 @@ app.get('/season', requireLogin, (req, res) => {
 });
 
 // ---------- PICKLEBALL (separate, hidden run — ISOLATED pk_* tables, no basketball impact) ----------
-const PK_CAP = Number(process.env.PK_CAP || 20), PK_WAIT = Number(process.env.PK_WAIT || 4);
 // Hoisted like their basketball twins (stmtRunIsOpen / stmtRun / stmtLatestAnnouncement) —
 // node:sqlite has NO statement cache, so these re-compiled SQL on EVERY /poll tick for every
 // signed-in viewer (pkProgramActive also runs on every /runs and /profile render).
@@ -8960,7 +8947,7 @@ function defFromRow(row) {
 // file in public/. Computed from the LIVE router stack rather than a hand-kept list — a list would
 // silently rot the next time a route is added.
 function slugIsReserved(slug) {
-  if (fs.existsSync(path.join(__dirname, 'public', slug))) return true;
+  if (fs.existsSync(path.join(APP_ROOT, 'public', slug))) return true;
   // A slug also becomes a NAMESPACE: defFromRow derives `<slug>_run_date`, `<slug>_chat_seq`,
   // `<slug>mention` and the rate-limit bucket from it. The code programs' namespaces do NOT match
   // their slugs (pickleball's slug is 'pickleball' but its keys are `pk_*`), so a program created
@@ -9068,7 +9055,7 @@ ensureWeek(nextRunDate());
 app.listen(PORT, () => {
   console.log(`\nThe Bridge Adv Runs → http://localhost:${PORT}`);
   console.log(`Cap: ${CAP} · Email: ${emailConfigured ? 'SMTP configured' : 'DEV MODE (links print here)'}`);
-  console.log(`Admin emails: ${process.env.ADMIN_EMAILS || '(none set — set ADMIN_EMAILS!)'}\n`);
+  console.log(`Admin emails: ${ADMIN_EMAILS_ENV || '(none set — set ADMIN_EMAILS!)'}\n`);
   startBackups(); // snapshot the DB now + once a day
   pruneOldMedia(); pruneAuditLog();
   setInterval(() => { pruneOldMedia(); pruneAuditLog(); }, 24 * 60 * 60 * 1000).unref(); // media (1yr) + audit_log (5000) retention, boot + daily
