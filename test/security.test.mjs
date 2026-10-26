@@ -163,3 +163,12 @@ test('new chat photos and avatars are named <id>-<32 hex>', async () => {
   const img = one("SELECT image FROM group_messages WHERE from_email = ? AND image LIKE '/chat-media/%' ORDER BY id DESC", who)?.image;
   assert.match(img || '', /^\/chat-media\/\d+-[0-9a-f]{32}\.jpg$/);
 });
+
+// ---------- Content-Security-Policy (the subset that holds without a nonce refactor) ----------
+test('every response carries the CSP subset', async () => {
+  const want = "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'";
+  for (const p of ['/login', '/', '/healthz', '/styles.css']) {
+    assert.equal((await app.get(p)).headers.get('content-security-policy'), want, p);
+  }
+  assert.equal((await app.get('/runs', { as: 'player01@test.local' })).headers.get('content-security-policy'), want);
+});
