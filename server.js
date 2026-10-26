@@ -43,6 +43,7 @@ import { isValidEmail } from './lib/email.js';
 import { rateLimited } from './lib/rate-limit.js';
 import { sendPush, VAPID_PUBLIC, initPush } from './lib/push.js';
 import { clientIp, safeNextPath, mountHttpBasics } from './lib/http.js';
+import { createLoginLink, signIn } from './lib/sign-in.js';
 
 // Demo mode (DEMO_MODE=1, docs/DEMO.md) seeds itself: a fresh, wiped database gets the synthetic
 // world (fixtures/world.mjs) before any code below reads state. guard.js has already refused a
@@ -67,22 +68,6 @@ const OFFER_WINDOW_MS = OFFER_WINDOW_HOURS * 60 * 60 * 1000;
 const requireApprover = makeRequireApprover(db);
 const requireCouncil = makeRequireCouncil(db);   // /admin + /admin/vote only — the council's one surface
 const stmtAnnouncementExists = db.prepare('SELECT 1 FROM announcements WHERE id = ? AND program_id = 1');
-
-// Sign-in wrapper for the REAL login sites (magic link, code, invite claim, offer-claim sign-in) —
-// NOT the per-request cookie refresh or the profile email re-sign. An admin account signing in
-// anywhere pings that admin's own devices: with sessions this long-lived, "someone else logged in
-// as me" must be visible in seconds, not discovered by accident.
-function signIn(res, email, how) {
-  setSession(res, email);
-  if (isAdmin(email)) {
-    audit(email, 'admin', 'session:admin-login', how);
-    setImmediate(() => sendPush([String(email).toLowerCase()], {
-      title: 'Admin sign-in',
-      body: `Your admin account just signed in (${how}). Wasn't you? Profile → Sign out everywhere.`,
-      url: '/profile', tag: 'adminlogin',
-    }));
-  }
-}
 
 // Hot path (rendered on every check-in + polled in the check-in fingerprint), so
 // the statement is prepared once at module scope rather than per call.
@@ -1170,25 +1155,6 @@ app.post('/apply', (req, res) => {
     res.send(intakePage({ error: 'Something broke on our end. Try again.' }));
   }
 });
-
-// ---------- LOGIN (magic link) ----------
-// Issue a fresh single-use magic sign-in link for an email: invalidate any older
-// unused tokens (so a resend always leaves exactly one valid link), store the new
-// one, and return the full /auth URL. Shared by the /login flow AND the invite
-// claim flow (when an invite can't prove ownership of the submitted email, we send
-// a link instead of silently signing them in).
-// Returns { url, code }: a magic-link URL (for browser/desktop) AND a 6-digit code
-// (for signing in INSIDE the installed app). Both live on the same row and are
-// invalidated together — a resend always leaves exactly one valid credential pair.
-function createLoginLink(req, email, next = '/checkin') {
-  const token = crypto.randomBytes(24).toString('base64url');
-  const code = crypto.randomInt(0, 1000000).toString().padStart(6, '0');
-  const expires = Date.now() + 15 * 60 * 1000;
-  db.prepare('UPDATE login_tokens SET used = 1 WHERE email = ? AND used = 0').run(email);
-  db.prepare('INSERT INTO login_tokens (token,email,expires_at,code) VALUES (?,?,?,?)').run(token, email, expires, code);
-  const base = PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
-  return { url: `${base}/auth?token=${token}&next=${encodeURIComponent(next)}`, code };
-}
 
 app.get('/login', (req, res) => {
   if (currentUser(req)) return res.redirect(safeNextPath(req.query.next));
