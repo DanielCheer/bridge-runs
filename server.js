@@ -2,21 +2,19 @@
 import express from 'express';
 
 import db from './db.js';
-import { PORT, ADMIN_EMAILS_ENV, ENABLE_TEST_TICK } from './config.js';
+import { PORT, ADMIN_EMAILS_ENV } from './config.js';
 import { startBackups } from './backup.js';
 import { emailConfigured } from './mailer.js';
-import { pcoTick, pcoDaily, pcoSetNotifier, pcoSetRosterProvider } from './pco.js';
-import { requireAdmin, ADMINS, setSessionVersionLookup } from './auth.js';
+import { pcoDaily, pcoSetNotifier, pcoSetRosterProvider } from './pco.js';
+import { ADMINS, setSessionVersionLookup } from './auth.js';
 import { pickleballPage, pkJoinPage } from './views.js';
 import { getSetting } from './lib/settings.js';
 import { pruneAuditLog } from './lib/audit.js';
 import { sendPush, initPush } from './lib/push.js';
 import { mountHttpBasics } from './lib/http.js';
-import { schedNow } from './lib/dates.js';
 import { refreshAvatarMap, pruneOldMedia } from './lib/media.js';
 import { P, PROGRAMS } from './engine/programs.js';
 import { reloadRunSettings, nextRunDate, CAP } from './engine/basketball-calendar.js';
-import { fireScheduledAnnouncements } from './engine/announcements.js';
 import { partitionFor, partitionRun } from './engine/seating.js';
 import { ensureWeek } from './engine/basketball.js';
 import { buildPrograms } from './engine/program-loader.js';
@@ -44,6 +42,7 @@ import { mountKiosk } from './routes/kiosk.js';
 import { mountHealth } from './routes/health.js';
 import { mountProgramsAdmin } from './routes/programs-admin.js';
 import { mountPco } from './routes/pco.js';
+import { mountTestSeams } from './routes/test-seams.js';
 
 // Demo mode (DEMO_MODE=1, docs/DEMO.md) seeds itself: a fresh, wiped database gets the synthetic
 // world (fixtures/world.mjs) before any code below reads state. guard.js has already refused a
@@ -139,34 +138,7 @@ mountPeopleRecords(app);
 
 startScheduler();
 
-// Test-only: synchronously run every program's scheduler tick (rollover + auto open/ping/lock).
-// Mounted ONLY when ENABLE_TEST_TICK=1 so it can never exist in prod — lets the harness drive the
-// clock phases (paired with TEST_NOW) without waiting for the 60s interval. Precedent: FORCE_HELD_RELEASED.
-if (ENABLE_TEST_TICK) {
-  app.post('/admin/test/tick', requireAdmin, async (req, res) => {
-    for (const p of PROGRAMS.values()) p.tick();
-    try { fireScheduledAnnouncements(); } catch (e) { console.error(e.message); }
-    await pcoTick();                                  // awaited so the harness can assert right after
-    if (req.body && req.body.pcodaily) await pcoDaily(); // opt-in: also run the nightly delta poll
-    res.json({ ok: true, now: schedNow() });
-  });
-  // Test-only: the live Express stack, one layer per line in registration order, so a refactor that
-  // moves routes between files can prove the mounted set, its order and each route's middleware
-  // chain are unchanged (test/routes.test.mjs compares it to test/snapshots/routes.txt).
-  app.get('/admin/test/routes', requireAdmin, (req, res) => {
-    const name = (fn) => (fn && fn.name) || '<anonymous>';
-    const lines = [];
-    for (const layer of app._router.stack) {
-      if (layer.route) {
-        const chain = layer.route.stack.map((l) => name(l.handle)).join(' ');
-        lines.push(`${Object.keys(layer.route.methods).join(',').toUpperCase()} ${layer.route.path}  [${chain}]`);
-      } else {
-        lines.push(`USE ${layer.regexp.fast_slash ? '/' : layer.regexp.source} ${name(layer.handle)}`);
-      }
-    }
-    res.type('text/plain').send(lines.join('\n') + '\n');
-  });
-}
+mountTestSeams(app);
 
 mountSeasonAndCalendar(app);
 
