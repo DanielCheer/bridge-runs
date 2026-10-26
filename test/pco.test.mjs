@@ -12,7 +12,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { startApp, ADMIN } from './helpers/app.mjs';
+import { startApp, ADMIN, openSealedSetting } from './helpers/app.mjs';
 import { startPcoMock } from './helpers/pco-mock.mjs';
 import { PERSONAS, PLAYERS } from '../fixtures/world.mjs';
 
@@ -52,7 +52,11 @@ const mockState = () => mockCall('/__mock/state');
 const mockLogLen = async () => (await mockState()).log.length;
 const mockPeople = async () => (await mockState()).people;
 const pcoIdOf = (e) => db.prepare('SELECT pco_id p FROM applicants WHERE email = ?').get(e)?.p;
-const setting = (k) => db.prepare('SELECT value v FROM app_settings WHERE key = ?').get(k)?.v;
+// Credentials are sealed at rest (lib/settings.js); `setting` reads them back as plaintext and
+// `rawSetting` shows what is actually stored.
+const SEALED = new Set(['pco_secret', 'pco_oauth_client_secret', 'pco_oauth_access', 'pco_oauth_refresh', 'pco_webhook_secret']);
+const rawSetting = (k) => db.prepare('SELECT value v FROM app_settings WHERE key = ?').get(k)?.v;
+const setting = (k) => { const v = rawSetting(k); return v != null && SEALED.has(k) ? openSealedSetting(v) : v; };
 const audited = (like) => !!db.prepare('SELECT 1 FROM audit_log WHERE action LIKE ?').get(like);
 const outboxOpen = () => db.prepare('SELECT COUNT(*) n FROM pco_outbox WHERE done_at IS NULL').get().n;
 const pcoModeIsPat = () => !!setting('pco_app_id') && !setting('pco_oauth_access');
@@ -349,6 +353,9 @@ test('OAuth: state check, code exchange, Bearer use, refresh rotation, revoked g
   const ok = await msgOf(await raw(`/admin/pco/oauth/callback?code=good-code&state=${await stateOf()}`));
   check('a valid authorization connects and names the org', ok.includes('Mock Community Church') && ok.includes('no secret changed hands'));
   check('tokens stored with an expiry', !!setting('pco_oauth_access') && !!setting('pco_oauth_refresh') && Number(setting('pco_oauth_expires')) > Date.now());
+  check('the tokens and the client secret are sealed at rest',
+    ['pco_oauth_access', 'pco_oauth_refresh', 'pco_oauth_client_secret'].every((k) => rawSetting(k).startsWith('enc1:'))
+    && setting('pco_oauth_client_secret') === 'csecret-test');
   check('the PAT is not in use', !setting('pco_app_id'));
   check('console reports church-authorized mode', (await get('/admin/pco')).includes('authorized by the church'));
   await post('/admin/pco/link', ADMIN);

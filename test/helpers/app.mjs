@@ -178,3 +178,16 @@ export function openDb(dbPath) {
   d.exec('PRAGMA busy_timeout = 4000');
   return d;
 }
+
+// Decrypt a secret stored in app_settings ('enc1:' + base64(iv | tag | ciphertext), AES-256-GCM,
+// key = HKDF-SHA256(SESSION_SECRET, salt 'bridge-settings-atrest', info 'settings-v1')). Written
+// here from the documented format rather than imported from lib/, so a test checks what is on
+// disk independently of the app's own code. Throws on anything that isn't a sealed value.
+export function openSealedSetting(stored, secret = SESSION_SECRET) {
+  if (typeof stored !== 'string' || !stored.startsWith('enc1:')) throw new Error(`not a sealed value: ${stored}`);
+  const key = Buffer.from(crypto.hkdfSync('sha256', Buffer.from(secret), Buffer.from('bridge-settings-atrest'), Buffer.from('settings-v1'), 32));
+  const buf = Buffer.from(stored.slice(5), 'base64');
+  const d = crypto.createDecipheriv('aes-256-gcm', key, buf.subarray(0, 12));
+  d.setAuthTag(buf.subarray(12, 28));
+  return Buffer.concat([d.update(buf.subarray(28)), d.final()]).toString('utf8');
+}

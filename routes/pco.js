@@ -11,7 +11,7 @@ import {
 } from '../pco.js';
 import { requireAdmin } from '../auth.js';
 import { pcoAdminPage } from '../views/index.js';
-import { setSetting, delSetting } from '../lib/settings.js';
+import { setSetting, delSetting, setSecret } from '../lib/settings.js';
 import { audit } from '../lib/audit.js';
 import { csvCell } from '../lib/csv.js';
 import { P, PROGRAMS, programRunDate } from '../engine/programs.js';
@@ -68,7 +68,7 @@ export function mountPco(app) {
   // connect form, which left webhook verification unusable for a church connected via OAuth.
   app.post('/admin/pco/webhook', requireAdmin, (req, res) => {
     const secret = String(req.body.webhook_secret || '').trim();
-    if (secret) setSetting('pco_webhook_secret', secret); else delSetting('pco_webhook_secret');
+    if (secret) setSecret('pco_webhook_secret', secret); else delSetting('pco_webhook_secret');
     audit(req.userEmail, 'admin', secret ? 'pco:webhook-secret-set' : 'pco:webhook-secret-cleared', '');
     res.redirect('/admin/pco?msg=' + encodeURIComponent(secret
       ? 'Webhook secret saved — Planning Center changes will arrive instantly.'

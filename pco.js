@@ -10,7 +10,7 @@
 // PCO outage can't slow or block anything a player does.
 import crypto from 'node:crypto';
 import db, { transact } from './db.js';
-import { getSetting, setSetting, delSetting } from './lib/settings.js';
+import { getSetting, setSetting, delSetting, getSecret, setSecret } from './lib/settings.js';
 
 // Test seam: the pco-fn suite points this at a local mock. Unset in prod → the real API.
 const API_BASE = process.env.PCO_API_BASE || 'https://api.planningcenteronline.com';
@@ -58,8 +58,8 @@ const audit = (action, target) => stmtAudit.run('planning-center', 'system', act
 //           refreshed automatically; refresh tokens rotate on every use and are honoured 90 days.
 // OAuth wins whenever it's configured; the PAT remains for a fast pilot.
 export function pcoAuthMode() {
-  if (getSetting('pco_oauth_access') && getSetting('pco_oauth_refresh')) return 'oauth';
-  if (getSetting('pco_app_id') && getSetting('pco_secret')) return 'pat';
+  if (getSecret('pco_oauth_access') && getSecret('pco_oauth_refresh')) return 'oauth';
+  if (getSetting('pco_app_id') && getSecret('pco_secret')) return 'pat';
   return null;
 }
 export function pcoConnected() { return pcoAuthMode() !== null; }
@@ -107,7 +107,7 @@ async function oauthTokenRequest(body, where) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       client_id: getSetting('pco_oauth_client_id'),
-      client_secret: getSetting('pco_oauth_client_secret'),
+      client_secret: getSecret('pco_oauth_client_secret'),
       ...body,
     }),
   });
@@ -130,8 +130,8 @@ async function oauthTokenRequest(body, where) {
   // One transaction: a crash between these writes would leave a new access token beside a dead
   // rotated-away refresh token, which only a re-authorization could fix.
   transact(() => {
-    setSetting('pco_oauth_access', json.access_token);
-    if (json.refresh_token) setSetting('pco_oauth_refresh', json.refresh_token);
+    setSecret('pco_oauth_access', json.access_token);
+    if (json.refresh_token) setSecret('pco_oauth_refresh', json.refresh_token);
     setSetting('pco_oauth_expires', String(Date.now() + (Number(json.expires_in) || 7200) * 1000));
   });
   return json;
@@ -155,7 +155,7 @@ function withSweepLock(fn) {
 function refreshAccessToken(where) {
   if (!refreshInFlight) {
     refreshInFlight = oauthTokenRequest(
-      { grant_type: 'refresh_token', refresh_token: getSetting('pco_oauth_refresh') }, where)
+      { grant_type: 'refresh_token', refresh_token: getSecret('pco_oauth_refresh') }, where)
       .finally(() => { refreshInFlight = null; });
   }
   return refreshInFlight;
@@ -172,8 +172,8 @@ async function ensureFreshToken() {
 function authHeader(force) {
   const mode = force || pcoAuthMode();
   return mode === 'oauth'
-    ? `Bearer ${getSetting('pco_oauth_access')}`
-    : 'Basic ' + Buffer.from(`${getSetting('pco_app_id')}:${getSetting('pco_secret')}`).toString('base64');
+    ? `Bearer ${getSecret('pco_oauth_access')}`
+    : 'Basic ' + Buffer.from(`${getSetting('pco_app_id')}:${getSecret('pco_secret')}`).toString('base64');
 }
 
 // One fetch wrapper owns ALL error semantics: 401 flips the connection into a visible
@@ -411,7 +411,7 @@ export async function pcoDaily() {
 // Webhook receiver (person.created/updated/destroyed). Raw-body HMAC-SHA256 check against the
 // stored authenticity secret — reject anything unsigned. destroyed = mark + audit, NEVER delete.
 export function pcoHandleWebhook(rawBody, signature) {
-  const secret = getSetting('pco_webhook_secret');
+  const secret = getSecret('pco_webhook_secret');
   if (!secret) return { ok: false, code: 503 };
   const expect = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
   // Compare as BUFFERS with byte lengths: a header containing a high-byte char has a JS string
@@ -459,9 +459,9 @@ export async function pcoTick() {
 // ---------- admin actions ----------
 export async function pcoConnect(appId, secret, autocreate, webhookSecret) {
   setSetting('pco_app_id', appId.trim());
-  setSetting('pco_secret', secret.trim());
+  setSecret('pco_secret', secret.trim());
   setSetting('pco_autocreate', autocreate ? '1' : '0');
-  if (webhookSecret) setSetting('pco_webhook_secret', webhookSecret);
+  if (webhookSecret) setSecret('pco_webhook_secret', webhookSecret);
   delSetting('pco_error'); delSetting('pco_backoff_until');
   try {
     // auth:'pat' — test the credential we were JUST given, not an OAuth grant that may also exist.
@@ -509,13 +509,13 @@ export function pcoDisconnect() {
 // not the church's credentials, and no secret travels to us during an authorization.
 export function pcoSaveOAuthApp(clientId, clientSecret) {
   if (clientId) setSetting('pco_oauth_client_id', String(clientId).trim());
-  if (clientSecret) setSetting('pco_oauth_client_secret', String(clientSecret).trim());
+  if (clientSecret) setSecret('pco_oauth_client_secret', String(clientSecret).trim());
   if (!clientId && !clientSecret) {
     delSetting('pco_oauth_client_id'); delSetting('pco_oauth_client_secret');
   }
 }
 export function pcoOAuthConfigured() {
-  return !!(getSetting('pco_oauth_client_id') && getSetting('pco_oauth_client_secret'));
+  return !!(getSetting('pco_oauth_client_id') && getSecret('pco_oauth_client_secret'));
 }
 // Build the URL the admin is sent to. `state` is single-use with a short TTL — it's what stops a
 // forged callback from planting someone else's authorization in this app.
@@ -550,7 +550,7 @@ export async function pcoOAuthCallback(code, state) {
   if (!saved) return { ok: false, error: 'That authorization link expired or didn’t match — start again.' };
   if (Date.now() - saved.at > 10 * 60 * 1000) return { ok: false, error: 'That authorization took too long — start again.' };
   if (!code) return { ok: false, error: 'Planning Center didn’t return an authorization code.' };
-  const hadFallback = !!(getSetting('pco_app_id') && getSetting('pco_secret'));
+  const hadFallback = !!(getSetting('pco_app_id') && getSecret('pco_secret'));
   try {
     await oauthTokenRequest({
       grant_type: 'authorization_code', code, redirect_uri: saved.redirectUri,
@@ -1022,7 +1022,7 @@ export function pcoStatus() {
     authMode: pcoAuthMode(),                       // 'oauth' | 'pat' | null
     oauthConfigured: pcoOAuthConfigured(),
     oauthClientId: getSetting('pco_oauth_client_id') || '',
-    webhookSet: !!getSetting('pco_webhook_secret'),
+    webhookSet: !!getSecret('pco_webhook_secret'),
     tokenExpires: Number(getSetting('pco_oauth_expires') || 0),
     scopes: PCO_SCOPES,
     org: getSetting('pco_org') || '',

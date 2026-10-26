@@ -44,9 +44,10 @@ export const PK_BANNER_PATH_ENV = process.env.PK_BANNER_PATH;
 // /admin/export/db writes its temporary snapshot beside the backups.
 export const EXPORT_TMP_DIR = process.env.BACKUP_DIR || path.join(APP_ROOT, 'backups');
 
-// The DM at-rest key is derived from the session secret (auth.js makes SESSION_SECRET mandatory
-// outside ALLOW_INSECURE_SESSION); the fallback matches auth.js's.
-export const DM_KEY_SECRET = process.env.SESSION_SECRET || 'CHANGE_ME_dev_secret_do_not_ship';
+// The at-rest keys (DM bodies, secrets in app_settings: lib/at-rest-crypto.js) are derived from the
+// session secret (auth.js makes SESSION_SECRET mandatory outside ALLOW_INSECURE_SESSION); the
+// fallback matches auth.js's. Rotating SESSION_SECRET makes everything sealed under it unreadable.
+export const AT_REST_KEY_SECRET = process.env.SESSION_SECRET || 'CHANGE_ME_dev_secret_do_not_ship';
 // Web Push contact (VAPID subject).
 export const PUSH_CONTACT_EMAIL = process.env.SMTP_FROM || process.env.SMTP_USER || 'admin@localhost';
 // Shown in the boot log only; auth.js parses the list itself.
