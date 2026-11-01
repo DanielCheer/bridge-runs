@@ -16,7 +16,7 @@ real phones. It works and was production-ready, but the church chose to stay on 
 
 ## Try the live demo
 
-**DEMO_URL_TBD**
+**[joek1ng.tail61a9cc.ts.net:10000](https://joek1ng.tail61a9cc.ts.net:10000)** (hosted on my own PC, so it is occasionally offline; the screenshots below show the same screens)
 
 The sign-in page offers six fictional people. Pick one and you're signed in as them:
 
