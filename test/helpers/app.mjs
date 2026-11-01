@@ -22,11 +22,12 @@ export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 export const SESSION_SECRET = 'test';
 export const ADMIN = 'admin@test.local';
 
-// A free TCP port on loopback (the OS picks; released immediately for the child to bind).
+// A free TCP port on loopback (the OS picks; released immediately for the child to bind). The probe
+// server stays ref'd until it closes: it can be the only pending handle, and an unref'd one lets the
+// event loop drain mid-await, which node:test reports as a cancelled test (seen on Linux CI).
 export function freePort() {
   return new Promise((resolve, reject) => {
     const s = net.createServer();
-    s.unref();
     s.on('error', reject);
     s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); });
   });
