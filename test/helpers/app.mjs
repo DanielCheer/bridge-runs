@@ -97,15 +97,12 @@ export async function startApp({ env = {}, today, seed, fixture = true, keep = f
   child.stdout.on('data', (d) => { log += d; });
   child.stderr.on('data', (d) => { log += d; });
   const exited = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
-  // A server must never outlive its test run. If a suite throws before stop() is reached (a failed
-  // hook, a typo), the child and its pipes would otherwise hold the runner open forever with a
-  // server still listening. They are unref'd so they can't keep the runner alive on their own, and
-  // the runner's exit takes the child with it.
+  // A server must never outlive its test run. The child stays ref'd while the suite uses it: on
+  // Node 22 an in-flight fetch() doesn't hold the event loop, so an unref'd child let the loop drain
+  // mid-request and node:test cancelled the tests. If a suite throws before stop() is reached, the
+  // runner still ends (`npm test` passes --test-force-exit) and its exit takes the child with it.
   const killOnExit = () => { if (child.exitCode === null) child.kill(); };
   process.once('exit', killOnExit);
-  child.unref();
-  child.stdout.unref?.();
-  child.stderr.unref?.();
 
   const baseURL = `http://127.0.0.1:${port}`;
   const deadline = Date.now() + 30_000;

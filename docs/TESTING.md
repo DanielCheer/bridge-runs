@@ -73,7 +73,7 @@ guard knows about the variable that redirects it.
 ## Running the tests
 
 ```bash
-npm test          # node --test "test/*.test.mjs"
+npm test          # node --test --test-force-exit "test/*.test.mjs"
 npm run lint      # eslint (no-undef is the safety net: there is no build step)
 ```
 
